@@ -1,0 +1,158 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'          # 推送 v1.0.0 这样的 tag 时触发
+  workflow_dispatch:  # 也支持手动触发
+
+jobs:
+  # ============================================================
+  # Job 1: 构建 macOS DMG (arm64 Apple Silicon)
+  # ============================================================
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装依赖
+        working-directory: 03_desktop_app
+        run: npm install
+
+      - name: 给二进制文件添加执行权限
+        run: |
+          chmod +x 03_desktop_app/bin/darwin/mihomo_aarch64
+          chmod +x 03_desktop_app/bin/darwin/mihomo_x86_64
+          chmod +x 03_desktop_app/bin/darwin/axel
+
+      - name: 打包 macOS DMG
+        working-directory: 03_desktop_app
+        run: npm run dist
+        env:
+          # 跳过代码签名（无开发者证书时）
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: 上传 DMG 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-dmg
+          path: 03_desktop_app/dist/*.dmg
+
+  # ============================================================
+  # Job 2: 构建 Windows EXE (x64)
+  # ============================================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装 Axel (通过 MSYS2 - MSYS 环境)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: >-
+            axel
+
+      - name: 复制 axel.exe 和 MSYS 依赖 DLL 到 bin/win32
+        shell: pwsh
+        run: |
+          $src = "C:\msys64\usr\bin"
+          $dest = "03_desktop_app\bin\win32"
+          New-Item -ItemType Directory -Force -Path $dest
+          # 复制 axel 主程序
+          Copy-Item "$src\axel.exe" "$dest\" -Force
+          Write-Host "Copied axel.exe"
+          # 复制 MSYS 运行库 DLL（与项目 README 要求一致）
+          $dlls = @(
+            "msys-2.0.dll",
+            "msys-crypto-3.dll",
+            "msys-ssl-3.dll",
+            "msys-z.dll"
+          )
+          foreach ($dll in $dlls) {
+            if (Test-Path "$src\$dll") {
+              Copy-Item "$src\$dll" "$dest\" -Force
+              Write-Host "Copied $dll"
+            } else {
+              Write-Host "Not found (optional): $dll"
+            }
+          }
+          Write-Host "Done. Contents of $dest:"
+          Get-ChildItem "$dest"
+
+      - name: 安装 npm 依赖
+        working-directory: 03_desktop_app
+        run: npm install
+
+      - name: 打包 Windows EXE
+        working-directory: 03_desktop_app
+        run: npm run dist -- --win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: 上传 EXE 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: 03_desktop_app/dist/*.exe
+
+  # ============================================================
+  # Job 3: 发布到 GitHub Releases (仅推 tag 时执行)
+  # ============================================================
+  release:
+    needs: [build-mac, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: 下载 Mac DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-dmg
+          path: ./release-files
+
+      - name: 下载 Windows EXE
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-exe
+          path: ./release-files
+
+      - name: 查看产物
+        run: ls -lh ./release-files/
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "生信原始数据下载器 ${{ github.ref_name }}"
+          body: |
+            ## 下载说明
+
+            | 平台 | 文件 | 说明 |
+            |------|------|------|
+            | 🍎 macOS (M1/M2/M3/M4) | `*-arm64.dmg` | Apple Silicon 芯片 |
+            | 🪟 Windows 64位 | `*.exe` | Windows 10/11 |
+
+            ## 安装步骤
+            - **Mac**: 下载 DMG → 双击打开 → 将 App 拖入 Applications 文件夹
+            - **Windows**: 下载 EXE → 双击安装 → 按提示完成安装
+
+            ## 首次使用
+            1. 打开软件，进入「账户充值」页面注册/登录
+            2. 在「下载中心」选择数据类型（SRA/EBI/GEO），输入编号开始下载
+          files: ./release-files/*
+          draft: false
+          prerelease: false

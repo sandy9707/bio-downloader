@@ -1,0 +1,27 @@
+# Node.js 依赖
+node_modules/
+
+# 打包产物（本地构建，不放 Git）
+03_desktop_app/dist/
+
+# macOS 系统文件
+.DS_Store
+
+# 日志
+*.log
+npm-debug.log*
+
+# 编辑器
+.vscode/
+.idea/
+
+# 内部参考资料（不对外公开）
+参考/
+
+# 测试文件
+test_clash.gz
+*.gz
+
+# Python 缓存
+__pycache__/
+*.pyc
