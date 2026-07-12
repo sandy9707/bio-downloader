@@ -58,39 +58,21 @@ jobs:
         with:
           node-version: '20'
 
-      - name: 安装 Axel (通过 MSYS2 - MSYS 环境)
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MSYS
-          update: true
-          install: >-
-            axel
-
-      - name: 复制 axel.exe 和 MSYS 依赖 DLL 到 bin/win32
+      - name: 下载 axel.exe + cygwin1.dll (from nishad/axel-for-windows)
         shell: pwsh
         run: |
-          $src = "C:\msys64\usr\bin"
           $dest = "03_desktop_app\bin\win32"
           New-Item -ItemType Directory -Force -Path $dest
-          # 复制 axel 主程序
-          Copy-Item "$src\axel.exe" "$dest\" -Force
-          Write-Host "Copied axel.exe"
-          # 复制 MSYS 运行库 DLL（与项目 README 要求一致）
-          $dlls = @(
-            "msys-2.0.dll",
-            "msys-crypto-3.dll",
-            "msys-ssl-3.dll",
-            "msys-z.dll"
-          )
-          foreach ($dll in $dlls) {
-            if (Test-Path "$src\$dll") {
-              Copy-Item "$src\$dll" "$dest\" -Force
-              Write-Host "Copied $dll"
-            } else {
-              Write-Host "Not found (optional): $dll"
-            }
-          }
-          Write-Host "Done. Contents of $dest:"
+
+          $baseUrl = "https://raw.githubusercontent.com/nishad/axel-for-windows/master"
+
+          Write-Host "下载 axel.exe..."
+          Invoke-WebRequest -Uri "$baseUrl/axel.exe" -OutFile "$dest\axel.exe"
+
+          Write-Host "下载 cygwin1.dll..."
+          Invoke-WebRequest -Uri "$baseUrl/cygwin1.dll" -OutFile "$dest\cygwin1.dll"
+
+          Write-Host "完成，bin/win32 目录内容："
           Get-ChildItem "$dest"
 
       - name: 安装 npm 依赖
