@@ -360,6 +360,9 @@ async function startDownload() {
     if (status === 'downloading') {
       txt.className = 'item-status status-downloading';
       txt.innerText = '正在高速下载';
+      if (data.speed && data.speed.includes('重试')) {
+        document.getElementById(`speed-text-${index}`).innerText = data.speed;
+      }
     } else if (status === 'completed') {
       txt.className = 'item-status status-completed';
       txt.innerText = '下载完成';
@@ -369,6 +372,9 @@ async function startDownload() {
     } else if (status === 'failed') {
       txt.className = 'item-status status-failed';
       txt.innerText = '下载失败';
+      if (data.speed && data.speed.includes('失败')) {
+        document.getElementById(`speed-text-${index}`).innerText = data.speed;
+      }
     }
   });
 

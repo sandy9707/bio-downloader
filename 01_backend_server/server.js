@@ -5,13 +5,43 @@ const Redis = require('ioredis');
 const bcrypt = require('bcryptjs');
 const md5 = require('md5');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const port = 13000;
+const isTestEnv = process.env.NODE_ENV === 'test';
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
+
+// ==========================================
+// 【安全与限流配置】
+// ==========================================
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: isTestEnv ? 10000 : 100, // relaxed for tests
+  message: { error: '请求过于频繁，请稍后再试' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const payLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: isTestEnv ? 10000 : 10,
+  message: { error: '创建订单过于频繁，请稍后再试' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Redis 状态检查中间件
+function redisHealthCheck(req, res, next) {
+  if (isTestEnv) return next(); // Bypass in test if redis is mocked or handled
+  if (redis.status !== 'ready') {
+    return res.status(503).json({ error: '数据库服务当前不可用，请稍后重试' });
+  }
+  next();
+}
 
 // ==========================================
 // 【配置区】
@@ -93,7 +123,7 @@ async function verifyPassword(password, hash) {
 // ==========================================
 
 // 注册
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authLimiter, redisHealthCheck, async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: '用户名和密码不能为空' });
@@ -139,7 +169,7 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 // 登录
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, redisHealthCheck, async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: '用户名和密码不能为空' });
@@ -193,7 +223,7 @@ app.post('/api/auth/login', async (req, res) => {
 // ==========================================
 // 【管理员接口：设置用户无限流量和时间】
 // ==========================================
-app.post('/api/admin/set-unlimited', async (req, res) => {
+app.post('/api/admin/set-unlimited', redisHealthCheck, async (req, res) => {
   const { secret, username } = req.body;
   if (secret !== ADMIN_SECRET) {
     return res.status(403).json({ error: '无效的管理员密钥' });
@@ -245,7 +275,7 @@ app.post('/api/admin/set-unlimited', async (req, res) => {
 // ==========================================
 
 // 获取用户信息
-app.get('/api/user/info', async (req, res) => {
+app.get('/api/user/info', redisHealthCheck, async (req, res) => {
   const token = req.query.token;
   if (!token) return res.status(401).json({ error: '未提供Token' });
 
@@ -713,8 +743,12 @@ app.get('/mock-pay.html', (req, res) => {
 });
 
 // ==========================================
-// 【服务器启动】
+// 【服务器启动与模块导出】
 // ==========================================
-app.listen(port, '0.0.0.0', () => {
-  console.log(`生信下载器后端启动成功：http://0.0.0.0:${port}`);
-});
+if (require.main === module) {
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`生信下载器后端启动成功：http://0.0.0.0:${port}`);
+  });
+}
+
+module.exports = { app, redis, getRedisKey };

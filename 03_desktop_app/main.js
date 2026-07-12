@@ -133,6 +133,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   stopClash();
+  if (currentAxelProcess) {
+    console.log('Terminating Axel process...');
+    currentAxelProcess.kill('SIGKILL');
+    currentAxelProcess = null;
+  }
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -140,15 +145,46 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   stopClash();
+  if (currentAxelProcess) {
+    console.log('Terminating Axel process...');
+    currentAxelProcess.kill('SIGKILL');
+    currentAxelProcess = null;
+  }
 });
 
 // ==========================================
-// 【Clash 运行控制模块】
+// 【Clash 运行控制模块与端口占用检测】
 // ==========================================
+const net = require('net');
+
+function checkPortBusy(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer()
+      .once('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+          resolve(true);
+        } else {
+          resolve(false);
+        }
+      })
+      .once('listening', () => {
+        server.close();
+        resolve(false);
+      })
+      .listen(port, '127.0.0.1');
+  });
+}
+
 async function startClash(token) {
   if (clashProcess) {
     console.log('Clash is already running.');
     return true;
+  }
+
+  // 检测 7890 端口是否被占用
+  const isPortBusy = await checkPortBusy(7890);
+  if (isPortBusy) {
+    throw new Error('端口 7890 已被占用，请关闭其他代理/加速器软件后重试。');
   }
 
   try {
@@ -185,7 +221,7 @@ async function startClash(token) {
     return true;
   } catch (err) {
     console.error('Failed to start Clash:', err.message);
-    throw new Error('Clash 代理服务器启动失败: ' + err.message);
+    throw new Error('下载加速器启动失败: ' + err.message);
   }
 }
 
@@ -380,8 +416,27 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
     fs.mkdirSync(targetDir, { recursive: true });
   }
 
+  // 1. 验证目标磁盘可用空间
+  try {
+    const totalRequiredSpace = files.reduce((acc, f) => acc + (f.size || 0), 0);
+    const stats = await fs.promises.statfs(targetDir);
+    const freeSpace = stats.bavail * stats.bsize; // 针对普通用户可用的空闲块字节数
+    if (freeSpace < totalRequiredSpace) {
+      throw new Error(`磁盘可用空间不足！所需空间: ${(totalRequiredSpace / (1024 * 1024 * 1024)).toFixed(2)} GB, 可用空间: ${(freeSpace / (1024 * 1024 * 1024)).toFixed(2)} GB`);
+    }
+  } catch (err) {
+    console.error('Disk space verification message:', err.message);
+    if (err.message.includes('磁盘可用空间不足')) {
+      throw err;
+    } else {
+      console.warn('statfs not fully supported on this volume, bypassing disk space limit check.');
+    }
+  }
+
   const axelBin = getAxelBinaryPath();
   fs.chmodSync(axelBin, '755'); // 确保执行权限
+
+  const MAX_RETRIES = 3;
 
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
@@ -393,94 +448,126 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
 
     const savePath = path.join(fileDestFolder, file.name);
 
-    // 清理无断点的残留废件
-    if (fs.existsSync(savePath) && !fs.existsSync(savePath + '.st')) {
-      fs.unlinkSync(savePath);
+    let attempt = 0;
+    let downloadSuccess = false;
+    let lastErrorMsg = '';
+
+    while (attempt < MAX_RETRIES && !downloadSuccess) {
+      attempt++;
+
+      if (attempt > 1) {
+        // 指数退避重试延迟
+        const backoffTime = Math.pow(2, attempt) * 1000;
+        console.log(`Retrying download for ${file.name} in ${backoffTime}ms (Attempt ${attempt}/${MAX_RETRIES})`);
+        mainWindow.webContents.send('download-status', {
+          index: i,
+          fileName: file.name,
+          status: 'downloading',
+          percentage: null,
+          speed: `网络波动重试中 (${attempt}/${MAX_RETRIES})...`
+        });
+        await new Promise(resolve => setTimeout(resolve, backoffTime));
+      }
+
+      // 仅在首次尝试且无断点 st 文件时，清理上一次被破坏的废件
+      if (attempt === 1 && fs.existsSync(savePath) && !fs.existsSync(savePath + '.st')) {
+        fs.unlinkSync(savePath);
+      }
+
+      // 告知前端当前正在下载/重试第几个文件
+      mainWindow.webContents.send('download-status', {
+        index: i,
+        fileName: file.name,
+        status: 'downloading',
+        percentage: 0,
+        speed: '正在高速下载...'
+      });
+
+      // 组装 Axel 环境变量 (强制走本地 Clash 代理端口 7890)
+      const env = {
+        ...process.env,
+        http_proxy: 'http://127.0.0.1:7890',
+        https_proxy: 'http://127.0.0.1:7890',
+        all_proxy: 'http://127.0.0.1:7890'
+      };
+
+      const args = ['-n', '16', '-o', savePath, file.url];
+      console.log(`Running Axel (Attempt ${attempt}): ${axelBin} ${args.join(' ')}`);
+
+      try {
+        await new Promise((resolve, reject) => {
+          currentAxelProcess = spawn(axelBin, args, { env });
+
+          currentAxelProcess.stdout.on('data', (data) => {
+            const output = data.toString();
+            
+            // 解析进度百分比
+            const pctMatch = output.match(/\[\s*(\d+)%\]/);
+            // 解析下载速度
+            const speedMatch = output.match(/\[\s*([\d\.]+\s*[KMGT]*B\/s)\]/);
+
+            let percentage = pctMatch ? parseInt(pctMatch[1]) : null;
+            let speed = speedMatch ? speedMatch[1] : null;
+
+            if (percentage !== null || speed !== null) {
+              mainWindow.webContents.send('download-progress', {
+                index: i,
+                percentage,
+                speed
+              });
+            }
+          });
+
+          currentAxelProcess.stderr.on('data', (data) => {
+            console.error(`[Axel Error] ${data}`);
+          });
+
+          currentAxelProcess.on('close', (code) => {
+            currentAxelProcess = null;
+            if (code === 0) {
+              resolve();
+            } else {
+              reject(new Error(`退出状态码: ${code}`));
+            }
+          });
+        });
+
+        downloadSuccess = true;
+      } catch (err) {
+        lastErrorMsg = err.message;
+        console.warn(`Attempt ${attempt} for ${file.name} failed: ${lastErrorMsg}`);
+      }
     }
 
-    // 告知前端当前正在下载第几个文件
-    mainWindow.webContents.send('download-status', {
-      index: i,
-      fileName: file.name,
-      status: 'downloading',
-      percentage: 0,
-      speed: '0 KB/s'
-    });
+    if (downloadSuccess) {
+      // 下载成功，上报流量消耗到后端
+      try {
+        console.log(`Download success. Reporting consumed bytes: ${file.size}`);
+        await axios.post(`${BACKEND_BASE_URL}/api/user/consume`, {
+          token,
+          bytes: file.size
+        });
+      } catch (e) {
+        console.error('Failed to report traffic consume:', e.message);
+      }
 
-    // 组装 Axel 环境变量 (强制走本地 Clash 代理端口 7890)
-    const env = {
-      ...process.env,
-      http_proxy: 'http://127.0.0.1:7890',
-      https_proxy: 'http://127.0.0.1:7890',
-      all_proxy: 'http://127.0.0.1:7890'
-    };
-
-    // axel --quiet 为 false，我们需要解析输出
-    // 参数: -n 16 (16线程), -o 保存路径, 下载地址
-    const args = ['-n', '16', '-o', savePath, file.url];
-    console.log(`Running Axel: ${axelBin} ${args.join(' ')}`);
-
-    await new Promise((resolve, reject) => {
-      currentAxelProcess = spawn(axelBin, args, { env });
-
-      currentAxelProcess.stdout.on('data', (data) => {
-        const output = data.toString();
-        
-        // 解析进度百分比
-        const pctMatch = output.match(/\[\s*(\d+)%\]/);
-        // 解析下载速度
-        const speedMatch = output.match(/\[\s*([\d\.]+\s*[KMGT]*B\/s)\]/);
-
-        let percentage = pctMatch ? parseInt(pctMatch[1]) : null;
-        let speed = speedMatch ? speedMatch[1] : null;
-
-        if (percentage !== null || speed !== null) {
-          mainWindow.webContents.send('download-progress', {
-            index: i,
-            percentage,
-            speed
-          });
-        }
+      mainWindow.webContents.send('download-status', {
+        index: i,
+        fileName: file.name,
+        status: 'completed',
+        percentage: 100,
+        speed: '已保存'
       });
-
-      currentAxelProcess.stderr.on('data', (data) => {
-        console.error(`[Axel Error] ${data}`);
+    } else {
+      mainWindow.webContents.send('download-status', {
+        index: i,
+        fileName: file.name,
+        status: 'failed',
+        percentage: 0,
+        speed: '下载失败'
       });
-
-      currentAxelProcess.on('close', async (code) => {
-        currentAxelProcess = null;
-        if (code === 0) {
-          // 下载成功，上报流量消耗到后端
-          try {
-            console.log(`Download success. Reporting consumed bytes: ${file.size}`);
-            await axios.post(`${BACKEND_BASE_URL}/api/user/consume`, {
-              token,
-              bytes: file.size
-            });
-          } catch (e) {
-            console.error('Failed to report traffic consume:', e.message);
-          }
-
-          mainWindow.webContents.send('download-status', {
-            index: i,
-            fileName: file.name,
-            status: 'completed',
-            percentage: 100,
-            speed: '0 KB/s'
-          });
-          resolve();
-        } else {
-          mainWindow.webContents.send('download-status', {
-            index: i,
-            fileName: file.name,
-            status: 'failed',
-            percentage: 0,
-            speed: '0 KB/s'
-          });
-          reject(new Error(`下载失败，退出码: ${code}`));
-        }
-      });
-    });
+      throw new Error(`文件 ${file.name} 下载在重试 ${MAX_RETRIES} 次后均失败: ${lastErrorMsg}`);
+    }
   }
 
   return { success: true };
@@ -488,7 +575,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
 
 ipcMain.handle('cancel-download', () => {
   if (currentAxelProcess) {
-    currentAxelProcess.kill();
+    currentAxelProcess.kill('SIGKILL');
     currentAxelProcess = null;
     return true;
   }
