@@ -8,6 +8,10 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sandy9707/bio-downloader.git"
+  },
   "dependencies": {
     "axios": "^1.6.8",
     "cheerio": "^1.0.0-rc.12"
@@ -22,6 +26,7 @@
     "directories": {
       "output": "dist"
     },
+    "publish": null,
     "extraResources": [
       {
         "from": "bin/",
