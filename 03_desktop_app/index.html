@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>BioDownloader Pro - 生信数据多线程加速下载器</title>
+  <style>
+    /* ==========================================
+       【全局变量 & 主题设计】
+       ========================================== */
+    /* ---- 亮色主题 (默认) ---- */
+    :root {
+      --bg-main: #f0f4f8;
+      --bg-sidebar: #ffffff;
+      --bg-card: rgba(255, 255, 255, 0.85);
+      --bg-input: #f8fafc;
+      --border-color: rgba(203, 213, 225, 0.8);
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --sidebar-border: rgba(226, 232, 240, 1);
+      --queue-item-bg: rgba(241, 245, 249, 0.8);
+      --progress-bar-bg: #e2e8f0;
+      --package-card-bg: rgba(248, 250, 252, 0.9);
+      --modal-bg: #ffffff;
+      
+      /* 渐变配色 */
+      --primary-grad: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+      --accent-grad: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+      --success-grad: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      --danger-grad: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+      
+      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    /* ---- 暗色主题 ---- */
+    body.dark-mode {
+      --bg-main: #0b0f19;
+      --bg-sidebar: rgba(15, 23, 42, 0.95);
+      --bg-card: rgba(30, 41, 59, 0.45);
+      --bg-input: #0f172a;
+      --border-color: rgba(51, 65, 85, 0.5);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --sidebar-border: rgba(51, 65, 85, 0.5);
+      --queue-item-bg: rgba(15, 23, 42, 0.4);
+      --progress-bar-bg: #1e293b;
+      --package-card-bg: rgba(15, 23, 42, 0.6);
+      --modal-bg: #1e293b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      font-family: var(--font-family);
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      transition: background-color 0.3s, color 0.3s;
+    }
+
+    /* ==========================================
+       【左侧边栏 (Sidebar)】
+       ========================================== */
+    .sidebar {
+      width: 240px;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--sidebar-border);
+      display: flex;
+      flex-direction: column;
+      padding: 1.5rem;
+      flex-shrink: 0;
+      box-shadow: 2px 0 12px rgba(0,0,0,0.06);
+      transition: background 0.3s, border-color 0.3s;
+    }
+
+    .brand {
+      font-size: 1.3rem;
+      font-weight: 800;
+      background: linear-gradient(to right, #38bdf8, #818cf8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 2rem;
+      text-align: center;
+      letter-spacing: 0.5px;
+    }
+
+    .nav-menu {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      flex-grow: 1;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      padding: 0.85rem 1rem;
+      border-radius: 8px;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      font-weight: 500;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .nav-item:hover {
+      background: rgba(99, 102, 241, 0.08);
+      color: var(--text-main);
+    }
+
+    .nav-item.active {
+      background: var(--primary-grad);
+      color: white;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
+    }
+
+    .accelerator-status-panel {
+      padding: 1rem;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 0.5rem;
+      font-size: 0.85rem;
+      transition: background 0.3s;
+    }
+
+    .theme-toggle-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      width: 100%;
+      padding: 0.6rem;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-card);
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-weight: 500;
+      margin-top: auto;
+      margin-bottom: 0.5rem;
+      transition: all 0.2s;
+    }
+
+    .theme-toggle-btn:hover {
+      background: rgba(99, 102, 241, 0.1);
+      color: var(--text-main);
+      border-color: #6366f1;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ef4444;
+      box-shadow: 0 0 8px #ef4444;
+      transition: all 0.3s;
+    }
+
+    .dot.active {
+      background: #10b981;
+      box-shadow: 0 0 10px #10b981;
+    }
+
+    /* Switch toggle */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 38px;
+      height: 20px;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #cbd5e1;
+      transition: .3s;
+      border-radius: 20px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .3s;
+      border-radius: 50%;
+    }
+
+    input:checked + .slider {
+      background-image: var(--primary-grad);
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(18px);
+    }
+
+    /* ==========================================
+       【右侧主体 (Main Content Container)】
+       ========================================== */
+    .main-container {
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-main);
+      padding: 2rem;
+      overflow-y: auto;
+      transition: background 0.3s;
+    }
+
+    .header-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 1rem;
+      flex-shrink: 0;
+    }
+
+    .page-title {
+      font-size: 1.4rem;
+      font-weight: 700;
+    }
+
+    .user-info-badge {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      background: var(--bg-card);
+      padding: 0.5rem 1rem;
+      border-radius: 20px;
+      border: 1px solid var(--border-color);
+      font-size: 0.85rem;
+      transition: background 0.3s;
+    }
+
+    .traffic-progress-container {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      width: 180px;
+    }
+
+    .traffic-text {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .progress-bar-bg {
+      width: 100%;
+      height: 6px;
+      background: var(--progress-bar-bg);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: var(--accent-grad);
+      width: 0%;
+      transition: width 0.4s ease;
+    }
+
+    /* ==========================================
+       【页面视图 (Tab Views)】
+       ========================================== */
+    .tab-view {
+      display: none;
+      flex-direction: column;
+      gap: 1.5rem;
+      animation: fadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      flex-grow: 1;
+    }
+
+    .tab-view.active {
+      display: flex;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ==========================================
+       【卡片与通用组件设计】
+       ========================================== */
+    .card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 0.5rem;
+      background: var(--bg-card);
+      padding: 0.25rem;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      align-self: flex-start;
+      margin-bottom: 0.5rem;
+      transition: background 0.3s;
+    }
+
+    .pill-btn {
+      padding: 0.5rem 1.25rem;
+      border-radius: 6px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+
+    .pill-btn.active {
+      background: rgba(255, 255, 255, 0.08);
+      color: white;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .form-group label {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    textarea, input[type="text"], input[type="password"] {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 0.75rem;
+      color: var(--text-main);
+      font-family: inherit;
+      font-size: 0.9rem;
+      outline: none;
+      transition: all 0.2s, background 0.3s;
+    }
+
+    textarea:focus, input[type="text"]:focus, input[type="password"]:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+    }
+
+    /* 文件夹选择器输入组合 */
+    .dir-select-group {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .btn {
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      border: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      color: white;
+    }
+
+    .btn-primary { background: var(--primary-grad); }
+    .btn-primary:hover { opacity: 0.95; transform: translateY(-1px); }
+    .btn-secondary { background: rgba(51, 65, 85, 0.5); border: 1px solid var(--border-color); }
+    .btn-secondary:hover { background: rgba(51, 65, 85, 0.7); }
+    .btn-accent { background: var(--accent-grad); }
+    .btn-accent:hover { opacity: 0.95; transform: translateY(-1px); }
+    .btn-success { background: var(--success-grad); }
+    .btn-success:hover { opacity: 0.95; transform: translateY(-1px); }
+    .btn-danger { background: var(--danger-grad); }
+    .btn-danger:hover { opacity: 0.95; transform: translateY(-1px); }
+
+    .btn:disabled {
+      background: #1e293b !important;
+      color: #64748b !important;
+      cursor: not-allowed;
+      transform: none !important;
+      box-shadow: none !important;
+      opacity: 0.5;
+    }
+
+    /* ==========================================
+       【下载任务列表 (Queue List)】
+       ========================================== */
+    .queue-container {
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      margin-top: 1rem;
+    }
+
+    .queue-header {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .queue-list {
+      flex-grow: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      padding-right: 0.5rem;
+    }
+
+    .queue-item {
+      background: var(--queue-item-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 0.9rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      transition: background 0.3s;
+    }
+
+    .item-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+    }
+
+    .item-name {
+      font-weight: 600;
+      color: var(--text-main);
+      max-width: 60%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .item-info {
+      color: var(--text-muted);
+      display: flex;
+      gap: 1rem;
+    }
+
+    .item-status {
+      font-size: 0.8rem;
+      font-weight: bold;
+    }
+
+    .status-pending { color: #f59e0b; }
+    .status-downloading { color: #38bdf8; }
+    .status-completed { color: #10b981; }
+    .status-failed { color: #ef4444; }
+
+    .item-progress-bar {
+      width: 100%;
+      height: 8px;
+      background: var(--progress-bar-bg);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .item-progress-fill {
+      height: 100%;
+      background: var(--primary-grad);
+      width: 0%;
+      transition: width 0.2s;
+    }
+
+    /* ==========================================
+       【账户与充值视图设计】
+       ========================================== */
+    .profile-grid {
+      display: grid;
+      grid-template-columns: 1fr 1.5fr;
+      gap: 1.5rem;
+    }
+
+    .profile-card {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .package-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .package-card {
+      background: var(--package-card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 1.5rem;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      transition: all 0.25s;
+    }
+
+    .package-card:hover {
+      border-color: #6366f1;
+      transform: translateY(-2px);
+    }
+
+    .package-price {
+      font-size: 1.8rem;
+      font-weight: 800;
+      color: #38bdf8;
+    }
+
+    /* ==========================================
+       【模态框 (Payment Modal)】
+       ========================================== */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.85);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      backdrop-filter: blur(8px);
+    }
+
+    .modal {
+      background: var(--modal-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      width: 450px;
+      padding: 2rem;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+      text-align: center;
+      transition: background 0.3s;
+    }
+
+    .modal h3 {
+      color: #38bdf8;
+      margin-bottom: 1rem;
+    }
+
+    .modal-checkout-link {
+      display: block;
+      margin: 1.5rem 0;
+      color: #6366f1;
+      font-weight: bold;
+      text-decoration: none;
+      background: rgba(99, 102, 241, 0.15);
+      padding: 0.75rem;
+      border-radius: 6px;
+      border: 1px dashed #6366f1;
+      font-size: 0.95rem;
+    }
+
+    .modal-checkout-link:hover {
+      background: rgba(99, 102, 241, 0.25);
+    }
+
+    /* ==========================================
+       【通知框 & 载入框】
+       ========================================== */
+    .notification {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      padding: 1rem 1.5rem;
+      border-radius: 8px;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+      color: white;
+      font-weight: 600;
+      z-index: 1000;
+      display: none;
+      animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 左侧边栏 -->
+  <div class="sidebar">
+    <div class="brand">BioDownloader Pro</div>
+    <div class="nav-menu">
+      <div class="nav-item active" onclick="switchTab('download-hub')">下载中心</div>
+      <div class="nav-item" onclick="switchTab('billing-tab')">账户充值</div>
+      <div class="nav-item" onclick="switchTab('settings-tab')">设置中心</div>
+    </div>
+
+    <!-- 夜间模式切换按钮 -->
+    <button class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleDarkMode()">
+      <span id="themeIcon">🌙</span>
+      <span id="themeLabel">夜间模式</span>
+    </button>
+
+    <!-- 下载加速器状态控制器 -->
+    <div class="accelerator-status-panel">
+      <div class="status-indicator">
+        <div class="dot" id="clashDot"></div>
+        <span id="clashStatusText">加速器已关闭</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="clashToggle" onchange="toggleClash()">
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <!-- 右侧主体区域 -->
+  <div class="main-container">
+    
+    <!-- 头部栏 -->
+    <div class="header-bar">
+      <div class="page-title" id="tabTitle">下载中心</div>
+      <div class="user-info-badge" id="userInfoBadge" style="display:none;">
+        <span id="headerUsername">未登录</span>
+        <div class="traffic-progress-container">
+          <div class="traffic-text">
+            <span>流量额度:</span>
+            <span id="headerTrafficText">0 / 0 MB</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="headerTrafficProgress"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: 下载中心 -->
+    <div class="tab-view active" id="download-hub">
+      <div class="btn-group">
+        <button class="pill-btn active" onclick="switchDownloadType(this, 'sra_raw')">SRA Raw</button>
+        <button class="pill-btn" onclick="switchDownloadType(this, 'ebi_raw')">EBI Raw</button>
+        <button class="pill-btn" onclick="switchDownloadType(this, 'geo_suppl')">GEO Suppl</button>
+        <button class="pill-btn" onclick="switchDownloadType(this, 'links')">Target Links</button>
+      </div>
+
+      <div class="card">
+        <div class="form-group">
+          <label id="inputLabel">请输入 SRA 原始数据编号 (例如: SRR1234567，多项使用换行或空格分隔)</label>
+          <textarea id="accInput" rows="4" placeholder="SRR1234567&#10;SRR1234568"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label>下载目标位置</label>
+          <div class="dir-select-group">
+            <input type="text" id="targetDirInput" placeholder="请选择下载路径..." readonly>
+            <button class="btn btn-secondary" onclick="chooseDir()">选择文件夹</button>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+          <button class="btn btn-primary" id="checkSizeBtn" onclick="checkSizes()">检验下载大小</button>
+          <button class="btn btn-success" id="downloadBtn" onclick="startDownload()" disabled>开始加速下载</button>
+          <button class="btn btn-danger" id="cancelBtn" onclick="cancelDownload()" style="display:none;">取消下载</button>
+        </div>
+      </div>
+
+      <!-- 待下载文件列表 -->
+      <div class="queue-container">
+        <div class="queue-header">
+          <span>文件队列</span>
+          <span id="totalQueueSize" style="font-size: 0.9rem; color: var(--text-muted);">共 0 字节</span>
+        </div>
+        <div class="queue-list" id="queueList">
+          <!-- 动态加载队列 -->
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: 账户充值 -->
+    <div class="tab-view" id="billing-tab">
+      
+      <!-- 未登录界面 -->
+      <div class="card" id="authFormCard" style="max-width: 500px; margin: 0 auto; width: 100%;">
+        <div class="brand" style="margin-bottom: 1.5rem;">账户登录与注册</div>
+        <div class="form-group">
+          <label>账号/用户名</label>
+          <input type="text" id="authUsername" placeholder="请输入用户名...">
+        </div>
+        <div class="form-group">
+          <label>密码</label>
+          <input type="password" id="authPassword" placeholder="请输入密码...">
+        </div>
+        <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+          <button class="btn btn-primary" style="flex:1" onclick="handleLogin()">账户登录</button>
+          <button class="btn btn-secondary" style="flex:1" onclick="handleRegister()">极速注册</button>
+        </div>
+      </div>
+
+      <!-- 已登录界面 -->
+      <div class="profile-grid" id="loggedInProfile" style="display:none;">
+        <div class="card profile-card">
+          <h3 style="color:#38bdf8;">账户信息</h3>
+          <div class="form-group">
+            <label>用户名</label>
+            <div id="profUsername" style="font-weight:bold;font-size:1.1rem;margin-top:0.25rem;">-</div>
+          </div>
+          <div class="form-group">
+            <label>我的 Token (用于加速器连接)</label>
+            <input type="text" id="profToken" readonly style="cursor:pointer;" onclick="this.select()">
+          </div>
+          <div class="form-group">
+            <label>到期时间</label>
+            <div id="profExpiry" style="font-size:0.95rem;margin-top:0.25rem;">-</div>
+          </div>
+          <button class="btn btn-danger" style="margin-top:auto;" onclick="handleLogout()">注销退出</button>
+        </div>
+
+        <div class="card">
+          <h3 style="color:#38bdf8; margin-bottom: 1.5rem;">流量充值套餐</h3>
+          <div class="package-grid" id="packageList">
+            <!-- 动态载入充值包 -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: 设置中心 -->
+    <div class="tab-view" id="settings-tab">
+      <div class="card">
+        <h3 style="color:#6366f1; margin-bottom:1.5rem;">⚙️ 全局设置</h3>
+
+        <!-- 默认下载文件夹 -->
+        <div class="form-group">
+          <label style="font-weight:600;">📁 默认下载文件夹</label>
+          <div class="dir-select-group">
+            <input type="text" id="settingsDefaultDirInput" placeholder="尚未设置，点击右侧选择..." readonly>
+            <button class="btn btn-primary" onclick="chooseDefaultDir()">选择文件夹</button>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.25rem;">每次启动软件时，下载路径将自动填充为此目录。</div>
+        </div>
+
+        <!-- 下载加速器状态 -->
+        <div class="form-group" style="margin-top:1rem;">
+          <label style="font-weight:600;">🚀 下载加速器状态</label>
+          <div id="clashConfigInfo" style="font-size:0.9rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color); margin-top:0.35rem;">
+            尚未启动
+          </div>
+        </div>
+
+        <!-- 危险区 -->
+        <div class="form-group" style="margin-top:1.5rem; padding-top:1.5rem; border-top: 1px solid var(--border-color);">
+          <label style="font-weight:600; color:#ef4444;">⚠️ 危险操作</label>
+          <div style="margin-top:0.5rem;">
+            <button class="btn btn-danger" onclick="clearSettings()">重置本地所有配置 (退出登录)</button>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">这将清除本地缓存的登录 Token 和所有偏好设置，应用会在操作后退出。</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 支付模态框 -->
+  <div class="modal-overlay" id="payModal">
+    <div class="modal">
+      <h3 id="modalTitle">正在发起支付</h3>
+      <p style="color:var(--text-muted);font-size:0.9rem;">请点击下方的付款链接进行付款，付款成功后额度会自动累加至您的账户。</p>
+      <a href="#" class="modal-checkout-link" id="checkoutLink" target="_blank">点击前往付款页面 (易支付)</a>
+      <div style="display:flex; flex-direction:column; gap:0.5rem; margin-top:1rem;">
+        <button class="btn btn-success" id="mockPayBtn" style="display:none;" onclick="confirmMockPayment()">[开发者调试] 模拟支付成功 (免费)</button>
+        <button class="btn btn-secondary" onclick="closePayModal()">我已完成付款并关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通知信息框 -->
+  <div class="notification" id="notificationToast">提示信息</div>
+
+  <!-- 载入渲染器逻辑 -->
+  <script src="renderer.js"></script>
+</body>
+</html>
