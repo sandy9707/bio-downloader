@@ -51,3 +51,23 @@ npm install
 npm start
 ```
 登录已注册的账号，选择目标文件夹，输入编号后即可享受 16 线程的住宅代理下载加速服务！
+
+---
+
+## 客户端安装包下载与打包指引
+
+### 1. 自动编译下载（推荐）
+本项目配置了 GitHub Actions 持续集成（CI/CD）工作流。每当推送新版本 Git Tag 时，GitHub 会自动为 **Windows** 和 **macOS** 平台编译出最新的生产发布包：
+* 📥 **[官方最新发布页 (GitHub Releases)](https://github.com/sandy9707/bio-downloader/releases)**
+  * **Windows 客户端**：提供免安装绿色单文件版（直接运行）及标准的 Setup 安装程序。
+  * **macOS 客户端**：提供标准 APFS 磁盘映像（DMG）安装包及免安装的 ZIP 压缩包。
+
+### 2. 本地手动编译打包
+如果您希望在本地编译生成对应的安装包，可在安装依赖后执行如下构建指令：
+```bash
+cd 03_desktop_app
+npm run dist
+```
+构建成功后，所有安装程序包将输出在 `03_desktop_app/dist/` 目录下：
+* **macOS DMG 安装包**：`dist/BioDownloader-1.2.2-arm64.dmg`
+* **macOS 绿色压缩版**：`dist/BioDownloader-1.2.2-arm64-mac.zip`
