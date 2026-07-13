@@ -196,8 +196,8 @@ function switchTab(tabId) {
   currentTab = tabId;
   const titles = {
     'download-hub': '下载中心',
-    'billing-tab': '账户充值',
-    'settings-tab': '设置中心'
+    'store-tab': '流量商店',
+    'profile-tab': '个人中心'
   };
   document.getElementById('tabTitle').innerText = titles[tabId] || '下载中心';
 }
@@ -210,22 +210,12 @@ function switchDownloadType(btn, type) {
 
   currentDownloadType = type;
 
-  // 修改对应的输入指示和 placeholder
-  const labels = {
-    'sra_raw': '请输入 SRA 原始数据编号 (例如: SRR1234567，多项使用换行或空格分隔)',
-    'ebi_raw': '请输入 EBI 原始数据编号 (例如: ERR1234567，优先拉取 EBI 高速 Fastq，无则回退 SRA)',
-    'geo_suppl': '请输入 GEO 系列号 (例如: GSE153781，将自动提取页面下的全部补充文件)',
-    'links': '请输入直接下载链接 (每行一个下载链接)'
-  };
-  const placeholders = {
-    'sra_raw': 'SRR1234567\nSRR1234568',
-    'ebi_raw': 'ERR1234567\nSRR1234567',
-    'geo_suppl': 'GSE153781',
-    'links': 'https://example.com/data/sample1.fq.gz\nhttps://example.com/data/sample2.fq.gz'
-  };
-
-  document.getElementById('inputLabel').innerText = labels[type] || '请输入编号/链接';
-  document.getElementById('accInput').placeholder = placeholders[type] || '';
+  // 切换输入框的可见性
+  const types = ['sra_raw', 'ebi_raw', 'geo_suppl', 'links'];
+  types.forEach(t => {
+    const el = document.getElementById('group-' + t);
+    if (el) el.style.display = t === type ? 'flex' : 'none';
+  });
   
   // 改变类型时清空上一轮的校验状态与下载按钮
   currentQueue = [];
@@ -266,7 +256,7 @@ async function chooseDefaultDir() {
 // 【文件大小校验与渲染】
 // ==========================================
 async function checkSizes() {
-  const inputVal = document.getElementById('accInput').value.trim();
+  const inputVal = document.getElementById('accInput-' + currentDownloadType).value.trim();
   if (!inputVal) {
     showToast('请输入有效的原始编号或下载链接', 'error');
     return;
@@ -289,6 +279,9 @@ async function checkSizes() {
     }
 
     currentQueue = await window.api.checkSize(currentDownloadType, inputVal);
+    currentQueue.forEach((file, idx) => {
+      file.originalIndex = idx;
+    });
     renderQueue();
     
     // 计算总大小并更新
@@ -333,12 +326,18 @@ function renderQueue() {
     }
 
     itemEl.innerHTML = `
-      <div class="item-meta">
-        <span class="item-name" title="${file.name}">${file.name}</span>
-        <div class="item-info">
-          ${folderStr}
-          <span>${sizeStr}</span>
-          <span class="item-status status-pending" id="status-text-${index}">准备就绪</span>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div class="item-meta" style="flex-grow:1;">
+          <span class="item-name" title="${file.name}">${file.name}</span>
+          <div class="item-info">
+            ${folderStr}
+            <span>${sizeStr}</span>
+            <span class="item-status status-pending" id="status-text-${index}">准备就绪</span>
+          </div>
+        </div>
+        <div style="display:flex; gap:0.5rem; flex-shrink:0; align-items:center;">
+          <button class="btn btn-secondary" style="font-size:0.75rem; padding: 2px 6px;" onclick="renameFile(${index})">改名</button>
+          <button class="btn btn-primary" id="btn-single-dl-${index}" style="font-size:0.75rem; padding: 2px 6px;" onclick="downloadSingle(${index})">单项下载</button>
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:1rem;margin-top:0.25rem;">
@@ -362,7 +361,7 @@ function renderQueue() {
 async function startDownload() {
   if (!currentUser) {
     showToast('请登录账户后开始下载，未登录无法连接代理加速', 'error');
-    switchTab('billing-tab');
+    switchTab('profile-tab');
     return;
   }
 
@@ -389,7 +388,7 @@ async function startDownload() {
   
   if (remaining < totalBytes) {
     showToast(`您的额度不足！剩余流量: ${formatBytes(remaining)}，所需流量: ${formatBytes(totalBytes)}，请充值后下载`, 'error');
-    switchTab('billing-tab');
+    switchTab('store-tab');
     return;
   }
 
@@ -678,6 +677,7 @@ async function loadPackages() {
 async function buyPackage(packageId, payType) {
   if (!currentUser) {
     showToast('充值前请先注册登录账号！', 'error');
+    switchTab('profile-tab');
     return;
   }
   
@@ -942,4 +942,121 @@ function startCountdown(buttonEl, seconds, onComplete) {
       buttonEl.innerText = `${remaining}秒后重新获取`;
     }
   }, 1000);
+}
+
+// 队列文件重命名
+function renameFile(index) {
+  const file = currentQueue[index];
+  if (!file) return;
+  const newName = prompt('请输入新的文件名：', file.name);
+  if (newName && newName.trim()) {
+    file.name = newName.trim();
+    renderQueue();
+  }
+}
+
+// 单个文件独立加速下载
+async function downloadSingle(index) {
+  const file = currentQueue[index];
+  if (!file) return;
+
+  if (!currentUser) {
+    showToast('请登录账户后开始下载，未登录无法连接代理加速', 'error');
+    switchTab('profile-tab');
+    return;
+  }
+
+  if (!defaultDir) {
+    showToast('请先选择下载的保存目标路径', 'error');
+    return;
+  }
+
+  const isClashRunning = await window.api.getClashStatus();
+  if (!isClashRunning) {
+    try {
+      showToast('正在自动建立高速下载加速通道...');
+      await window.api.startClash(currentUser.token);
+      updateClashUIState();
+    } catch (e) {
+      showToast(e.message, 'error');
+      return;
+    }
+  }
+
+  // 校验当前流量剩余额度是否充足
+  const totalBytes = file.size || 0;
+  const remaining = currentUser.trafficLimit - currentUser.trafficConsumed;
+  
+  if (remaining < totalBytes) {
+    showToast(`您的额度不足！剩余流量: ${formatBytes(remaining)}，所需流量: ${formatBytes(totalBytes)}，请充值后下载`, 'error');
+    switchTab('store-tab');
+    return;
+  }
+
+  // 绑定进度事件回调
+  window.api.onDownloadStatus((data) => {
+    const { index: fileIdx, status, fileName } = data;
+    const fill = document.getElementById(`progress-fill-${fileIdx}`);
+    const pct = document.getElementById(`progress-pct-${fileIdx}`);
+    const txt = document.getElementById(`status-text-${fileIdx}`);
+    
+    if (!fill || !pct || !txt) return;
+
+    if (status === 'downloading') {
+      txt.className = 'item-status status-downloading';
+      txt.innerText = '正在高速下载';
+      if (data.speed && data.speed.includes('重试')) {
+        const speedEl = document.getElementById(`speed-text-${fileIdx}`);
+        if (speedEl) speedEl.innerText = data.speed;
+      }
+    } else if (status === 'completed') {
+      txt.className = 'item-status status-completed';
+      txt.innerText = '下载完成';
+      fill.style.width = '100%';
+      pct.innerText = '100%';
+      const speedEl = document.getElementById(`speed-text-${fileIdx}`);
+      if (speedEl) speedEl.innerText = '已保存';
+      // 刷新账户流量余额
+      refreshUserInfo();
+    } else if (status === 'failed') {
+      txt.className = 'item-status status-failed';
+      txt.innerText = '下载失败';
+      if (data.speed && data.speed.includes('失败')) {
+        const speedEl = document.getElementById(`speed-text-${fileIdx}`);
+        if (speedEl) speedEl.innerText = data.speed;
+      }
+    }
+  });
+
+  window.api.onDownloadProgress((data) => {
+    const { index: fileIdx, percentage, speed } = data;
+    const fill = document.getElementById(`progress-fill-${fileIdx}`);
+    const pct = document.getElementById(`progress-pct-${fileIdx}`);
+    if (fill && pct && percentage !== null) {
+      fill.style.width = percentage + '%';
+      pct.innerText = percentage + '%';
+    }
+    if (speed !== null) {
+      const speedEl = document.getElementById(`speed-text-${fileIdx}`);
+      if (speedEl) speedEl.innerText = '当前速度: ' + speed;
+    }
+  });
+
+  // 锁定相关按钮防止二次并发操作
+  const singleBtn = document.getElementById(`btn-single-dl-${index}`);
+  if (singleBtn) singleBtn.disabled = true;
+  document.getElementById('checkSizeBtn').disabled = true;
+  document.getElementById('downloadBtn').disabled = true;
+
+  try {
+    showToast(`文件 ${file.name} 独立高速加速下载已启动...`);
+    await window.api.startDownload([file], defaultDir, currentUser.token);
+    showToast(`文件 ${file.name} 单项下载完毕！`, 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    if (singleBtn) singleBtn.disabled = false;
+    document.getElementById('checkSizeBtn').disabled = false;
+    document.getElementById('downloadBtn').disabled = false;
+  }
 }

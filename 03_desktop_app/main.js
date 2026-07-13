@@ -538,6 +538,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
 
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
+    const fileIndex = file.originalIndex !== undefined ? file.originalIndex : i;
     const fileDestFolder = file.folder ? path.join(targetDir, file.folder) : targetDir;
     
     if (!fs.existsSync(fileDestFolder)) {
@@ -558,7 +559,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
         const backoffTime = Math.pow(2, attempt) * 1000;
         console.log(`Retrying download for ${file.name} in ${backoffTime}ms (Attempt ${attempt}/${MAX_RETRIES})`);
         mainWindow.webContents.send('download-status', {
-          index: i,
+          index: fileIndex,
           fileName: file.name,
           status: 'downloading',
           percentage: null,
@@ -574,7 +575,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
 
       // 告知前端当前正在下载/重试第几个文件
       mainWindow.webContents.send('download-status', {
-        index: i,
+        index: fileIndex,
         fileName: file.name,
         status: 'downloading',
         percentage: 0,
@@ -620,7 +621,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
 
             if (percentage !== null || speed !== null) {
               mainWindow.webContents.send('download-progress', {
-                index: i,
+                index: fileIndex,
                 percentage,
                 speed
               });
@@ -661,7 +662,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
       }
 
       mainWindow.webContents.send('download-status', {
-        index: i,
+        index: fileIndex,
         fileName: file.name,
         status: 'completed',
         percentage: 100,
@@ -669,7 +670,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
       });
     } else {
       mainWindow.webContents.send('download-status', {
-        index: i,
+        index: fileIndex,
         fileName: file.name,
         status: 'failed',
         percentage: 0,

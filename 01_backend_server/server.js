@@ -10,22 +10,27 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-// 加载项目根目录的 .env 文件
+// 加载 .env 文件 (兼容本地开发与远程部署路径)
 function loadEnv() {
-  const envPath = path.join(__dirname, '../.env');
-  if (fs.existsSync(envPath)) {
-    const lines = fs.readFileSync(envPath, 'utf8').split('\n');
-    for (const line of lines) {
-      const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)\s*$/);
-      if (match) {
-        const key = match[1];
-        let val = match[2].trim();
-        if (val.startsWith('"') && val.endsWith('"')) {
-          val = val.substring(1, val.length - 1);
-        } else if (val.startsWith("'") && val.endsWith("'")) {
-          val = val.substring(1, val.length - 1);
+  const possiblePaths = [
+    path.join(__dirname, '../.env'),
+    path.join(__dirname, '.env')
+  ];
+  for (const envPath of possiblePaths) {
+    if (fs.existsSync(envPath)) {
+      const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+      for (const line of lines) {
+        const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)\s*$/);
+        if (match) {
+          const key = match[1];
+          let val = match[2].trim();
+          if (val.startsWith('"') && val.endsWith('"')) {
+            val = val.substring(1, val.length - 1);
+          } else if (val.startsWith("'") && val.endsWith("'")) {
+            val = val.substring(1, val.length - 1);
+          }
+          process.env[key] = val;
         }
-        process.env[key] = val;
       }
     }
   }

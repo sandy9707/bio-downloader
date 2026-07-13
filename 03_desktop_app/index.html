@@ -637,8 +637,8 @@
     <div class="brand">BioDownloader Pro</div>
     <div class="nav-menu">
       <div class="nav-item active" onclick="switchTab('download-hub')">下载中心</div>
-      <div class="nav-item" onclick="switchTab('billing-tab')">账户充值</div>
-      <div class="nav-item" onclick="switchTab('settings-tab')">设置中心</div>
+      <div class="nav-item" onclick="switchTab('store-tab')">流量商店</div>
+      <div class="nav-item" onclick="switchTab('profile-tab')">我的</div>
     </div>
 
     <!-- 夜间模式切换按钮 -->
@@ -690,9 +690,21 @@
       </div>
 
       <div class="card">
-        <div class="form-group">
-          <label id="inputLabel">请输入 SRA 原始数据编号 (例如: SRR1234567，多项使用换行或空格分隔)</label>
-          <textarea id="accInput" rows="4" placeholder="SRR1234567&#10;SRR1234568"></textarea>
+        <div class="form-group" id="group-sra_raw">
+          <label>请输入 SRA 原始数据编号 (多项使用换行或空格分隔)</label>
+          <textarea id="accInput-sra_raw" rows="4" placeholder="例如: SRR1234567">SRR1234567</textarea>
+        </div>
+        <div class="form-group" id="group-ebi_raw" style="display:none;">
+          <label>请输入 EBI 原始数据编号 (优先拉取 EBI 高速 Fastq，无则回退 SRA)</label>
+          <textarea id="accInput-ebi_raw" rows="4" placeholder="例如: ERR1234567">ERR1234567</textarea>
+        </div>
+        <div class="form-group" id="group-geo_suppl" style="display:none;">
+          <label>请输入 GEO 系列号 (将自动提取页面下的全部补充文件)</label>
+          <textarea id="accInput-geo_suppl" rows="4" placeholder="例如: GSE153781">GSE153781</textarea>
+        </div>
+        <div class="form-group" id="group-links" style="display:none;">
+          <label>请输入直接下载链接 (多项使用换行分隔)</label>
+          <textarea id="accInput-links" rows="4" placeholder="例如: https://example.com/file.fq.gz">https://ftp.ncbi.nlm.nih.gov/geo/series/GSE153nnn/GSE153781/suppl/GSE153781_Annotated_lncRNA_FPKM.txt.gz</textarea>
         </div>
 
         <div class="form-group">
@@ -722,9 +734,18 @@
       </div>
     </div>
 
-    <!-- VIEW: 账户充值 -->
-    <div class="tab-view" id="billing-tab">
-      
+    <!-- VIEW: 流量商店 -->
+    <div class="tab-view" id="store-tab">
+      <div class="card" style="max-width: 800px; margin: 0 auto; width: 100%;">
+        <h3 style="color:#38bdf8; margin-bottom: 1.5rem; text-align: center;">流量充值套餐</h3>
+        <div class="package-grid" id="packageList">
+          <!-- 动态载入充值包 -->
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: 我的 (个人中心与设置) -->
+    <div class="tab-view" id="profile-tab">
       <!-- 未登录界面 -->
       <div class="card" id="authFormCard" style="max-width: 500px; margin: 0 auto; width: 100%;">
         <div style="display:flex; justify-content:space-around; margin-bottom:1.5rem; border-bottom:1px solid var(--border-color); padding-bottom:0.75rem; font-size: 0.95rem;">
@@ -761,8 +782,10 @@
         <button class="btn btn-danger" id="btn-forgot-submit" style="width:100%; display:none; margin-top:1rem;" onclick="submitPasswordReset()">确认重置密码</button>
       </div>
 
-      <!-- 已登录界面 -->
+      <!-- 已登录界面 (包含账户卡片与设置卡片) -->
       <div class="profile-grid" id="loggedInProfile" style="display:none;">
+        
+        <!-- 左侧：账户卡片 -->
         <div class="card profile-card">
           <h3 style="color:#38bdf8;">账户信息</h3>
           <div class="form-group">
@@ -794,47 +817,39 @@
           <button class="btn btn-danger" style="margin-top:1rem;" onclick="handleLogout()">注销退出</button>
         </div>
 
+        <!-- 右侧：全局设置卡片 -->
         <div class="card">
-          <h3 style="color:#38bdf8; margin-bottom: 1.5rem;">流量充值套餐</h3>
-          <div class="package-grid" id="packageList">
-            <!-- 动态载入充值包 -->
+          <h3 style="color:#6366f1; margin-bottom:1.5rem;">⚙️ 全局设置</h3>
+          <div style="font-size:0.85rem; color:var(--text-muted); margin-top:-1.25rem; margin-bottom:1.5rem;">当前客户端版本：<span id="settingsAppVersion">-</span></div>
+
+          <!-- 默认下载文件夹 -->
+          <div class="form-group">
+            <label style="font-weight:600;">📁 默认下载文件夹</label>
+            <div class="dir-select-group">
+              <input type="text" id="settingsDefaultDirInput" placeholder="尚未设置，点击右侧选择..." readonly>
+              <button class="btn btn-primary" onclick="chooseDefaultDir()">选择文件夹</button>
+            </div>
+            <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.25rem;">每次启动软件时，下载路径将自动填充为此目录。</div>
+          </div>
+
+          <!-- 下载加速器状态 -->
+          <div class="form-group" style="margin-top:1rem;">
+            <label style="font-weight:600;">🚀 下载加速器状态</label>
+            <div id="clashConfigInfo" style="font-size:0.9rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color); margin-top:0.35rem;">
+              尚未启动
+            </div>
+          </div>
+
+          <!-- 危险区 -->
+          <div class="form-group" style="margin-top:1.5rem; padding-top:1.5rem; border-top: 1px solid var(--border-color);">
+            <label style="font-weight:600; color:#ef4444;">⚠️ 危险操作</label>
+            <div style="margin-top:0.5rem;">
+              <button class="btn btn-danger" onclick="clearSettings()">重置本地所有配置 (退出登录)</button>
+            </div>
+            <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">这将清除本地缓存的登录 Token 和所有偏好设置，应用会在操作后退出。</div>
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- VIEW: 设置中心 -->
-    <div class="tab-view" id="settings-tab">
-      <div class="card">
-        <h3 style="color:#6366f1; margin-bottom:1.5rem;">⚙️ 全局设置</h3>
-        <div style="font-size:0.85rem; color:var(--text-muted); margin-top:-1.25rem; margin-bottom:1.5rem;">当前客户端版本：<span id="settingsAppVersion">-</span></div>
-
-        <!-- 默认下载文件夹 -->
-        <div class="form-group">
-          <label style="font-weight:600;">📁 默认下载文件夹</label>
-          <div class="dir-select-group">
-            <input type="text" id="settingsDefaultDirInput" placeholder="尚未设置，点击右侧选择..." readonly>
-            <button class="btn btn-primary" onclick="chooseDefaultDir()">选择文件夹</button>
-          </div>
-          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.25rem;">每次启动软件时，下载路径将自动填充为此目录。</div>
-        </div>
-
-        <!-- 下载加速器状态 -->
-        <div class="form-group" style="margin-top:1rem;">
-          <label style="font-weight:600;">🚀 下载加速器状态</label>
-          <div id="clashConfigInfo" style="font-size:0.9rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color); margin-top:0.35rem;">
-            尚未启动
-          </div>
-        </div>
-
-        <!-- 危险区 -->
-        <div class="form-group" style="margin-top:1.5rem; padding-top:1.5rem; border-top: 1px solid var(--border-color);">
-          <label style="font-weight:600; color:#ef4444;">⚠️ 危险操作</label>
-          <div style="margin-top:0.5rem;">
-            <button class="btn btn-danger" onclick="clearSettings()">重置本地所有配置 (退出登录)</button>
-          </div>
-          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">这将清除本地缓存的登录 Token 和所有偏好设置，应用会在操作后退出。</div>
-        </div>
       </div>
     </div>
 

@@ -15,8 +15,8 @@ echo "=== [1/4] Preparing remote directory on $SERVER ==="
 ssh "$SERVER" "mkdir -p $REMOTE_DIR"
 
 echo "=== [2/4] Uploading files to remote server ==="
-# 使用 scp 上传 package.json 和 server.js
-scp package.json server.js "$SERVER:$REMOTE_DIR/"
+# 使用 scp 上传 package.json, server.js 和 .env
+scp package.json server.js ../.env "$SERVER:$REMOTE_DIR/"
 
 echo "=== [3/4] Running npm install on remote server ==="
 ssh "$SERVER" "cd $REMOTE_DIR && npm install --production"
