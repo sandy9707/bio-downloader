@@ -320,8 +320,8 @@ ipcMain.handle('select-directory', async () => {
 });
 
 // --- 用户与支付 ---
-ipcMain.handle('api-register', async (event, { username, password }) => {
-  const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/register`, { username, password });
+ipcMain.handle('api-register', async (event, { username, password, email }) => {
+  const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/register`, { username, password, email });
   return res.data;
 });
 
@@ -332,6 +332,26 @@ ipcMain.handle('api-login', async (event, { username, password }) => {
 
 ipcMain.handle('api-get-user-info', async (event, { token }) => {
   const res = await axios.get(`${BACKEND_BASE_URL}/api/user/info?token=${token}`);
+  return res.data;
+});
+
+ipcMain.handle('api-request-email-bind-code', async (event, { token, email }) => {
+  const res = await axios.post(`${BACKEND_BASE_URL}/api/user/email/request-code`, { token, email });
+  return res.data;
+});
+
+ipcMain.handle('api-confirm-email-bind', async (event, { token, email, code }) => {
+  const res = await axios.post(`${BACKEND_BASE_URL}/api/user/email/confirm`, { token, email, code });
+  return res.data;
+});
+
+ipcMain.handle('api-request-password-reset', async (event, { email }) => {
+  const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/password-reset/request`, { email });
+  return res.data;
+});
+
+ipcMain.handle('api-confirm-password-reset', async (event, { email, code, newPassword }) => {
+  const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/password-reset/confirm`, { email, code, newPassword });
   return res.data;
 });
 

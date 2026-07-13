@@ -6,6 +6,31 @@ const bcrypt = require('bcryptjs');
 const md5 = require('md5');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+// 加载项目根目录的 .env 文件
+function loadEnv() {
+  const envPath = path.join(__dirname, '../.env');
+  if (fs.existsSync(envPath)) {
+    const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+    for (const line of lines) {
+      const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)\s*$/);
+      if (match) {
+        const key = match[1];
+        let val = match[2].trim();
+        if (val.startsWith('"') && val.endsWith('"')) {
+          val = val.substring(1, val.length - 1);
+        } else if (val.startsWith("'") && val.endsWith("'")) {
+          val = val.substring(1, val.length - 1);
+        }
+        process.env[key] = val;
+      }
+    }
+  }
+}
+loadEnv();
 
 const app = express();
 const port = 13000;
@@ -85,6 +110,51 @@ const PRICING_PACKAGES = [
 // 管理员密钥 (仅供后台使用)
 const ADMIN_SECRET = 'biodl_admin_2026';
 
+// Resend 邮件服务与验证码配置
+const MAIL_FROM = process.env.MAIL_FROM || 'BioDownloader <no-reply@auth.yeyeziblog.eu.org>';
+const PASSWORD_RESET_SECRET = process.env.PASSWORD_RESET_SECRET || 'biodl_password_reset_secret_default_2026';
+
+// 邮箱格式验证
+function isValidEmail(email) {
+  if (!email || typeof email !== 'string') return false;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+// 邮件发送工具函数
+async function sendEmail({ to, subject, html }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.error('[Email] Failed to send email: RESEND_API_KEY is not configured.');
+    throw new Error('Resend API key is not configured');
+  }
+  try {
+    const res = await axios.post('https://api.resend.com/emails', {
+      from: MAIL_FROM,
+      to,
+      subject,
+      html
+    }, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
+    });
+    console.log(`[Email] Email sent successfully to ${to}, Resend ID: ${res.data.id}`);
+    return res.data;
+  } catch (error) {
+    const errMsg = error.response ? JSON.stringify(error.response.data) : error.message;
+    console.error(`[Email] Failed to send email to ${to}:`, errMsg);
+    throw new Error(`Email sending failed: ${errMsg}`);
+  }
+}
+
+// 哈希验证码（避免明文在 Redis 泄露）
+function hashVerificationCode(code) {
+  return crypto.createHmac('sha256', PASSWORD_RESET_SECRET).update(code).digest('hex');
+}
+
 // ==========================================
 // 【Redis 初始化与工具函数】
 // ==========================================
@@ -124,9 +194,18 @@ async function verifyPassword(password, hash) {
 
 // 注册
 app.post('/api/auth/register', authLimiter, redisHealthCheck, async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, email } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: '用户名和密码不能为空' });
+  }
+
+  // 验证邮箱格式并确保唯一性
+  let normalizedEmail = '';
+  if (email) {
+    normalizedEmail = email.trim().toLowerCase();
+    if (!isValidEmail(normalizedEmail)) {
+      return res.status(400).json({ error: '邮箱格式不正确' });
+    }
   }
 
   try {
@@ -134,6 +213,13 @@ app.post('/api/auth/register', authLimiter, redisHealthCheck, async (req, res) =
     const exists = await redis.get(userKey);
     if (exists) {
       return res.status(400).json({ error: '用户名已存在' });
+    }
+
+    if (normalizedEmail) {
+      const emailExists = await redis.get(getRedisKey(`email:${normalizedEmail}`));
+      if (emailExists) {
+        return res.status(400).json({ error: '该邮箱已被注册' });
+      }
     }
 
     const token = generateToken();
@@ -144,6 +230,9 @@ app.post('/api/auth/register', authLimiter, redisHealthCheck, async (req, res) =
     trialExpireDate.setDate(trialExpireDate.getDate() + 2);
 
     const userObj = { username, passwordHash, token, role: 'user' };
+    if (normalizedEmail) {
+      userObj.email = normalizedEmail;
+    }
     const tokenObj = {
       token,
       username,
@@ -154,6 +243,9 @@ app.post('/api/auth/register', authLimiter, redisHealthCheck, async (req, res) =
 
     await redis.set(userKey, JSON.stringify(userObj));
     await redis.set(getRedisKey(`token:${token}`), JSON.stringify(tokenObj));
+    if (normalizedEmail) {
+      await redis.set(getRedisKey(`email:${normalizedEmail}`), username);
+    }
 
     res.json({
       success: true,
@@ -291,10 +383,20 @@ app.get('/api/user/info', redisHealthCheck, async (req, res) => {
     const expireDate = new Date(tokenObj.expireAt);
     const isActive = expireDate > now && tokenObj.trafficConsumed < tokenObj.trafficLimit;
 
+    // 获取邮箱绑定状态
+    let email = '';
+    const userKey = getRedisKey(`user:${tokenObj.username}`);
+    const userStr = await redis.get(userKey);
+    if (userStr) {
+      const userObj = JSON.parse(userStr);
+      email = userObj.email || '';
+    }
+
     res.json({
       success: true,
       token: tokenObj.token,
       username: tokenObj.username,
+      email: email,
       expireAt: tokenObj.expireAt,
       trafficLimit: tokenObj.trafficLimit,
       trafficConsumed: tokenObj.trafficConsumed,
@@ -337,6 +439,331 @@ app.post('/api/user/consume', async (req, res) => {
   } catch (error) {
     console.error('更新流量消耗出错:', error);
     res.status(500).json({ error: '更新流量消耗失败' });
+  }
+});
+
+// ==========================================
+// 【邮箱绑定与密码重置接口】
+// ==========================================
+
+// 1. 请求绑定邮箱验证码
+app.post('/api/user/email/request-code', authLimiter, redisHealthCheck, async (req, res) => {
+  const { token, email } = req.body;
+  if (!token || !email) {
+    return res.status(400).json({ error: '参数不完整' });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!isValidEmail(normalizedEmail)) {
+    return res.status(400).json({ error: '邮箱格式不正确' });
+  }
+
+  try {
+    // 验证 token
+    const tokenKey = getRedisKey(`token:${token}`);
+    const tokenObjStr = await redis.get(tokenKey);
+    if (!tokenObjStr) {
+      return res.status(401).json({ error: '无效Token，请先登录' });
+    }
+    const tokenObj = JSON.parse(tokenObjStr);
+    const username = tokenObj.username;
+
+    // 检查邮箱是否已被其他账号绑定
+    const emailExists = await redis.get(getRedisKey(`email:${normalizedEmail}`));
+    if (emailExists && emailExists !== username) {
+      return res.status(400).json({ error: '该邮箱已被其他账号绑定' });
+    }
+
+    // 限流保护：60 秒内同一邮箱不可重复发送
+    const rateKey = getRedisKey(`rate:email-bind:${normalizedEmail}`);
+    const isRateLimited = await redis.get(rateKey);
+    if (isRateLimited) {
+      return res.status(429).json({ error: '获取验证码过于频繁，请在 60 秒后重试' });
+    }
+
+    // 生成 6 位随机验证码
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const codeHash = hashVerificationCode(code);
+
+    const bindData = {
+      username,
+      codeHash,
+      attempts: 0,
+      createdAt: new Date().toISOString()
+    };
+
+    // 写入 Redis 并设置 15 分钟过期
+    const bindKey = getRedisKey(`email-bind:${normalizedEmail}`);
+    await redis.setex(bindKey, 900, JSON.stringify(bindData));
+
+    // 设置 60 秒限流 key
+    await redis.setex(rateKey, 60, '1');
+
+    // 发送邮件
+    const emailHtml = `
+      <div style="font-family: sans-serif; padding: 20px; color: #333;">
+        <h2>您好 ${username}，</h2>
+        <p>您正在为您的 BioDownloader 账号绑定邮箱，您的绑定验证码为：</p>
+        <div style="font-size: 24px; font-weight: bold; background-color: #f0f4f8; padding: 15px; border-radius: 5px; text-align: center; color: #0070f3; letter-spacing: 5px; margin: 20px 0;">
+          ${code}
+        </div>
+        <p>验证码在 15 分钟内有效，请勿将验证码泄露给他人。如果您没有进行此操作，请忽略本邮件。</p>
+        <hr style="border: 0; border-top: 1px solid #eaeaea; margin: 30px 0;" />
+        <p style="font-size: 12px; color: #666;">此邮件由系统自动发送，请勿直接回复。</p>
+      </div>
+    `;
+    await sendEmail({
+      to: normalizedEmail,
+      subject: 'BioDownloader 邮箱绑定验证码',
+      html: emailHtml
+    });
+
+    res.json({ success: true, message: '验证码已发送至您的邮箱，请查收' });
+  } catch (error) {
+    console.error('发送绑定验证码失败:', error);
+    res.status(500).json({ error: '发送失败，请重试' });
+  }
+});
+
+// 2. 确认绑定邮箱
+app.post('/api/user/email/confirm', authLimiter, redisHealthCheck, async (req, res) => {
+  const { token, email, code } = req.body;
+  if (!token || !email || !code) {
+    return res.status(400).json({ error: '参数不完整' });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+
+  try {
+    // 验证 token
+    const tokenKey = getRedisKey(`token:${token}`);
+    const tokenObjStr = await redis.get(tokenKey);
+    if (!tokenObjStr) {
+      return res.status(401).json({ error: '无效Token，请先登录' });
+    }
+    const tokenObj = JSON.parse(tokenObjStr);
+    const username = tokenObj.username;
+
+    // 获取绑定验证码缓存
+    const bindKey = getRedisKey(`email-bind:${normalizedEmail}`);
+    const bindDataStr = await redis.get(bindKey);
+    if (!bindDataStr) {
+      return res.status(400).json({ error: '验证码不存在或已过期' });
+    }
+
+    const bindData = JSON.parse(bindDataStr);
+
+    // 检查验证码的用户名匹配
+    if (bindData.username !== username) {
+      return res.status(400).json({ error: '验证码与当前账号不匹配' });
+    }
+
+    // 验证哈希
+    const codeHash = hashVerificationCode(code);
+    if (bindData.codeHash !== codeHash) {
+      bindData.attempts += 1;
+      if (bindData.attempts >= 5) {
+        await redis.del(bindKey); // 输错 5 次直接失效
+        return res.status(400).json({ error: '验证码输入错误次数过多，已失效，请重新获取' });
+      }
+      await redis.setex(bindKey, 900, JSON.stringify(bindData));
+      return res.status(400).json({ error: '验证码错误' });
+    }
+
+    // 验证成功，删除验证码记录
+    await redis.del(bindKey);
+
+    // 检查该邮箱是否已被其他用户绑定（双重保障）
+    const emailExists = await redis.get(getRedisKey(`email:${normalizedEmail}`));
+    if (emailExists && emailExists !== username) {
+      return res.status(400).json({ error: '该邮箱已被其他账号绑定' });
+    }
+
+    // 更新用户 JSON 对象中的 email 字段
+    const userKey = getRedisKey(`user:${username}`);
+    const userStr = await redis.get(userKey);
+    if (!userStr) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const userObj = JSON.parse(userStr);
+    userObj.email = normalizedEmail;
+
+    await redis.set(userKey, JSON.stringify(userObj));
+    await redis.set(getRedisKey(`email:${normalizedEmail}`), username);
+
+    res.json({ success: true, message: '邮箱绑定成功' });
+  } catch (error) {
+    console.error('确认绑定邮箱错误:', error);
+    res.status(500).json({ error: '服务器错误，请重试' });
+  }
+});
+
+// 3. 忘记密码：申请密码重置
+app.post('/api/auth/password-reset/request', authLimiter, redisHealthCheck, async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: '邮箱地址不能为空' });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!isValidEmail(normalizedEmail)) {
+    return res.status(400).json({ error: '邮箱格式不正确' });
+  }
+
+  // 安全要求：通用响应消息，防止账号枚举
+  const successResponse = {
+    success: true,
+    message: '如果您的邮箱已在系统中注册，重置验证码已发送，请检查收件箱（包含垃圾箱）。'
+  };
+
+  try {
+    // 限制发送频次
+    const rateKey = getRedisKey(`rate:password-reset:${normalizedEmail}`);
+    const isRateLimited = await redis.get(rateKey);
+    if (isRateLimited) {
+      return res.status(429).json({ error: '获取验证码过于频繁，请在 60 秒后重试' });
+    }
+
+    // 查找邮箱对应的用户名
+    const username = await redis.get(getRedisKey(`email:${normalizedEmail}`));
+    if (!username) {
+      // 邮箱未注册，不发送邮件，但返回通用成功响应，保护隐私
+      console.log(`[PasswordReset] Request for non-registered email: ${normalizedEmail}`);
+      return res.json(successResponse);
+    }
+
+    // 生成 6 位重置验证码
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const codeHash = hashVerificationCode(code);
+
+    const resetData = {
+      username,
+      codeHash,
+      attempts: 0,
+      createdAt: new Date().toISOString()
+    };
+
+    // 写入 Redis 并设置 15 分钟过期
+    const resetKey = getRedisKey(`password-reset:${normalizedEmail}`);
+    await redis.setex(resetKey, 900, JSON.stringify(resetData));
+
+    // 设置 60 秒限流
+    await redis.setex(rateKey, 60, '1');
+
+    // 发送重置密码邮件
+    const emailHtml = `
+      <div style="font-family: sans-serif; padding: 20px; color: #333;">
+        <h2>您好 ${username}，</h2>
+        <p>我们收到了您重置 BioDownloader 账号密码的请求。您的密码重置验证码为：</p>
+        <div style="font-size: 24px; font-weight: bold; background-color: #fdf2f2; padding: 15px; border-radius: 5px; text-align: center; color: #dc2626; letter-spacing: 5px; margin: 20px 0;">
+          ${code}
+        </div>
+        <p>验证码在 15 分钟内有效，请勿将验证码泄露给他人。如果您没有请求重置密码，请忽略此邮件，您的账号依然是安全的。</p>
+        <hr style="border: 0; border-top: 1px solid #eaeaea; margin: 30px 0;" />
+        <p style="font-size: 12px; color: #666;">此邮件由系统自动发送，请勿直接回复。</p>
+      </div>
+    `;
+
+    await sendEmail({
+      to: normalizedEmail,
+      subject: 'BioDownloader 密码重置验证码',
+      html: emailHtml
+    });
+
+    res.json(successResponse);
+  } catch (error) {
+    console.error('发送密码重置验证码失败:', error);
+    res.status(500).json({ error: '请求失败，请稍后重试' });
+  }
+});
+
+// 4. 确认密码重置
+app.post('/api/auth/password-reset/confirm', authLimiter, redisHealthCheck, async (req, res) => {
+  const { email, code, newPassword } = req.body;
+  if (!email || !code || !newPassword) {
+    return res.status(400).json({ error: '参数不完整' });
+  }
+
+  if (newPassword.length < 8) {
+    return res.status(400).json({ error: '新密码长度至少为 8 位' });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+
+  try {
+    const resetKey = getRedisKey(`password-reset:${normalizedEmail}`);
+    const resetDataStr = await redis.get(resetKey);
+    if (!resetDataStr) {
+      return res.status(400).json({ error: '验证码已过期或不存在' });
+    }
+
+    const resetData = JSON.parse(resetDataStr);
+    const username = resetData.username;
+
+    // 验证哈希
+    const codeHash = hashVerificationCode(code);
+    if (resetData.codeHash !== codeHash) {
+      resetData.attempts += 1;
+      if (resetData.attempts >= 5) {
+        await redis.del(resetKey); // 输错 5 次强制销毁
+        return res.status(400).json({ error: '验证码输入错误次数过多，已失效，请重新获取' });
+      }
+      await redis.setex(resetKey, 900, JSON.stringify(resetData));
+      return res.status(400).json({ error: '验证码不正确' });
+    }
+
+    // 验证成功，删除验证码记录
+    await redis.del(resetKey);
+
+    // 更新用户密码哈希，并废弃旧 Token
+    const userKey = getRedisKey(`user:${username}`);
+    const userStr = await redis.get(userKey);
+    if (!userStr) {
+      return res.status(404).json({ error: '该账户不存在' });
+    }
+
+    const userObj = JSON.parse(userStr);
+    const oldToken = userObj.token;
+
+    // 生成新 Token
+    const newToken = generateToken();
+    const newPasswordHash = await hashPassword(newPassword);
+
+    userObj.passwordHash = newPasswordHash;
+    userObj.token = newToken; // 废弃旧登录 token
+
+    // 迁移或保留已有的 Token 资源 (流量限制与到期时间)
+    const oldTokenKey = getRedisKey(`token:${oldToken}`);
+    const oldTokenObjStr = await redis.get(oldTokenKey);
+    let tokenObj;
+
+    if (oldTokenObjStr) {
+      tokenObj = JSON.parse(oldTokenObjStr);
+      tokenObj.token = newToken; // 绑定到新 token
+    } else {
+      // 容错：初始化默认试用额度
+      const trialExpireDate = new Date();
+      trialExpireDate.setDate(trialExpireDate.getDate() + 2);
+      tokenObj = {
+        token: newToken,
+        username,
+        expireAt: trialExpireDate.toISOString(),
+        trafficLimit: 209715200,
+        trafficConsumed: 0
+      };
+    }
+
+    // 保存更新
+    await redis.set(userKey, JSON.stringify(userObj));
+    await redis.set(getRedisKey(`token:${newToken}`), JSON.stringify(tokenObj));
+    // 删除旧 Token 记录
+    await redis.del(oldTokenKey);
+
+    res.json({ success: true, message: '您的密码已成功重置，请使用新密码重新登录。' });
+  } catch (error) {
+    console.error('确认密码重置错误:', error);
+    res.status(500).json({ error: '密码重置失败，请重试' });
   }
 });
 

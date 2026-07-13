@@ -8,9 +8,13 @@ contextBridge.exposeInMainWorld('api', {
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 
   // 用户与认证
-  register: (username, password) => ipcRenderer.invoke('api-register', { username, password }),
+  register: (username, password, email) => ipcRenderer.invoke('api-register', { username, password, email }),
   login: (username, password) => ipcRenderer.invoke('api-login', { username, password }),
   getUserInfo: (token) => ipcRenderer.invoke('api-get-user-info', { token }),
+  requestEmailBindCode: (token, email) => ipcRenderer.invoke('api-request-email-bind-code', { token, email }),
+  confirmEmailBind: (token, email, code) => ipcRenderer.invoke('api-confirm-email-bind', { token, email, code }),
+  requestPasswordReset: (email) => ipcRenderer.invoke('api-request-password-reset', { email }),
+  confirmPasswordReset: (email, code, newPassword) => ipcRenderer.invoke('api-confirm-password-reset', { email, code, newPassword }),
 
   // 支付计费
   getPackages: () => ipcRenderer.invoke('api-get-packages'),

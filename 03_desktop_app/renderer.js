@@ -40,6 +40,9 @@ function showToast(message, type = 'info') {
 
 // 初始化加载 settings 和验证登录
 window.addEventListener('DOMContentLoaded', async () => {
+  // 初始化登录/注册表单显示状态
+  switchAuthTab('login');
+
   // 加载并渲染版本号
   try {
     const version = await window.api.getAppVersion();
@@ -487,6 +490,8 @@ async function handleLogin() {
 async function handleRegister() {
   const user = document.getElementById('authUsername').value.trim();
   const pass = document.getElementById('authPassword').value.trim();
+  const emailInput = document.getElementById('authEmail');
+  const email = emailInput ? emailInput.value.trim() : '';
 
   if (!user || !pass) {
     showToast('账号和密码不能为空', 'error');
@@ -494,7 +499,7 @@ async function handleRegister() {
   }
 
   try {
-    const res = await window.api.register(user, pass);
+    const res = await window.api.register(user, pass, email);
     if (res.success) {
       showToast('账户秒速注册成功', 'success');
       await window.api.saveSettings({ token: res.token });
@@ -540,6 +545,23 @@ async function verifyToken(token, isAutoLogin = false) {
         document.getElementById('profExpiry').innerText = expiryDate.toLocaleString() + (res.isActive ? ' (激活中)' : ' (已过期)');
       }
       
+      // 更新邮箱绑定状态与界面显示
+      const emailBindStatus = document.getElementById('emailBindStatus');
+      const emailBindForm = document.getElementById('emailBindForm');
+      if (emailBindStatus && emailBindForm) {
+        if (res.email) {
+          const parts = res.email.split('@');
+          const hiddenEmail = parts[0].length > 3 
+            ? parts[0].substring(0, 3) + '***@' + parts[1]
+            : parts[0] + '***@' + parts[1];
+          emailBindStatus.innerHTML = `已绑定邮箱：<span style="color:#10b981;font-weight:bold;">${hiddenEmail}</span>`;
+          emailBindForm.style.display = 'none';
+        } else {
+          emailBindStatus.innerHTML = `<span style="color:var(--text-muted);">未绑定邮箱 (绑定后可用于自助重置密码)</span>`;
+          emailBindForm.style.display = 'flex';
+        }
+      }
+
       // 更新流量条进度
       updateTrafficProgressBar(res.trafficConsumed, res.trafficLimit);
 
@@ -603,6 +625,18 @@ async function handleLogout() {
   // 重置输入框
   document.getElementById('authUsername').value = '';
   document.getElementById('authPassword').value = '';
+  
+  const authEmail = document.getElementById('authEmail');
+  if (authEmail) authEmail.value = '';
+  const authCode = document.getElementById('authCode');
+  if (authCode) authCode.value = '';
+  const bindEmailInput = document.getElementById('bindEmailInput');
+  if (bindEmailInput) bindEmailInput.value = '';
+  const bindCodeInput = document.getElementById('bindCodeInput');
+  if (bindCodeInput) bindCodeInput.value = '';
+  
+  // 确保切回登录 Tab
+  switchAuthTab('login');
   
   updateClashUIState();
   showToast('账号已安全退出并关闭加速器');
@@ -699,4 +733,213 @@ async function clearSettings() {
     alert('配置已全部重置，应用即将退出。请手动重新运行程序。');
     window.close();
   }
+}
+
+// ==========================================
+// 【邮箱与密码找回交互逻辑】
+// ==========================================
+
+let activeAuthTab = 'login';
+function switchAuthTab(tab) {
+  activeAuthTab = tab;
+  
+  const tabLogin = document.getElementById('tab-btn-login');
+  const tabRegister = document.getElementById('tab-btn-register');
+  const tabForgot = document.getElementById('tab-btn-forgot');
+  
+  const groupUsername = document.getElementById('group-username');
+  const groupEmail = document.getElementById('group-email');
+  const groupCode = document.getElementById('group-code');
+  const groupPassword = document.getElementById('group-password');
+  
+  const labelEmail = document.getElementById('label-email');
+  const labelPassword = document.getElementById('label-password');
+  
+  const btnLoginSubmit = document.getElementById('btn-login-submit');
+  const btnRegisterSubmit = document.getElementById('btn-register-submit');
+  const btnForgotSubmit = document.getElementById('btn-forgot-submit');
+  
+  if (!tabLogin || !tabRegister || !tabForgot) return;
+
+  // Reset active classes
+  tabLogin.style.fontWeight = 'normal';
+  tabLogin.style.color = 'var(--text-muted)';
+  tabRegister.style.fontWeight = 'normal';
+  tabRegister.style.color = 'var(--text-muted)';
+  tabForgot.style.fontWeight = 'normal';
+  tabForgot.style.color = 'var(--text-muted)';
+  
+  // Set target tab active
+  const activeBtn = tab === 'login' ? tabLogin : (tab === 'register' ? tabRegister : tabForgot);
+  activeBtn.style.fontWeight = 'bold';
+  activeBtn.style.color = '#6366f1';
+  
+  // Toggle form groups
+  if (tab === 'login') {
+    if (groupUsername) groupUsername.style.display = 'flex';
+    if (groupEmail) groupEmail.style.display = 'none';
+    if (groupCode) groupCode.style.display = 'none';
+    if (groupPassword) groupPassword.style.display = 'flex';
+    if (labelPassword) labelPassword.innerText = '登录密码';
+    
+    if (btnLoginSubmit) btnLoginSubmit.style.display = 'block';
+    if (btnRegisterSubmit) btnRegisterSubmit.style.display = 'none';
+    if (btnForgotSubmit) btnForgotSubmit.style.display = 'none';
+  } else if (tab === 'register') {
+    if (groupUsername) groupUsername.style.display = 'flex';
+    if (groupEmail) groupEmail.style.display = 'flex';
+    if (groupCode) groupCode.style.display = 'none';
+    if (groupPassword) groupPassword.style.display = 'flex';
+    if (labelEmail) labelEmail.innerText = '绑定邮箱 (选填，用于密码找回)';
+    if (labelPassword) labelPassword.innerText = '设置密码';
+    
+    if (btnLoginSubmit) btnLoginSubmit.style.display = 'none';
+    if (btnRegisterSubmit) btnRegisterSubmit.style.display = 'block';
+    if (btnForgotSubmit) btnForgotSubmit.style.display = 'none';
+  } else if (tab === 'forgot') {
+    if (groupUsername) groupUsername.style.display = 'none';
+    if (groupEmail) groupEmail.style.display = 'flex';
+    if (groupCode) groupCode.style.display = 'flex';
+    if (groupPassword) groupPassword.style.display = 'flex';
+    if (labelEmail) labelEmail.innerText = '已绑定的电子邮箱';
+    if (labelPassword) labelPassword.innerText = '设置新密码 (最少 8 位)';
+    
+    if (btnLoginSubmit) btnLoginSubmit.style.display = 'none';
+    if (btnRegisterSubmit) btnRegisterSubmit.style.display = 'none';
+    if (btnForgotSubmit) btnForgotSubmit.style.display = 'block';
+  }
+}
+
+// 绑定邮箱验证码发送
+async function sendBindEmailCode() {
+  const emailInput = document.getElementById('bindEmailInput');
+  const email = emailInput.value.trim();
+  if (!email) {
+    showToast('请输入邮箱地址', 'error');
+    return;
+  }
+  
+  const sendBtn = document.getElementById('sendBindCodeBtn');
+  sendBtn.disabled = true;
+  sendBtn.innerText = '正在发送...';
+  
+  try {
+    const res = await window.api.requestEmailBindCode(currentUser.token, email);
+    if (res.success) {
+      showToast(res.message || '验证码发送成功，请检查收件箱', 'success');
+      startCountdown(sendBtn, 60, () => {
+        sendBtn.disabled = false;
+        sendBtn.innerText = '获取验证码';
+      });
+    } else {
+      showToast(res.error || '验证码发送失败', 'error');
+      sendBtn.disabled = false;
+      sendBtn.innerText = '获取验证码';
+    }
+  } catch (err) {
+    showToast('发送失败: ' + (err.response?.data?.error || err.message), 'error');
+    sendBtn.disabled = false;
+    sendBtn.innerText = '获取验证码';
+  }
+}
+
+// 提交确认绑定邮箱
+async function submitEmailBind() {
+  const email = document.getElementById('bindEmailInput').value.trim();
+  const code = document.getElementById('bindCodeInput').value.trim();
+  
+  if (!email || !code) {
+    showToast('邮箱和验证码不能为空', 'error');
+    return;
+  }
+  
+  try {
+    const res = await window.api.confirmEmailBind(currentUser.token, email, code);
+    if (res.success) {
+      showToast('邮箱绑定成功！', 'success');
+      await verifyToken(currentUser.token);
+    } else {
+      showToast(res.error || '绑定失败', 'error');
+    }
+  } catch (err) {
+    showToast('绑定失败: ' + (err.response?.data?.error || err.message), 'error');
+  }
+}
+
+// 找回密码验证码发送
+async function sendResetEmailCode() {
+  const email = document.getElementById('authEmail').value.trim();
+  if (!email) {
+    showToast('请输入电子邮箱地址', 'error');
+    return;
+  }
+  
+  const sendBtn = document.getElementById('sendResetCodeBtn');
+  sendBtn.disabled = true;
+  sendBtn.innerText = '正在发送...';
+  
+  try {
+    const res = await window.api.requestPasswordReset(email);
+    if (res.success) {
+      showToast('如果该邮箱已注册，验证码邮件已发出', 'success');
+      startCountdown(sendBtn, 60, () => {
+        sendBtn.disabled = false;
+        sendBtn.innerText = '获取验证码';
+      });
+    } else {
+      showToast(res.error || '获取验证码失败', 'error');
+      sendBtn.disabled = false;
+      sendBtn.innerText = '获取验证码';
+    }
+  } catch (err) {
+    showToast('发送失败: ' + (err.response?.data?.error || err.message), 'error');
+    sendBtn.disabled = false;
+    sendBtn.innerText = '获取验证码';
+  }
+}
+
+// 确认重置密码并提交
+async function submitPasswordReset() {
+  const email = document.getElementById('authEmail').value.trim();
+  const code = document.getElementById('authCode').value.trim();
+  const newPassword = document.getElementById('authPassword').value.trim();
+  
+  if (!email || !code || !newPassword) {
+    showToast('所有字段均不能为空', 'error');
+    return;
+  }
+  
+  if (newPassword.length < 8) {
+    showToast('密码长度至少为 8 位', 'error');
+    return;
+  }
+  
+  try {
+    const res = await window.api.confirmPasswordReset(email, code, newPassword);
+    if (res.success) {
+      showToast('密码重置成功，请重新登录', 'success');
+      document.getElementById('authEmail').value = '';
+      document.getElementById('authCode').value = '';
+      document.getElementById('authPassword').value = '';
+      switchAuthTab('login');
+    } else {
+      showToast(res.error || '重置密码失败', 'error');
+    }
+  } catch (err) {
+    showToast('重置失败: ' + (err.response?.data?.error || err.message), 'error');
+  }
+}
+
+// 统一倒计时工具函数
+function startCountdown(buttonEl, seconds, onComplete) {
+  let remaining = seconds;
+  const interval = setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) {
+      clearInterval(interval);
+      if (onComplete) onComplete();
+    } else {
+      buttonEl.innerText = `${remaining}秒后重新获取`;
+    }
+  }, 1000);
 }

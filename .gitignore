@@ -11,6 +11,11 @@ node_modules/
 *.log
 npm-debug.log*
 
+# 本地环境变量和密钥
+.env
+.env.*
+!.env.example
+
 # 编辑器
 .vscode/
 .idea/

@@ -371,7 +371,7 @@
       font-weight: 500;
     }
 
-    textarea, input[type="text"], input[type="password"] {
+    textarea, input[type="text"], input[type="password"], input[type="email"] {
       width: 100%;
       background: var(--bg-input);
       border: 1px solid var(--border-color);
@@ -727,19 +727,38 @@
       
       <!-- 未登录界面 -->
       <div class="card" id="authFormCard" style="max-width: 500px; margin: 0 auto; width: 100%;">
-        <div class="brand" style="margin-bottom: 1.5rem;">账户登录与注册</div>
-        <div class="form-group">
+        <div style="display:flex; justify-content:space-around; margin-bottom:1.5rem; border-bottom:1px solid var(--border-color); padding-bottom:0.75rem; font-size: 0.95rem;">
+          <span id="tab-btn-login" style="font-weight:bold; cursor:pointer; color:#6366f1;" onclick="switchAuthTab('login')">账户登录</span>
+          <span id="tab-btn-register" style="cursor:pointer; color:var(--text-muted);" onclick="switchAuthTab('register')">账号注册</span>
+          <span id="tab-btn-forgot" style="cursor:pointer; color:var(--text-muted);" onclick="switchAuthTab('forgot')">忘记密码</span>
+        </div>
+        
+        <div class="form-group" id="group-username">
           <label>账号/用户名</label>
           <input type="text" id="authUsername" placeholder="请输入用户名...">
         </div>
-        <div class="form-group">
-          <label>密码</label>
+        
+        <div class="form-group" id="group-email" style="display:none;">
+          <label id="label-email">绑定邮箱 (选填，重置密码凭证)</label>
+          <input type="email" id="authEmail" placeholder="请输入邮箱地址 (如 name@example.com)...">
+        </div>
+
+        <div class="form-group" id="group-code" style="display:none;">
+          <label>6位邮箱验证码</label>
+          <div style="display:flex; gap:0.5rem;">
+            <input type="text" id="authCode" placeholder="请输入验证码..." style="flex-grow:1;">
+            <button class="btn btn-secondary" id="sendResetCodeBtn" style="font-size:0.8rem; padding: 0 0.75rem;" onclick="sendResetEmailCode()">获取验证码</button>
+          </div>
+        </div>
+
+        <div class="form-group" id="group-password">
+          <label id="label-password">登录密码</label>
           <input type="password" id="authPassword" placeholder="请输入密码...">
         </div>
-        <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
-          <button class="btn btn-primary" style="flex:1" onclick="handleLogin()">账户登录</button>
-          <button class="btn btn-secondary" style="flex:1" onclick="handleRegister()">极速注册</button>
-        </div>
+
+        <button class="btn btn-primary" id="btn-login-submit" style="width:100%; margin-top:1rem;" onclick="handleLogin()">账户登录</button>
+        <button class="btn btn-secondary" id="btn-register-submit" style="width:100%; display:none; margin-top:1rem;" onclick="handleRegister()">极速注册</button>
+        <button class="btn btn-danger" id="btn-forgot-submit" style="width:100%; display:none; margin-top:1rem;" onclick="submitPasswordReset()">确认重置密码</button>
       </div>
 
       <!-- 已登录界面 -->
@@ -758,7 +777,21 @@
             <label>到期时间</label>
             <div id="profExpiry" style="font-size:0.95rem;margin-top:0.25rem;">-</div>
           </div>
-          <button class="btn btn-danger" style="margin-top:auto;" onclick="handleLogout()">注销退出</button>
+          
+          <div class="form-group" style="border-top:1px solid var(--border-color); padding-top:1rem; margin-top:0.5rem; display:flex; flex-direction:column; gap:0.5rem;">
+            <label>绑定邮箱</label>
+            <div id="emailBindStatus" style="font-size:0.85rem; color:var(--text-muted); font-weight:bold;">未绑定邮箱 (绑定后可自助找回密码)</div>
+            <div id="emailBindForm" style="display:none; flex-direction:column; gap:0.5rem;">
+              <input type="email" id="bindEmailInput" placeholder="请输入邮箱地址..." style="font-size:0.85rem; padding:0.5rem;">
+              <div style="display:flex; gap:0.5rem;">
+                <input type="text" id="bindCodeInput" placeholder="6位验证码" style="width:100px; font-size:0.85rem; padding:0.5rem; text-align:center;">
+                <button class="btn btn-secondary" id="sendBindCodeBtn" style="font-size:0.8rem; padding:0 0.5rem; flex-grow:1;" onclick="sendBindEmailCode()">获取验证码</button>
+                <button class="btn btn-primary" style="font-size:0.8rem; padding:0 0.75rem;" onclick="submitEmailBind()">绑定</button>
+              </div>
+            </div>
+          </div>
+
+          <button class="btn btn-danger" style="margin-top:1rem;" onclick="handleLogout()">注销退出</button>
         </div>
 
         <div class="card">
