@@ -171,6 +171,20 @@ app.on('will-quit', () => {
 // ==========================================
 const net = require('net');
 
+function killExistingClashProcesses() {
+  return new Promise((resolve) => {
+    if (process.platform === 'win32') {
+      exec('taskkill /F /IM mihomo_windows_x86_64.exe', () => {
+        resolve();
+      });
+    } else {
+      exec('killall -9 mihomo_aarch64; killall -9 mihomo_x86_64', () => {
+        resolve();
+      });
+    }
+  });
+}
+
 function checkPortBusy(port) {
   return new Promise((resolve) => {
     const server = net.createServer()
@@ -195,7 +209,10 @@ async function startClash(token) {
     return true;
   }
 
-  // 检测 43289 端口是否被占用
+  // 1. 强制清理残留后台 Clash 进程，释放加速端口
+  await killExistingClashProcesses();
+
+  // 2. 检测 43289 端口是否被占用
   const isPortBusy = await checkPortBusy(43289);
   if (isPortBusy) {
     throw new Error('下载加速器启动失败：加速端口冲突，请关闭其他代理/加速器软件或重启电脑后重试。');
@@ -252,7 +269,7 @@ async function startClash(token) {
 function stopClash() {
   if (clashProcess) {
     console.log('Terminating Clash process...');
-    clashProcess.kill('SIGINT');
+    clashProcess.kill('SIGKILL');
     clashProcess = null;
   }
 }

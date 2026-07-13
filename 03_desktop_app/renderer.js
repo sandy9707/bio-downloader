@@ -211,13 +211,13 @@ function switchDownloadType(btn, type) {
   const labels = {
     'sra_raw': '请输入 SRA 原始数据编号 (例如: SRR1234567，多项使用换行或空格分隔)',
     'ebi_raw': '请输入 EBI 原始数据编号 (例如: ERR1234567，优先拉取 EBI 高速 Fastq，无则回退 SRA)',
-    'geo_suppl': '请输入 GEO 系列号 (例如: GSE123456，将自动提取页面下的全部补充文件)',
+    'geo_suppl': '请输入 GEO 系列号 (例如: GSE153781，将自动提取页面下的全部补充文件)',
     'links': '请输入直接下载链接 (每行一个下载链接)'
   };
   const placeholders = {
     'sra_raw': 'SRR1234567\nSRR1234568',
     'ebi_raw': 'ERR1234567\nSRR1234567',
-    'geo_suppl': 'GSE123456',
+    'geo_suppl': 'GSE153781',
     'links': 'https://example.com/data/sample1.fq.gz\nhttps://example.com/data/sample2.fq.gz'
   };
 
