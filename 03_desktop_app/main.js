@@ -589,15 +589,15 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
         https_proxy: 'http://127.0.0.1:43289',
         all_proxy: 'http://127.0.0.1:43289'
       };
-      // 动态分配线程数，小文件限制较低线程数以防触发 NCBI/EBI 速率控制屏蔽
-      let threads = 8;
+      // 默认使用 16 线程，小文件限制较低线程数以防触发 NCBI/EBI 速率控制屏蔽
+      let threads = 16;
       if (file.size) {
         if (file.size < 500 * 1024) { // < 500 KB
           threads = 1;
         } else if (file.size < 5 * 1024 * 1024) { // < 5 MB
-          threads = 2;
-        } else if (file.size < 50 * 1024 * 1024) { // < 50 MB
           threads = 4;
+        } else if (file.size < 50 * 1024 * 1024) { // < 50 MB
+          threads = 8;
         }
       }
 

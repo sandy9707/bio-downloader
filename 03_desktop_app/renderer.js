@@ -314,14 +314,14 @@ function renderQueue() {
     const sizeStr = file.size > 0 ? formatBytes(file.size) : '未知大小';
     const folderStr = file.folder ? `<span style="background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:4px;font-size:0.75rem;">目录: ${file.folder}</span>` : '';
 
-    let threads = 8;
+    let threads = 16;
     if (file.size) {
       if (file.size < 500 * 1024) {
         threads = 1;
       } else if (file.size < 5 * 1024 * 1024) {
-        threads = 2;
-      } else if (file.size < 50 * 1024 * 1024) {
         threads = 4;
+      } else if (file.size < 50 * 1024 * 1024) {
+        threads = 8;
       }
     }
 
