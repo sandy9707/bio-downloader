@@ -12,6 +12,20 @@ let mainWindow;
 let clashProcess = null;
 let currentAxelProcess = null;
 
+function ensureExecutable(filePath) {
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK);
+    console.log(`Binary is already executable: ${filePath}`);
+  } catch (err) {
+    try {
+      fs.chmodSync(filePath, '755');
+      console.log(`Successfully chmod executable: ${filePath}`);
+    } catch (chmodErr) {
+      console.warn(`Failed to chmod binary inside read-only volume: ${chmodErr.message}`);
+    }
+  }
+}
+
 // ==========================================
 // 【文件路径管理】
 // ==========================================
@@ -197,7 +211,7 @@ async function startClash(token) {
     fs.writeFileSync(configPath, response.data, 'utf8');
 
     const binaryPath = getClashBinaryPath();
-    fs.chmodSync(binaryPath, '755'); // 确保有执行权限
+    ensureExecutable(binaryPath);
 
     console.log(`Spawning Clash from ${binaryPath} with config at ${CLASH_WORK_DIR}`);
     
@@ -434,7 +448,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
   }
 
   const axelBin = getAxelBinaryPath();
-  fs.chmodSync(axelBin, '755'); // 确保执行权限
+  ensureExecutable(axelBin);
 
   const MAX_RETRIES = 3;
 

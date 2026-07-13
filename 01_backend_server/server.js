@@ -70,7 +70,7 @@ const EPAY_CONFIG = {
 };
 
 // 开启模拟支付模式 (方便开发调试)
-const ENABLE_MOCK_PAYMENT = true;
+const ENABLE_MOCK_PAYMENT = false;
 
 // 开发者持有的高速度 Clash 订阅链接
 const DEVELOPER_SUBSCRIBE_URL = 'https://subbind.yeyeziblog.eu.org/speedup?token=MyqjIpxrzA8WCUCM';
@@ -78,7 +78,7 @@ const DEVELOPER_SUBSCRIBE_URL = 'https://subbind.yeyeziblog.eu.org/speedup?token
 // 价格与流量套餐配置
 // 流量单位: 字节 (Bytes). 100G = 100 * 1024 * 1024 * 1024 = 107374182400
 const PRICING_PACKAGES = [
-  { id: 'pkg_test', name: '100MB 测试包', days: 1, price: 0.01, trafficBytes: 104857600 },
+  { id: 'pkg_test', name: '100MB 测试包', days: 1, price: 2.00, trafficBytes: 104857600 },
   { id: 'pkg_100g', name: '100GB 高速流量包', days: 60, price: 10.00, trafficBytes: 107374182400 }
 ];
 

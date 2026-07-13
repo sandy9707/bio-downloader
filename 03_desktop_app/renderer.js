@@ -93,6 +93,9 @@ function toggleDarkMode() {
 // 【下载加速器开关逻辑】
 // ==========================================
 async function updateClashUIState() {
+  // 如果用户未登录，界面状态由手动控制，不需要后台状态覆盖
+  if (!currentUser) return;
+
   try {
     const isRunning = await window.api.getClashStatus();
     const dot = document.getElementById('clashDot');
@@ -117,10 +120,16 @@ async function updateClashUIState() {
 
 async function toggleClash() {
   const toggle = document.getElementById('clashToggle');
+  const dot = document.getElementById('clashDot');
+  const text = document.getElementById('clashStatusText');
+
   if (toggle.checked) {
     if (!currentUser) {
+      // 未登录时允许开启，但显示黄色警示/待激活状态
       showToast('请先登录账户，获取您的专属加速服务', 'error');
-      toggle.checked = false;
+      dot.className = 'dot warning';
+      text.innerText = '未激活加速服务';
+      document.getElementById('clashConfigInfo').innerText = '未登录账户，加速通道未激活。';
       return;
     }
     try {
@@ -131,11 +140,21 @@ async function toggleClash() {
     } catch (err) {
       showToast(err.message, 'error');
       toggle.checked = false;
+      dot.className = 'dot';
+      text.innerText = '加速器已关闭';
     }
   } else {
-    await window.api.stopClash();
+    if (currentUser) {
+      await window.api.stopClash();
+    }
     showToast('下载加速器已关闭');
-    updateClashUIState();
+    dot.className = 'dot';
+    text.innerText = '加速器已关闭';
+    if (currentUser) {
+      document.getElementById('clashConfigInfo').innerText = '尚未启动下载加速器。启动下载时会自动开启。';
+    } else {
+      document.getElementById('clashConfigInfo').innerText = '未登录账户，加速通道未激活。';
+    }
   }
 }
 
@@ -466,6 +485,16 @@ async function verifyToken(token, isAutoLogin = false) {
     if (res.success) {
       currentUser = res;
       
+      // 登录之后自动把这个按钮自动关掉（防止残留黄色模拟状态）
+      const toggle = document.getElementById('clashToggle');
+      const clashDot = document.getElementById('clashDot');
+      const clashStatusText = document.getElementById('clashStatusText');
+      if (toggle && toggle.checked) {
+        toggle.checked = false;
+        clashDot.className = 'dot';
+        clashStatusText.innerText = '加速器已关闭';
+      }
+
       // 显示登录后的界面
       document.getElementById('authFormCard').style.display = 'none';
       document.getElementById('loggedInProfile').style.display = 'grid';
