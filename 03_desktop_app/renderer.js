@@ -318,6 +318,17 @@ function renderQueue() {
     const sizeStr = file.size > 0 ? formatBytes(file.size) : '未知大小';
     const folderStr = file.folder ? `<span style="background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:4px;font-size:0.75rem;">目录: ${file.folder}</span>` : '';
 
+    let threads = 8;
+    if (file.size) {
+      if (file.size < 500 * 1024) {
+        threads = 1;
+      } else if (file.size < 5 * 1024 * 1024) {
+        threads = 2;
+      } else if (file.size < 50 * 1024 * 1024) {
+        threads = 4;
+      }
+    }
+
     itemEl.innerHTML = `
       <div class="item-meta">
         <span class="item-name" title="${file.name}">${file.name}</span>
@@ -335,7 +346,7 @@ function renderQueue() {
       </div>
       <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text-muted);">
         <span id="speed-text-${index}">-</span>
-        <span>Axel 16 线程</span>
+        <span>Axel ${threads} 线程</span>
       </div>
     `;
     listEl.appendChild(itemEl);

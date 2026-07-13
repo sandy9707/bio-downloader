@@ -223,11 +223,11 @@ async function startClash(token) {
     const subUrl = `${BACKEND_BASE_URL}/speedup?token=${token}`;
     const response = await axios.get(subUrl, { timeout: 10000 });
     
-    // 动态修改 yaml 配置中的监听端口为 43289
+    // 动态修改 yaml 配置中的监听端口为 43289 (仅限根节点配置，避免破坏代理节点端口)
     let yamlContent = response.data;
-    yamlContent = yamlContent.replace(/mixed-port:\s*\d+/g, 'mixed-port: 43289');
-    yamlContent = yamlContent.replace(/port:\s*\d+/g, 'port: 43289');
-    yamlContent = yamlContent.replace(/socks-port:\s*\d+/g, 'socks-port: 43290');
+    yamlContent = yamlContent.replace(/^mixed-port:\s*\d+/gm, 'mixed-port: 43289');
+    yamlContent = yamlContent.replace(/^port:\s*\d+/gm, 'port: 43289');
+    yamlContent = yamlContent.replace(/^socks-port:\s*\d+/gm, 'socks-port: 43290');
 
     if (!yamlContent.includes('mixed-port: 43289') && !yamlContent.includes('port: 43289')) {
       yamlContent = 'mixed-port: 43289\n' + yamlContent;
