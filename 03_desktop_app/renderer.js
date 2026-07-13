@@ -489,10 +489,15 @@ async function verifyToken(token, isAutoLogin = false) {
       updateTrafficProgressBar(res.trafficConsumed, res.trafficLimit);
 
       // 如果加速器没开，则为其自动开启
-      const isClashRunning = await window.api.getClashStatus();
-      if (!isClashRunning) {
-        await window.api.startClash(token);
-        updateClashUIState();
+      try {
+        const isClashRunning = await window.api.getClashStatus();
+        if (!isClashRunning) {
+          await window.api.startClash(token);
+          updateClashUIState();
+        }
+      } catch (clashErr) {
+        console.error('自动开启加速器失败:', clashErr.message);
+        showToast('加速器自动开启失败，请手动尝试', 'error');
       }
     }
   } catch (e) {

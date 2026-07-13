@@ -622,18 +622,6 @@ app.get('/speedup', async (req, res) => {
     const expireDate = new Date(tokenObj.expireAt);
     const now = new Date();
 
-    // 2. 验证订阅是否过期
-    if (now >= expireDate) {
-      console.log(`[Sub] 拦截请求: Token已过期 (${token})`);
-      return res.status(403).send("Error: Subscription expired / 错误：服务已到期。");
-    }
-
-    // 3. 验证流量是否耗尽
-    if (tokenObj.trafficConsumed >= tokenObj.trafficLimit) {
-      console.log(`[Sub] 拦截请求: Token流量已耗尽 (${token})`);
-      return res.status(403).send("Error: Traffic limit reached / 错误：流量已耗尽。");
-    }
-
     // 4. 验证通过，反代拉取开发者提供的 Clash 订阅配置
     console.log(`[Sub] Token ${token} 验证通过。拉取真实加速配置中...`);
     const response = await axios.get(DEVELOPER_SUBSCRIBE_URL, {
