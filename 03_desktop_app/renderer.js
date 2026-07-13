@@ -40,6 +40,21 @@ function showToast(message, type = 'info') {
 
 // 初始化加载 settings 和验证登录
 window.addEventListener('DOMContentLoaded', async () => {
+  // 加载并渲染版本号
+  try {
+    const version = await window.api.getAppVersion();
+    const logoEl = document.querySelector('.logo');
+    if (logoEl) {
+      logoEl.innerHTML = `BioDownloader Pro <span style="font-size: 0.7rem; vertical-align: middle; opacity: 0.75; font-weight: normal; margin-left: 0.25rem;">v${version}</span>`;
+    }
+    const versionEl = document.getElementById('settingsAppVersion');
+    if (versionEl) {
+      versionEl.innerText = 'v' + version;
+    }
+  } catch (e) {
+    console.error('获取版本号失败:', e);
+  }
+
   // 0. 加载主题偏好
   const savedTheme = localStorage.getItem('theme');
   if (savedTheme === 'dark') {

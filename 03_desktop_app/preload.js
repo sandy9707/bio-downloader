@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('api', {
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 
   // 用户与认证
   register: (username, password) => ipcRenderer.invoke('api-register', { username, password }),

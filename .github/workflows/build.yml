@@ -31,6 +31,10 @@ jobs:
           chmod +x 03_desktop_app/bin/darwin/mihomo_x86_64
           chmod +x 03_desktop_app/bin/darwin/axel
 
+      - name: 依据 Git Tag 同步 package.json 版本号
+        working-directory: 03_desktop_app
+        run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
+
       - name: 打包 macOS DMG
         working-directory: 03_desktop_app
         run: npm run dist
@@ -78,6 +82,10 @@ jobs:
       - name: 安装 npm 依赖
         working-directory: 03_desktop_app
         run: npm install
+
+      - name: 依据 Git Tag 同步 package.json 版本号
+        working-directory: 03_desktop_app
+        run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
 
       - name: 打包 Windows EXE
         working-directory: 03_desktop_app

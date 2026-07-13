@@ -347,6 +347,10 @@ ipcMain.handle('clash-status', () => {
   return clashProcess !== null;
 });
 
+ipcMain.handle('get-app-version', () => {
+  return app.getVersion();
+});
+
 // --- 文件大小检验 ---
 ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
   const ids = inputVal.split(/[\s,\n;]+/).map(x => x.trim()).filter(Boolean);
