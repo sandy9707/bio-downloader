@@ -378,13 +378,15 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
   const files = [];
   
   if (type === 'sra_raw') {
-    for (const acc of ids) {
+    const promises = ids.map(async (acc) => {
       const url = `https://sra-pub-run-odp.s3.amazonaws.com/sra/${acc}/${acc}`;
       const size = await headRequestSize(url);
-      files.push({ name: acc, url, size });
-    }
+      return { name: acc, url, size };
+    });
+    const results = await Promise.all(promises);
+    files.push(...results);
   } else if (type === 'ebi_raw') {
-    for (const acc of ids) {
+    const promises = ids.map(async (acc) => {
       try {
         const enaUrl = `https://www.ebi.ac.uk/ena/portal/api/filereport?accession=${acc}&result=read_run&fields=fastq_ftp&format=json`;
         let res;
@@ -399,25 +401,28 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
         }
         if (res.data && res.data[0] && res.data[0].fastq_ftp) {
           const urls = res.data[0].fastq_ftp.split(';');
-          for (let u of urls) {
+          const subPromises = urls.map(async (u) => {
             const cleanUrl = u.startsWith('http') ? u : 'https://' + u;
             const size = await headRequestSize(cleanUrl);
             const fname = cleanUrl.substring(cleanUrl.lastIndexOf('/') + 1);
-            files.push({ name: fname, url: cleanUrl, size, folder: acc });
-          }
+            return { name: fname, url: cleanUrl, size, folder: acc };
+          });
+          return await Promise.all(subPromises);
         } else {
           // 回退 AWS SRA
           const url = `https://sra-pub-run-odp.s3.amazonaws.com/sra/${acc}/${acc}`;
           const size = await headRequestSize(url);
-          files.push({ name: acc, url, size });
+          return [{ name: acc, url, size }];
         }
       } catch (e) {
         // 回退 AWS SRA
         const url = `https://sra-pub-run-odp.s3.amazonaws.com/sra/${acc}/${acc}`;
         const size = await headRequestSize(url);
-        files.push({ name: acc, url, size });
+        return [{ name: acc, url, size }];
       }
-    }
+    });
+    const results = await Promise.all(promises);
+    results.forEach(subList => files.push(...subList));
   } else if (type === 'geo_suppl') {
     for (const acc of ids) {
       try {
@@ -441,30 +446,43 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
         }
         const $ = cheerio.load(res.data);
         const links = $('a');
-        let found = false;
+        const candidateLinks = [];
 
         for (let i = 0; i < links.length; i++) {
           const href = $(links[i]).attr('href');
           if (href && !href.startsWith('/') && !href.startsWith('?') && href.toLowerCase() !== 'filelist.txt') {
+            // 过滤外链与协议前缀，只解析该目录下的相对路径文件
+            if (href.includes('://') || href.startsWith('http') || href.startsWith('ftp') || href.startsWith('mailto')) {
+              continue;
+            }
             const fileUrl = new URL(href, geoUrl).href;
-            const size = await headRequestSize(fileUrl);
-            files.push({ name: href, url: fileUrl, size, folder: acc });
-            found = true;
+            candidateLinks.push({ name: href, url: fileUrl });
           }
         }
-        if (!found) {
+
+        if (candidateLinks.length === 0) {
           throw new Error(`[${acc}] 页面上未发现可下载的补充文件`);
         }
+
+        // 并行校验该系列号下的全部补充文件体积
+        const sizePromises = candidateLinks.map(async (link) => {
+          const size = await headRequestSize(link.url);
+          return { name: link.name, url: link.url, size, folder: acc };
+        });
+        const resolvedFiles = await Promise.all(sizePromises);
+        files.push(...resolvedFiles);
       } catch (err) {
         throw new Error(`获取 GEO ${acc} 页面失败: ` + err.message);
       }
     }
   } else if (type === 'links') {
-    for (const link of ids) {
+    const promises = ids.map(async (link) => {
       const size = await headRequestSize(link);
       const name = link.substring(link.lastIndexOf('/') + 1) || 'file_' + Date.now();
-      files.push({ name, url: link, size });
-    }
+      return { name, url: link, size };
+    });
+    const results = await Promise.all(promises);
+    files.push(...results);
   }
 
   return files;
@@ -550,8 +568,19 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
         https_proxy: 'http://127.0.0.1:43289',
         all_proxy: 'http://127.0.0.1:43289'
       };
+      // 动态分配线程数，小文件限制较低线程数以防触发 NCBI/EBI 速率控制屏蔽
+      let threads = 8;
+      if (file.size) {
+        if (file.size < 500 * 1024) { // < 500 KB
+          threads = 1;
+        } else if (file.size < 5 * 1024 * 1024) { // < 5 MB
+          threads = 2;
+        } else if (file.size < 50 * 1024 * 1024) { // < 50 MB
+          threads = 4;
+        }
+      }
 
-      const args = ['-n', '16', '-o', savePath, file.url];
+      const args = ['-n', threads.toString(), '-o', savePath, file.url];
       console.log(`Running Axel (Attempt ${attempt}): ${axelBin} ${args.join(' ')}`);
 
       try {
