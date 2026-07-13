@@ -195,10 +195,10 @@ async function startClash(token) {
     return true;
   }
 
-  // 检测 7890 端口是否被占用
-  const isPortBusy = await checkPortBusy(7890);
+  // 检测 43289 端口是否被占用
+  const isPortBusy = await checkPortBusy(43289);
   if (isPortBusy) {
-    throw new Error('端口 7890 已被占用，请关闭其他代理/加速器软件后重试。');
+    throw new Error('下载加速器启动失败：加速端口冲突，请关闭其他代理/加速器软件或重启电脑后重试。');
   }
 
   try {
@@ -206,9 +206,19 @@ async function startClash(token) {
     const subUrl = `${BACKEND_BASE_URL}/speedup?token=${token}`;
     const response = await axios.get(subUrl, { timeout: 10000 });
     
+    // 动态修改 yaml 配置中的监听端口为 43289
+    let yamlContent = response.data;
+    yamlContent = yamlContent.replace(/mixed-port:\s*\d+/g, 'mixed-port: 43289');
+    yamlContent = yamlContent.replace(/port:\s*\d+/g, 'port: 43289');
+    yamlContent = yamlContent.replace(/socks-port:\s*\d+/g, 'socks-port: 43290');
+
+    if (!yamlContent.includes('mixed-port: 43289') && !yamlContent.includes('port: 43289')) {
+      yamlContent = 'mixed-port: 43289\n' + yamlContent;
+    }
+
     // 保存 config.yaml 到用户工作空间
     const configPath = path.join(CLASH_WORK_DIR, 'config.yaml');
-    fs.writeFileSync(configPath, response.data, 'utf8');
+    fs.writeFileSync(configPath, yamlContent, 'utf8');
 
     const binaryPath = getClashBinaryPath();
     ensureExecutable(binaryPath);
@@ -258,7 +268,7 @@ async function headRequestSize(url) {
       proxy: {
         protocol: 'http',
         host: '127.0.0.1',
-        port: 7890
+        port: 43289
       }
     });
     if (response.headers['content-length']) {
@@ -391,7 +401,7 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
         // 请求页面并解析链接
         const res = await axios.get(geoUrl, {
           timeout: 15000,
-          proxy: { protocol: 'http', host: '127.0.0.1', port: 7890 }
+          proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 }
         });
         const $ = cheerio.load(res.data);
         const links = $('a');
@@ -497,12 +507,12 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
         speed: '正在高速下载...'
       });
 
-      // 组装 Axel 环境变量 (强制走本地 Clash 代理端口 7890)
+      // 组装 Axel 环境变量 (强制走本地 Clash 代理端口 43289)
       const env = {
         ...process.env,
-        http_proxy: 'http://127.0.0.1:7890',
-        https_proxy: 'http://127.0.0.1:7890',
-        all_proxy: 'http://127.0.0.1:7890'
+        http_proxy: 'http://127.0.0.1:43289',
+        https_proxy: 'http://127.0.0.1:43289',
+        all_proxy: 'http://127.0.0.1:43289'
       };
 
       const args = ['-n', '16', '-o', savePath, file.url];

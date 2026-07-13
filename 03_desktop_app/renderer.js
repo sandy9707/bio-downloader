@@ -106,7 +106,7 @@ async function updateClashUIState() {
       dot.className = 'dot active';
       text.innerText = '加速器已开启';
       toggle.checked = true;
-      document.getElementById('clashConfigInfo').innerText = '正在本地监听端口 7890，高速加速通道已建立。';
+      document.getElementById('clashConfigInfo').innerText = '高速加速通道已建立。';
     } else {
       dot.className = 'dot';
       text.innerText = '加速器已关闭';
@@ -603,9 +603,8 @@ async function loadPackages() {
           <div style="font-size:0.85rem;color:var(--text-muted);">有效期: ${pkg.days} 天 | 纯流量包</div>
           <div class="package-price">¥ ${pkg.price.toFixed(2)}</div>
           <div style="font-size:1.1rem;font-weight:bold;color:#10b981;">高速流量: ${trafficStr}</div>
-          <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
-            <button class="btn btn-primary" style="flex:1;padding:0.5rem;" onclick="buyPackage('${pkg.id}', 'alipay')">支付宝</button>
-            <button class="btn btn-accent" style="flex:1;padding:0.5rem;" onclick="buyPackage('${pkg.id}', 'wxpay')">微信支付</button>
+          <div style="margin-top:0.5rem;">
+            <button class="btn btn-primary" style="width:100%;padding:0.5rem;" onclick="buyPackage('${pkg.id}', 'alipay')">立即购买（支付宝）</button>
           </div>
         `;
         container.appendChild(card);
