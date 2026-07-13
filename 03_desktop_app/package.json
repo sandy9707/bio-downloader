@@ -1,6 +1,6 @@
 {
   "name": "bio-downloader",
-  "version": "1.0.0",
+  "version": "1.0.6",
   "description": "Commercial Biology Raw Data Downloader Desktop Client",
   "main": "main.js",
   "scripts": {
