@@ -48,7 +48,6 @@ jobs:
           name: mac-dist
           path: |
             03_desktop_app/dist/*.dmg
-            03_desktop_app/dist/*.zip
 
   # ============================================================
   # Job 2: 构建 Windows EXE (x64)
@@ -135,35 +134,30 @@ jobs:
 
             | 平台 | 文件 | 说明 |
             |------|------|------|
-            | 🍎 macOS (M1/M2/M3/M4) | `*-arm64.dmg` | 安装版 (双击打开后拖拽安装) |
-            | 🍎 macOS (M1/M2/M3/M4) | `*-mac.zip` | 绿色免安装版 (解压直接运行) |
-            | 🪟 Windows 64位 | `Setup*.exe` | 安装版 (双击运行引导安装) |
-            | 🪟 Windows 64位 | `BioDownloader*.exe` | 绿色免安装版 (单文件免安装直接运行) |
+            | 🍎 macOS (M1/M2/M3/M4/Intel) | `BioDownloader-*-arm64.dmg` | DMG 安装包 (双击打开后拖动到应用程序文件夹) |
+            | 🪟 Windows 64位 | `BioDownloader*.exe` | 绿色免安装版 (单文件免安装，双击直接运行) |
 
             ## 安装与运行步骤
-            - **Mac 免安装运行 (推荐)**: 下载 `*-mac.zip` → 解压得到 `BioDownloader.app` → 拖到任意目录即可运行。
-            - **Mac 安装版**: 下载 DMG → 双击打开 → 将 App 拖入 Applications 文件夹。
-            - **Windows 免安装运行**: 下载 `BioDownloader*.exe` 单文件版 → 直接双击即可启动运行。
-            - **Windows 安装版**: 下载 `Setup*.exe` → 双击安装引导流程。
+            - **Windows**: 下载 `BioDownloader*.exe` → 双击直接启动运行。
+            - **macOS**: 下载 DMG → 双击打开 → 将 `BioDownloader.app` 拖入 Applications (应用程序) 文件夹。
 
             ---
 
             ## 🍎 Mac 提示“已损坏，打不开”解决办法
-            由于本软件为独立开发，没有购买 Apple 昂贵的官方签名证书，在新版 macOS 下下载运行会提示“已损坏，打不开”。
-            这是苹果官方 Gatekeeper 安全拦截导致的（属于正常安全控制），只需运行以下命令即可恢复正常：
+            由于本软件未向 Apple 购买官方昂贵的开发者证书，在 macOS 下首次打开会提示“已损坏，打不开”或“来自未识别的开发者”。
+            这是苹果官方的安全阻拦，请使用以下简单命令解锁：
 
-            1. 打开系统自带的 **终端 (Terminal)** 软件
-            2. 复制并执行以下命令（输入电脑开机密码即可）：
+            1. 打开系统自带的 **终端 (Terminal)**
+            2. 输入以下命令并回车（需要输入您的 Mac 开机密码）：
                ```bash
                sudo xattr -cr /Applications/BioDownloader.app
                ```
-               *(如果您直接运行解压出的免安装版，请将路径改为您的 `BioDownloader.app` 实际路径：`sudo xattr -cr [文件路径]`)*
 
             ---
 
-            ## 首次使用
-            1. 打开软件，进入「账户充值」页面注册并登录您的账户。
-            2. 在「下载中心」选择您的数据类型（SRA/EBI/GEO），输入对应编号或链接即可启动高速加速下载。
+            ## 首次使用指引
+            1. 启动软件，进入「我的」页面注册并登录您的账户。
+            2. 在「下载中心」选择数据类型（SRA/EBI/GEO/直链），输入对应编号或链接，点击“检验下载大小”后即可享受 16 线程加速下载。
           files: ./release-files/*
           draft: false
           prerelease: false
