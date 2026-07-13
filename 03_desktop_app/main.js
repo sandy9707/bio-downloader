@@ -366,7 +366,16 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
     for (const acc of ids) {
       try {
         const enaUrl = `https://www.ebi.ac.uk/ena/portal/api/filereport?accession=${acc}&result=read_run&fields=fastq_ftp&format=json`;
-        const res = await axios.get(enaUrl, { timeout: 10000 });
+        let res;
+        try {
+          res = await axios.get(enaUrl, {
+            timeout: 15000,
+            proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 }
+          });
+        } catch (proxyErr) {
+          console.warn(`Failed to fetch EBI via proxy: ${proxyErr.message}, falling back to direct connection`);
+          res = await axios.get(enaUrl, { timeout: 10000 });
+        }
         if (res.data && res.data[0] && res.data[0].fastq_ftp) {
           const urls = res.data[0].fastq_ftp.split(';');
           for (let u of urls) {
@@ -398,11 +407,17 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
         const stub = acc.replace(numPart, stubNum);
         const geoUrl = `https://ftp.ncbi.nlm.nih.gov/geo/series/${stub}/${acc}/suppl/`;
 
-        // 请求页面并解析链接
-        const res = await axios.get(geoUrl, {
-          timeout: 15000,
-          proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 }
-        });
+        // 请求页面并解析链接 (优先走加速代理，失败则回退直连)
+        let res;
+        try {
+          res = await axios.get(geoUrl, {
+            timeout: 15000,
+            proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 }
+          });
+        } catch (proxyErr) {
+          console.warn(`Failed to fetch GEO page via proxy: ${proxyErr.message}, falling back to direct connection`);
+          res = await axios.get(geoUrl, { timeout: 12000 });
+        }
         const $ = cheerio.load(res.data);
         const links = $('a');
         let found = false;
