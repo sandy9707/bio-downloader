@@ -151,8 +151,10 @@ function ensureBinaries() {
   } else if (platform === 'win32') {
     filesToCopy.push(
       { src: path.join(BIN_DIR, 'win32', 'axel.exe'), dest: 'axel.exe' },
-      { src: path.join(BIN_DIR, 'win32', 'cygwin1.dll'), dest: 'cygwin1.dll' },
-      { src: path.join(BIN_DIR, 'win32', 'mihomo_windows_x86_64.exe'), dest: 'mihomo_windows_x86_64.exe' }
+      { src: path.join(BIN_DIR, 'win32', 'mihomo_windows_x86_64.exe'), dest: 'mihomo_windows_x86_64.exe' },
+      { src: path.join(BIN_DIR, 'win32', 'msys-2.0.dll'), dest: 'msys-2.0.dll' },
+      { src: path.join(BIN_DIR, 'win32', 'msys-crypto-3.dll'), dest: 'msys-crypto-3.dll' },
+      { src: path.join(BIN_DIR, 'win32', 'msys-ssl-3.dll'), dest: 'msys-ssl-3.dll' }
     );
   }
 
