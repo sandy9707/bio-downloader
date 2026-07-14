@@ -9,7 +9,8 @@ const os = require('os');
 function loadEnv() {
   const envPaths = [
     path.join(__dirname, '.env'),
-    path.join(app.getAppPath(), '.env')
+    path.join(app.getAppPath(), '.env'),
+    path.join(app.getAppPath(), '../.env') // 支持在主工程目录下本地调试
   ];
   for (const envPath of envPaths) {
     if (fs.existsSync(envPath)) {
@@ -30,9 +31,38 @@ function loadEnv() {
     }
   }
 }
-loadEnv();
 
-const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL || 'http://localhost:13000';
+// 综合加载所有配置
+let BACKEND_BASE_URL = 'http://localhost:13000';
+
+function loadConfiguration() {
+  loadEnv();
+  if (process.env.BACKEND_BASE_URL) {
+    BACKEND_BASE_URL = process.env.BACKEND_BASE_URL;
+    return;
+  }
+
+  // 尝试从打包后的 config.json 中读取配置 (常用于 GHA 自动构建注入)
+  try {
+    const configPaths = [
+      path.join(__dirname, 'config.json'),
+      path.join(app.getAppPath(), 'config.json')
+    ];
+    for (const configPath of configPaths) {
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        if (config.BACKEND_BASE_URL) {
+          BACKEND_BASE_URL = config.BACKEND_BASE_URL;
+          console.log('Loaded BACKEND_BASE_URL from config.json:', BACKEND_BASE_URL);
+          return;
+        }
+      }
+    }
+  } catch (e) {
+    console.error('加载 config.json 失败:', e);
+  }
+}
+loadConfiguration();
 
 let mainWindow;
 let clashProcess = null;

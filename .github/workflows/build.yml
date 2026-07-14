@@ -33,6 +33,15 @@ jobs:
       - name: 依据 Git Tag 同步 package.json 版本号
         run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
 
+      - name: 写入构建期全局配置 (config.json)
+        run: |
+          url="${{ secrets.BACKEND_BASE_URL }}"
+          if [ -z "$url" ]; then
+            url="http://107.175.142.245:13000"
+          fi
+          echo "{\"BACKEND_BASE_URL\":\"$url\"}" > config.json
+          echo "Injecting backend URL: $url"
+
       - name: 打包 macOS DMG
         run: npm run dist
         env:
@@ -81,6 +90,17 @@ jobs:
 
       - name: 依据 Git Tag 同步 package.json 版本号
         run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
+
+      - name: 写入构建期全局配置 (config.json)
+        shell: pwsh
+        run: |
+          $url = "${{ secrets.BACKEND_BASE_URL }}"
+          if ([string]::IsNullOrEmpty($url)) {
+              $url = "http://107.175.142.245:13000"
+          }
+          $config = @{ BACKEND_BASE_URL = $url }
+          $config | ConvertTo-Json | Set-Content -Path config.json -Encoding utf8
+          Write-Host "Injecting backend URL: $url"
 
       - name: 打包 Windows EXE
         run: npm run dist -- --win
