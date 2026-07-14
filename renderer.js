@@ -322,11 +322,54 @@ function closeUpdateCard() {
   document.getElementById('updateCard').style.display = 'none';
 }
 
-function downloadUpdate(platform) {
-  if (updateInfoGlobal) {
-    const url = platform === 'win' ? updateInfoGlobal.winUrl : updateInfoGlobal.macUrl;
+let isUpdating = false;
+
+async function downloadUpdate(platform) {
+  if (isUpdating) {
+    showToast('正在下载更新中，请勿重复点击', 'warning');
+    return;
+  }
+  if (!updateInfoGlobal) return;
+
+  const url = platform === 'win' ? updateInfoGlobal.winUrl : updateInfoGlobal.macUrl;
+  const fileName = url.substring(url.lastIndexOf('/') + 1);
+  const btnId = platform === 'win' ? 'downloadWinUpdateBtn' : 'downloadMacUpdateBtn';
+  const otherBtnId = platform === 'win' ? 'downloadMacUpdateBtn' : 'downloadWinUpdateBtn';
+  
+  const btn = document.getElementById(btnId);
+  const otherBtn = document.getElementById(otherBtnId);
+  const originalText = btn.innerText;
+
+  try {
+    isUpdating = true;
+    btn.disabled = true;
+    otherBtn.disabled = true;
+    btn.innerText = '正在启动加速下载...';
+    showToast('正在通过加速通道下载软件更新，本下载完全免费（不计流量限额）...', 'info');
+
+    // 监听下载进度
+    window.api.onUpdateProgress((data) => {
+      const { percentage, speed } = data;
+      let statusText = '正在加速下载...';
+      if (percentage !== null) statusText += ` [${percentage}%]`;
+      if (speed !== null) statusText += ` (${speed})`;
+      btn.innerText = statusText;
+    });
+
+    const res = await window.api.downloadAppUpdate(url, fileName);
+    if (res && res.success) {
+      btn.innerText = '下载成功！已在文件夹中选中';
+      showToast('更新包下载完成！已在系统下载目录中选中，双击即可安装更新。', 'success');
+    }
+  } catch (err) {
+    btn.innerText = originalText;
+    showToast('加速下载更新包失败，已自动为您打开默认浏览器下载...', 'error');
+    // 发生任何异常，自动降级回退到系统浏览器下载
     window.api.openExternalUrl(url);
-    showToast('已调用默认浏览器下载，请在浏览器中查看进度', 'success');
+  } finally {
+    isUpdating = false;
+    btn.disabled = false;
+    otherBtn.disabled = false;
   }
 }
 

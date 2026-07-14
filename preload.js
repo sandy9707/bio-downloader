@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('api', {
   // 自动更新与发布页
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', { url }),
+  downloadAppUpdate: (url, fileName) => ipcRenderer.invoke('download-app-update', { url, fileName }),
 
   // 事件监听器
   onDownloadStatus: (callback) => {
@@ -44,5 +45,13 @@ contextBridge.exposeInMainWorld('api', {
   onDownloadProgress: (callback) => {
     ipcRenderer.removeAllListeners('download-progress');
     ipcRenderer.on('download-progress', (event, data) => callback(data));
+  },
+  onUpdateProgress: (callback) => {
+    ipcRenderer.removeAllListeners('update-progress');
+    ipcRenderer.on('update-progress', (event, data) => callback(data));
+  },
+  onUpdateStatus: (callback) => {
+    ipcRenderer.removeAllListeners('update-status');
+    ipcRenderer.on('update-status', (event, data) => callback(data));
   }
 });

@@ -534,7 +534,11 @@ ipcMain.handle('clash-stop', () => {
 // --- 自动更新与外部链接 ---
 ipcMain.handle('check-for-updates', async () => {
   try {
-    const res = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, { timeout: 5000 });
+    const axiosOptions = { timeout: 5000 };
+    if (clashProcess) {
+      axiosOptions.proxy = { protocol: 'http', host: '127.0.0.1', port: 43289 };
+    }
+    const res = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, axiosOptions);
     const currentVersion = app.getVersion();
     const latestVersion = res.data.version;
     
@@ -568,6 +572,67 @@ ipcMain.handle('open-external-url', async (event, { url }) => {
     console.error('Failed to open external url:', err.message);
     return { success: false, message: err.message };
   }
+});
+
+ipcMain.handle('download-app-update', async (event, { url, fileName }) => {
+  const downloadsDir = app.getPath('downloads');
+  const savePath = path.join(downloadsDir, fileName);
+
+  // 清除旧文件或残余断点信息
+  if (fs.existsSync(savePath)) {
+    try { fs.unlinkSync(savePath); } catch(e) {}
+  }
+  if (fs.existsSync(savePath + '.st')) {
+    try { fs.unlinkSync(savePath + '.st'); } catch(e) {}
+  }
+
+  // 区分平台二进制路径
+  let axelBin = path.join(BIN_DIR, 'darwin', 'axel');
+  if (process.platform === 'win32') {
+    axelBin = path.join(BIN_DIR, 'win32', 'axel.exe');
+  }
+
+  // 组装 Axel 代理环境变量 (若 Clash 启动则走代理)
+  const env = { ...process.env };
+  if (clashProcess) {
+    env.http_proxy = 'http://127.0.0.1:43289';
+    env.https_proxy = 'http://127.0.0.1:43289';
+    env.all_proxy = 'http://127.0.0.1:43289';
+  }
+
+  const args = ['-n', '16', '-k', '-o', savePath, url];
+  console.log(`Running Axel for Update: ${axelBin} ${args.join(' ')}`);
+
+  return new Promise((resolve, reject) => {
+    const updateAxel = spawn(axelBin, args, { env });
+
+    updateAxel.stdout.on('data', (data) => {
+      const output = data.toString();
+      const pctMatch = output.match(/\[\s*(\d+)%\]/);
+      const speedMatch = output.match(/\[\s*([\d\.]+\s*[KMGT]*B\/s)\]/);
+
+      let percentage = pctMatch ? parseInt(pctMatch[1]) : null;
+      let speed = speedMatch ? speedMatch[1] : null;
+
+      if (percentage !== null || speed !== null) {
+        mainWindow.webContents.send('update-progress', { percentage, speed });
+      }
+    });
+
+    updateAxel.on('error', (err) => {
+      reject(err);
+    });
+
+    updateAxel.on('close', (code) => {
+      if (code === 0) {
+        // 打开下载目录并选中该文件
+        shell.showItemInFolder(savePath);
+        resolve({ success: true, savePath });
+      } else {
+        reject(new Error(`退出状态码: ${code}`));
+      }
+    });
+  });
 });
 
 ipcMain.handle('clash-status', () => {
