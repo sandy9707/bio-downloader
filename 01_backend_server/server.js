@@ -79,10 +79,10 @@ function redisHealthCheck(req, res, next) {
 // ==========================================
 // Redis 数据库配置 (使用 db 5 保证不干扰其他服务)
 const REDIS_CONFIG = {
-  host: '127.0.0.1',
-  port: 6379,
-  password: 'redis_Kesx3B',
-  db: 5
+  host: process.env.REDIS_HOST || '127.0.0.1',
+  port: parseInt(process.env.REDIS_PORT || '6379', 10),
+  password: process.env.REDIS_PASSWORD || 'redis_Kesx3B',
+  db: parseInt(process.env.REDIS_DB || '5', 10)
 };
 
 // 键名前缀，确保完全隔离
@@ -91,20 +91,23 @@ function getRedisKey(key) {
   return KEY_PREFIX + key;
 }
 
+// 根服务 URL 配置
+const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL || 'http://107.175.142.245:13000';
+
 // 易支付 (Epay) 配置
 const EPAY_CONFIG = {
-  apiUrl: 'https://zpayz.cn',
-  pid: '2026070118081518',
-  key: 'G3VCP7yRRKPlvDf3LLx5GGEf2oh64OU8',
-  notifyUrl: 'http://107.175.142.245:13000/api/pay/notify',
-  returnUrl: 'http://107.175.142.245:13000/pay-success' // 页面由客户端捕获或显示
+  apiUrl: process.env.EPAY_API_URL || 'https://zpayz.cn',
+  pid: process.env.EPAY_PID || '2026070118081518',
+  key: process.env.EPAY_KEY || 'G3VCP7yRRKPlvDf3LLx5GGEf2oh64OU8',
+  notifyUrl: `${BACKEND_BASE_URL}/api/pay/notify`,
+  returnUrl: `${BACKEND_BASE_URL}/pay-success` // 页面由客户端捕获或显示
 };
 
 // 开启模拟支付模式 (方便开发调试)
 const ENABLE_MOCK_PAYMENT = false;
 
 // 开发者持有的高速度 Clash 订阅链接
-const DEVELOPER_SUBSCRIBE_URL = 'https://subbind.yeyeziblog.eu.org/speedup?token=MyqjIpxrzA8WCUCM';
+const DEVELOPER_SUBSCRIBE_URL = process.env.DEVELOPER_SUBSCRIBE_URL || 'https://subbind.yeyeziblog.eu.org/speedup?token=MyqjIpxrzA8WCUCM';
 
 // 价格与流量套餐配置
 // 流量单位: 字节 (Bytes). 100G = 100 * 1024 * 1024 * 1024 = 107374182400
@@ -114,7 +117,7 @@ const PRICING_PACKAGES = [
 ];
 
 // 管理员密钥 (仅供后台使用)
-const ADMIN_SECRET = 'biodl_admin_2026';
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'biodl_admin_2026';
 
 // Resend 邮件服务与验证码配置
 const MAIL_FROM = process.env.MAIL_FROM || 'BioDownloader <no-reply@auth.yeyeziblog.eu.org>';
@@ -777,6 +780,16 @@ app.post('/api/auth/password-reset/confirm', authLimiter, redisHealthCheck, asyn
 // 【支付模块】
 // ==========================================
 
+// 获取最新客户端版本与更新配置
+app.get('/api/client/version', (req, res) => {
+  res.json({
+    version: '1.2.3',
+    winUrl: '/downloads/BioDownloader-1.2.3.exe',
+    macUrl: '/downloads/BioDownloader-1.2.3-arm64.dmg',
+    releaseNotes: '1. 修复 Windows 端子进程启动 ENOENT 报错；\n2. 优化 Clash 与 Axel 二进制文件存放至 AppData\\Roaming 用户高权限目录；\n3. 增加子进程生命周期启动报错安全守护。'
+  });
+});
+
 // 获取套餐价格列表
 app.get('/api/pay/packages', (req, res) => {
   res.json({ success: true, packages: PRICING_PACKAGES });
@@ -822,7 +835,7 @@ app.post('/api/pay/create', async (req, res) => {
     if (ENABLE_MOCK_PAYMENT) {
       return res.json({
         success: true,
-        checkoutUrl: `http://107.175.142.245:13000/mock-pay.html?orderId=${orderId}`
+        checkoutUrl: `${BACKEND_BASE_URL}/mock-pay.html?orderId=${orderId}`
       });
     }
 
@@ -1609,6 +1622,17 @@ app.get('/', (req, res) => {
       to { opacity: 1; transform: translateY(0); }
     }
   </style>
+</head>
+<body>
+
+  <!-- 页面头部 -->
+  <header style="text-align: center; margin-bottom: 3rem; margin-top: 3rem; animation: fadeInDown 0.8s ease-out;">
+    <div class="logo-container" style="display: inline-flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+      <img src="/downloads/logo.png" alt="Logo" style="height: 52px; width: 52px; border-radius: 12px; box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);">
+      <span class="logo-text" style="font-size: 2.2rem; font-weight: 800; letter-spacing: -0.05em; background: linear-gradient(135deg, #a5b4fc, #22d3ee); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">BioDownloader</span>
+    </div>
+    <h1 style="font-size: 1.5rem; font-weight: 600; color: var(--text-muted); margin-top: 0.25rem;">生信数据多线程加速下载器</h1>
+  </header>
 
   <!-- 下载面板 -->
   <div class="glass-card">
@@ -1658,7 +1682,7 @@ app.get('/', (req, res) => {
             <div class="file-desc">标准 DMG 磁盘映像。支持 Apple Silicon (M1-M4) 及 Intel 芯片。</div>
           </div>
           <div class="card-actions">
-            <a href="/downloads/BioDownloader-1.2.2-arm64.dmg" class="download-btn primary">下载 Mac 安装包 (.dmg)</a>
+            <a href="/downloads/BioDownloader-1.2.3-arm64.dmg" class="download-btn primary">下载 Mac 安装包 (.dmg)</a>
           </div>
         </div>
         <!-- Win -->
@@ -1667,10 +1691,10 @@ app.get('/', (req, res) => {
           <div>
             <div class="os-badge">🪟</div>
             <div class="os-name">Windows 客户端</div>
-            <div class="file-desc">单文件绿色免安装版。支持 64位 Windows 10/11 系统，即开即用。</div>
+            <div class="file-desc">单文件绿色免安装版。支持 64位 Windows 10/11 系统，即开即用.</div>
           </div>
           <div class="card-actions">
-            <a href="/downloads/BioDownloader-1.2.2.exe" class="download-btn accent">下载 Windows 绿色版 (.exe)</a>
+            <a href="/downloads/BioDownloader-1.2.3.exe" class="download-btn accent">下载 Windows 绿色版 (.exe)</a>
           </div>
         </div>
       </div>

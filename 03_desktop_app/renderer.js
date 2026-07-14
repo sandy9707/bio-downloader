@@ -253,6 +253,50 @@ async function chooseDefaultDir() {
 }
 
 // ==========================================
+// 【软件自动更新与版本控制】
+// ==========================================
+let updateInfoGlobal = null;
+
+async function triggerCheckForUpdates() {
+  showToast('正在检查服务器最新版本...', 'info');
+  try {
+    const res = await window.api.checkForUpdates();
+    if (res.success) {
+      if (res.hasUpdate) {
+        updateInfoGlobal = res;
+        document.getElementById('updateLatestVersion').innerText = res.latestVersion;
+        document.getElementById('updateReleaseNotes').innerText = res.releaseNotes;
+        document.getElementById('updateCard').style.display = 'block';
+        showToast('检测到新版本，请及时更新', 'success');
+      } else {
+        showToast(`当前已是最新版本 (v${res.currentVersion})`, 'success');
+      }
+    } else {
+      showToast('无法连接到版本更新服务器: ' + (res.message || '未知错误'), 'error');
+    }
+  } catch (err) {
+    showToast('检查更新时出错: ' + err.message, 'error');
+  }
+}
+
+function closeUpdateCard() {
+  document.getElementById('updateCard').style.display = 'none';
+}
+
+function downloadUpdate(platform) {
+  if (updateInfoGlobal) {
+    const url = platform === 'win' ? updateInfoGlobal.winUrl : updateInfoGlobal.macUrl;
+    window.api.openExternalUrl(url);
+    showToast('已调用默认浏览器下载，请在浏览器中查看进度', 'success');
+  }
+}
+
+async function openReleasePage() {
+  const backendUrl = await window.api.getBackendUrl();
+  window.api.openExternalUrl(backendUrl);
+}
+
+// ==========================================
 // 【文件大小校验与渲染】
 // ==========================================
 async function checkSizes() {

@@ -6,22 +6,19 @@
 
 ## 部署信息
 
-* **部署服务器**：`tenney@107.175.142.245`
+* **部署服务器**：配置于 `.env` 文件的 `DEPLOY_SERVER` 变量
 * **工作目录**：`/home/tenney/app/bio-downloader-server`
 * **绑定端口**：`13000`
 * **PM2 进程名**：`bio-downloader-server`
 
 ---
 
-## 技术方案与重点设计
+## 核心设计原理
 
-### 1. Redis 数据物理与逻辑安全隔离
-为了绝对不干扰服务器上运行的其他服务（其他服务使用默认的 Redis DB 0，端口 6379）：
-* **逻辑数据库隔离**：指定使用 Redis **Database 5 (`db: 5`)**。
-* **Key 前缀隔离**：所有 Key 统一添加 `biodl:` 前缀。
-  * 用户信息 Key 形式: `biodl:user:用户名`
-  * Token 状态 Key 形式: `biodl:token:Token字符串`
-  * 订单状态 Key 形式: `biodl:order:订单号`
+### 1. 并发 Axel 引擎与代理控制
+* 每次启动下载时，前端请求 `/api/user/info` 核对 Token 状态与可用流量。
+* 状态有效时，客户端自动在本地 43289 端口启动 Clash 子进程，代理转发规则分流：生信数据库连接（EBI/NCBI）走代理高速出海；其他连接直连，不消耗服务器流量。
+* 调用本地 `axel` 引擎启动最高 16 线程的并发块下载。
 
 ### 2. 流量限额与到期机制
 * 注册赠送：默认赠送 `200MB` 的免费测试额度，有效期 `2` 天。
@@ -29,7 +26,7 @@
 * 客户端完成每次 Axel 下载任务后，计算下载文件的实际字节大小，并向 `/api/user/consume` 上报以从额度中扣除。
 
 ### 3. Clash 订阅反代安全拦截
-* 用户请求 `http://107.175.142.245:13000/speedup?token=USER_TOKEN` 来拉取 Clash 配置。
+* 用户请求 `http://<your_server_ip>:13000/speedup?token=USER_TOKEN` 来拉取 Clash 配置。
 * 接口首先验证 `USER_TOKEN` 存在、未过期且有剩余额度。
 * 校验通过后，服务器向底层的开发者高带宽 Clash 订阅拉取配置并返给客户端；校验不通过直接拦截并返回 `403 Forbidden`。**这完美隐藏了开发者本身的 Clash 订阅链接（内含高速节点账号密码）**。
 

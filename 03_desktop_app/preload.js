@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('api', {
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  getBackendUrl: () => ipcRenderer.invoke('get-backend-url'),
 
   // 用户与认证
   register: (username, password, email) => ipcRenderer.invoke('api-register', { username, password, email }),
@@ -30,6 +31,10 @@ contextBridge.exposeInMainWorld('api', {
   checkSize: (type, inputVal) => ipcRenderer.invoke('check-download-size', { type, inputVal }),
   startDownload: (files, targetDir, token) => ipcRenderer.invoke('start-download', { files, targetDir, token }),
   cancelDownload: () => ipcRenderer.invoke('cancel-download'),
+
+  // 自动更新与发布页
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', { url }),
 
   // 事件监听器
   onDownloadStatus: (callback) => {

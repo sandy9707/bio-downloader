@@ -1,12 +1,38 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const os = require('os');
+// 加载 .env 配置文件 (兼容开发与打包环境)
+function loadEnv() {
+  const envPaths = [
+    path.join(__dirname, '.env'),
+    path.join(app.getAppPath(), '.env')
+  ];
+  for (const envPath of envPaths) {
+    if (fs.existsSync(envPath)) {
+      const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+      for (const line of lines) {
+        const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)\s*$/);
+        if (match) {
+          const key = match[1];
+          let val = match[2].trim();
+          if (val.startsWith('"') && val.endsWith('"')) {
+            val = val.substring(1, val.length - 1);
+          } else if (val.startsWith("'") && val.endsWith("'")) {
+            val = val.substring(1, val.length - 1);
+          }
+          process.env[key] = val;
+        }
+      }
+    }
+  }
+}
+loadEnv();
 
-const BACKEND_BASE_URL = 'http://107.175.142.245:13000';
+const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL || 'http://107.175.142.245:13000';
 
 let mainWindow;
 let clashProcess = null;
@@ -381,6 +407,7 @@ async function headRequestSize(url) {
 // --- 系统设置 ---
 ipcMain.handle('get-settings', () => getSettings());
 ipcMain.handle('save-settings', (event, data) => saveSettings(data));
+ipcMain.handle('get-backend-url', () => BACKEND_BASE_URL);
 
 ipcMain.handle('select-directory', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -449,6 +476,45 @@ ipcMain.handle('clash-start', async (event, { token }) => {
 ipcMain.handle('clash-stop', () => {
   stopClash();
   return true;
+});
+
+// --- 自动更新与外部链接 ---
+ipcMain.handle('check-for-updates', async () => {
+  try {
+    const res = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, { timeout: 5000 });
+    const currentVersion = app.getVersion();
+    const latestVersion = res.data.version;
+    
+    // 简易版本对比：比较版本字符串
+    const hasUpdate = latestVersion !== currentVersion;
+    
+    return {
+      success: true,
+      currentVersion,
+      latestVersion,
+      hasUpdate,
+      winUrl: `${BACKEND_BASE_URL}${res.data.winUrl}`,
+      macUrl: `${BACKEND_BASE_URL}${res.data.macUrl}`,
+      releaseNotes: res.data.releaseNotes
+    };
+  } catch (err) {
+    console.error('Check for updates failed:', err.message);
+    return {
+      success: false,
+      message: err.message,
+      currentVersion: app.getVersion()
+    };
+  }
+});
+
+ipcMain.handle('open-external-url', async (event, { url }) => {
+  try {
+    await shell.openExternal(url);
+    return { success: true };
+  } catch (err) {
+    console.error('Failed to open external url:', err.message);
+    return { success: false, message: err.message };
+  }
 });
 
 ipcMain.handle('clash-status', () => {
