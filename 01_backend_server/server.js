@@ -783,10 +783,10 @@ app.post('/api/auth/password-reset/confirm', authLimiter, redisHealthCheck, asyn
 // 获取最新客户端版本与更新配置
 app.get('/api/client/version', (req, res) => {
   res.json({
-    version: '1.2.3',
-    winUrl: '/downloads/BioDownloader-1.2.3.exe',
-    macUrl: '/downloads/BioDownloader-1.2.3-arm64.dmg',
-    releaseNotes: '1. 修复 Windows 端子进程启动 ENOENT 报错；\n2. 优化 Clash 与 Axel 二进制文件存放至 AppData\\Roaming 用户高权限目录；\n3. 增加子进程生命周期启动报错安全守护。'
+    version: '1.2.4',
+    winUrl: '/downloads/BioDownloader-1.2.4.exe',
+    macUrl: '/downloads/BioDownloader-1.2.4-arm64.dmg',
+    releaseNotes: '1. 引入全新官方品牌 Logo 图标，美化左侧边栏与网页头部布局；\n2. 彻底移除代码及部署脚本中的硬编码敏感凭证与 IP，全面切换为环境变量配置保护；\n3. 优化 Windows 客户端 Clash/Axel 子进程启动机制与异常捕获。'
   });
 });
 
@@ -1682,7 +1682,7 @@ app.get('/', (req, res) => {
             <div class="file-desc">标准 DMG 磁盘映像。支持 Apple Silicon (M1-M4) 及 Intel 芯片。</div>
           </div>
           <div class="card-actions">
-            <a href="/downloads/BioDownloader-1.2.3-arm64.dmg" class="download-btn primary">下载 Mac 安装包 (.dmg)</a>
+            <a href="/downloads/BioDownloader-1.2.4-arm64.dmg" class="download-btn primary">下载 Mac 安装包 (.dmg)</a>
           </div>
         </div>
         <!-- Win -->
@@ -1694,7 +1694,7 @@ app.get('/', (req, res) => {
             <div class="file-desc">单文件绿色免安装版。支持 64位 Windows 10/11 系统，即开即用.</div>
           </div>
           <div class="card-actions">
-            <a href="/downloads/BioDownloader-1.2.3.exe" class="download-btn accent">下载 Windows 绿色版 (.exe)</a>
+            <a href="/downloads/BioDownloader-1.2.4.exe" class="download-btn accent">下载 Windows 绿色版 (.exe)</a>
           </div>
         </div>
       </div>
