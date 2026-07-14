@@ -37,7 +37,7 @@
 
 ### 1. 后端部署
 后端已自动发布并上线至生产服务器：
-* **VPS 地址**：`tenney@107.175.142.245`
+* **VPS 地址**：根据 `.env` 中的 `DEPLOY_SERVER` 变量配置
 * **绑定端口**：`13000` (PM2 进程名为 `bio-downloader-server`)
 * **Redis 安全策略**：直接连用本地 Redis 容器，指定隔离的 `db: 5` 和 `biodl:` 前缀，确保不污染其他生产服务。
 * **部署脚本**：
@@ -58,7 +58,7 @@ npm start
 
 ### 1. 公网网页下载 (推荐)
 为了解决私有仓库无法公开访问的问题，我们在生产服务器上部署了轻量级的发布引导与安装包托管网站：
-* 📥 **[BioDownloader 官方下载页面](http://107.175.142.245:13000/)**
+* 📥 **[BioDownloader 官方下载页面](http://<your_server_ip>:13000/)**
   * **Windows 客户端**：提供免安装绿色版 (`.exe` 单文件)，下载后直接双击即可运行。
   * **macOS 客户端**：提供标准 APFS 磁盘映像安装包 (`.dmg`)，双击拖动安装。
 
@@ -86,6 +86,6 @@ npm run dist
 - **2x2 统一卡片矩阵**：使用 CSS Grid 将云端镜像与本地安装包统一为四个同等比例的玻璃拟态卡片，在不同设备屏幕下自动响应式对齐。
 - **浏览器 clipboard 降级兼容 (HTTP 非安全上下文)**：
   - 现代浏览器（如 Chrome, Safari）的安全策略规定，在非 HTTPS 连接下 `navigator.clipboard` 接口为 `undefined`。
-  - 下载页面（`server.js`）的复制提取码机制通过 JS 智能识别当前上下文安全状态。若无法使用新版 API，将自动降级为使用 `document.execCommand('copy')` 并创建隐藏 `textarea` 的旧版 API，确保用户在 `http://107.175.142.245:13000` 非安全直连环境下的复制动作 100% 成功。
+  - 下载页面（`server.js`）的复制提取码机制通过 JS 智能识别当前上下文安全状态。若无法使用新版 API，将自动降级为使用 `document.execCommand('copy')` 并创建隐藏 `textarea` 的旧版 API，确保用户在 `http://<your_server_ip>:13000` 非安全直连环境下的复制动作 100% 成功。
 - **可滑动文本与点击聚焦**：提取码文本采用常规 Selectable `<span>` 显示（`user-select: text`），用户可随意滑动选取；同时点击提取码会触发 JS `window.getSelection()` 自动高亮选取，方便不同习惯的用户快速手动复制。
 - **全局通知 Toast**：点击复制后，屏幕右下角会弹出带弹性动画的绿色玻璃拟态 Toast 提示框，停留 2.5 秒后自动滑出，提供优秀的用户反馈体验。
