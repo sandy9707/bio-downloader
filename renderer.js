@@ -7,6 +7,40 @@ let currentUser = null;
 let currentQueue = [];
 let defaultDir = '';
 let currentOrderId = null;
+let isDownloading = false;
+
+// 存储下载中心不同 Tab 的独立状态，防止切换时状态丢失与互相覆盖
+const tabStates = {
+  sra_raw: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
+  ebi_raw: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
+  geo_suppl: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
+  links: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' }
+};
+
+function saveCurrentTabState() {
+  if (!currentDownloadType || !tabStates[currentDownloadType]) return;
+  tabStates[currentDownloadType] = {
+    queue: [...currentQueue],
+    checkSizeBtnDisabled: document.getElementById('checkSizeBtn').disabled,
+    downloadBtnDisabled: document.getElementById('downloadBtn').disabled,
+    downloadBtnDisplay: document.getElementById('downloadBtn').style.display,
+    cancelBtnDisplay: document.getElementById('cancelBtn').style.display,
+    totalQueueSize: document.getElementById('totalQueueSize').innerText,
+    queueHTML: document.getElementById('queueList').innerHTML
+  };
+}
+
+function restoreTabState(type) {
+  const state = tabStates[type];
+  if (!state) return;
+  currentQueue = [...state.queue];
+  document.getElementById('checkSizeBtn').disabled = state.checkSizeBtnDisabled;
+  document.getElementById('downloadBtn').disabled = state.downloadBtnDisabled;
+  document.getElementById('downloadBtn').style.display = state.downloadBtnDisplay || 'block';
+  document.getElementById('cancelBtn').style.display = state.cancelBtnDisplay || 'none';
+  document.getElementById('totalQueueSize').innerText = state.totalQueueSize || '共 0 字节';
+  document.getElementById('queueList').innerHTML = state.queueHTML || '';
+}
 
 // ==========================================
 // 【辅助与初始化函数】
@@ -203,25 +237,30 @@ function switchTab(tabId) {
 }
 
 function switchDownloadType(btn, type) {
-  // 切换按钮激活样式
+  if (isDownloading) {
+    showToast('下载正在进行中，请先取消当前下载或等待其完成再切换', 'warning');
+    return;
+  }
+
+  // 1. 保存当前 Tab 状态
+  saveCurrentTabState();
+
+  // 2. 切换按钮激活样式
   const buttons = btn.parentElement.querySelectorAll('.pill-btn');
   buttons.forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
 
   currentDownloadType = type;
 
-  // 切换输入框的可见性
+  // 3. 切换输入框的可见性
   const types = ['sra_raw', 'ebi_raw', 'geo_suppl', 'links'];
   types.forEach(t => {
     const el = document.getElementById('group-' + t);
     if (el) el.style.display = t === type ? 'flex' : 'none';
   });
   
-  // 改变类型时清空上一轮的校验状态与下载按钮
-  currentQueue = [];
-  document.getElementById('downloadBtn').disabled = true;
-  document.getElementById('totalQueueSize').innerText = '共 0 字节';
-  document.getElementById('queueList').innerHTML = '';
+  // 4. 恢复目标 Tab 状态
+  restoreTabState(type);
 }
 
 // 选择下载文件夹 (下载中心页)
@@ -437,6 +476,7 @@ async function startDownload() {
   }
 
   // 锁定控制按钮状态
+  isDownloading = true;
   document.getElementById('checkSizeBtn').disabled = true;
   document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('cancelBtn').style.display = 'block';
@@ -488,6 +528,7 @@ async function startDownload() {
   } catch (e) {
     showToast(e.message, 'error');
   } finally {
+    isDownloading = false;
     // 恢复按钮状态
     document.getElementById('checkSizeBtn').disabled = false;
     document.getElementById('downloadBtn').style.display = 'block';

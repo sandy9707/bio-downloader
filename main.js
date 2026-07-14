@@ -68,6 +68,24 @@ let mainWindow;
 let clashProcess = null;
 let currentAxelProcess = null;
 
+function killProcess(proc) {
+  if (!proc) return;
+  try {
+    if (process.platform === 'win32') {
+      exec(`taskkill /pid ${proc.pid} /T /F`, (err) => {
+        if (err) {
+          console.warn(`taskkill failed for pid ${proc.pid}, falling back to kill():`, err.message);
+          proc.kill('SIGKILL');
+        }
+      });
+    } else {
+      proc.kill('SIGKILL');
+    }
+  } catch (e) {
+    console.error(`Error killing process:`, e);
+  }
+}
+
 function ensureExecutable(filePath) {
   try {
     fs.accessSync(filePath, fs.constants.X_OK);
@@ -262,7 +280,7 @@ app.on('window-all-closed', () => {
   stopClash();
   if (currentAxelProcess) {
     console.log('Terminating Axel process...');
-    currentAxelProcess.kill('SIGKILL');
+    killProcess(currentAxelProcess);
     currentAxelProcess = null;
   }
   if (process.platform !== 'darwin') {
@@ -274,7 +292,7 @@ app.on('will-quit', () => {
   stopClash();
   if (currentAxelProcess) {
     console.log('Terminating Axel process...');
-    currentAxelProcess.kill('SIGKILL');
+    killProcess(currentAxelProcess);
     currentAxelProcess = null;
   }
 });
@@ -401,7 +419,7 @@ async function startClash(token) {
 function stopClash() {
   if (clashProcess) {
     console.log('Terminating Clash process...');
-    clashProcess.kill('SIGKILL');
+    killProcess(clashProcess);
     clashProcess = null;
   }
 }
@@ -773,7 +791,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
         }
       }
 
-      const args = ['-n', threads.toString(), '-o', savePath, file.url];
+      const args = ['-n', threads.toString(), '-k', '-o', savePath, file.url];
       console.log(`Running Axel (Attempt ${attempt}): ${axelBin} ${args.join(' ')}`);
 
       try {
@@ -863,7 +881,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
 
 ipcMain.handle('cancel-download', () => {
   if (currentAxelProcess) {
-    currentAxelProcess.kill('SIGKILL');
+    killProcess(currentAxelProcess);
     currentAxelProcess = null;
     return true;
   }
