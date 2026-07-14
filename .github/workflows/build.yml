@@ -1,0 +1,156 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'          # 推送 v1.0.0 这样的 tag 时触发
+  workflow_dispatch:  # 也支持手动触发
+
+jobs:
+  # ============================================================
+  # Job 1: 构建 macOS DMG (arm64 Apple Silicon)
+  # ============================================================
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装依赖
+        run: npm install
+
+      - name: 给二进制文件添加执行权限
+        run: |
+          chmod +x bin/darwin/mihomo_aarch64
+          chmod +x bin/darwin/mihomo_x86_64
+          chmod +x bin/darwin/axel
+
+      - name: 依据 Git Tag 同步 package.json 版本号
+        run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
+
+      - name: 打包 macOS DMG
+        run: npm run dist
+        env:
+          # 跳过代码签名（无开发者证书时）
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: 上传 Mac 构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-dist
+          path: dist/*.dmg
+
+  # ============================================================
+  # Job 2: 构建 Windows EXE (x64)
+  # ============================================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 下载 axel.exe + cygwin1.dll (from nishad/axel-for-windows)
+        shell: pwsh
+        run: |
+          $dest = "bin\win32"
+          New-Item -ItemType Directory -Force -Path $dest
+
+          $baseUrl = "https://raw.githubusercontent.com/nishad/axel-for-windows/master"
+
+          Write-Host "下载 axel.exe..."
+          Invoke-WebRequest -Uri "$baseUrl/axel.exe" -OutFile "$dest\axel.exe"
+
+          Write-Host "下载 cygwin1.dll..."
+          Invoke-WebRequest -Uri "$baseUrl/cygwin1.dll" -OutFile "$dest\cygwin1.dll"
+
+          Write-Host "完成，bin/win32 目录内容："
+          Get-ChildItem "$dest"
+
+      - name: 安装 npm 依赖
+        run: npm install
+
+      - name: 依据 Git Tag 同步 package.json 版本号
+        run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
+
+      - name: 打包 Windows EXE
+        run: npm run dist -- --win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: 上传 EXE 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: dist/*.exe
+
+  # ============================================================
+  # Job 3: 发布到 GitHub Releases (仅推 tag 时执行)
+  # ============================================================
+  release:
+    needs: [build-mac, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: 下载 Mac 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-dist
+          path: ./release-files
+
+      - name: 下载 Windows EXE
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-exe
+          path: ./release-files
+
+      - name: 查看产物
+        run: ls -lh ./release-files/
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "生信原始数据下载器 ${{ github.ref_name }}"
+          body: |
+            ## 下载说明
+
+            | 平台 | 文件 | 说明 |
+            |------|------|------|
+            | 🍎 macOS (M1/M2/M3/M4/Intel) | `BioDownloader-*-arm64.dmg` | DMG 安装包 (双击打开后拖动到应用程序文件夹) |
+            | 🪟 Windows 64位 | `BioDownloader*.exe` | 绿色免安装版 (单文件免安装，双击直接运行) |
+
+            ## 安装与运行步骤
+            - **Windows**: 下载 `BioDownloader*.exe` → 双击直接启动运行。
+            - **macOS**: 下载 DMG → 双击打开 → 将 `BioDownloader.app` 拖入 Applications (应用程序) 文件夹。
+
+            ---
+
+            ## 🍎 Mac 提示"已损坏，打不开"解决办法
+            由于本软件未向 Apple 购买官方昂贵的开发者证书，在 macOS 下首次打开会提示"已损坏，打不开"或"来自未识别的开发者"。
+            这是苹果官方的安全阻拦，请使用以下简单命令解锁：
+
+            1. 打开系统自带的 **终端 (Terminal)**
+            2. 输入以下命令并回车（需要输入您的 Mac 开机密码）：
+               ```bash
+               sudo xattr -cr /Applications/BioDownloader.app
+               ```
+
+            ---
+
+            ## 首次使用指引
+            1. 启动软件，进入「我的」页面注册并登录您的账户。
+            2. 在「下载中心」选择数据类型（SRA/EBI/GEO/直链），输入对应编号或链接，点击"检验下载大小"后即可享受 16 线程加速下载。
+          files: ./release-files/*
+          draft: false
+          prerelease: false

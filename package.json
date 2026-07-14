@@ -1,0 +1,51 @@
+{
+  "name": "bio-downloader",
+  "version": "1.2.2",
+  "description": "Commercial Biology Raw Data Downloader Desktop Client",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sandy9707/bio-downloader.git"
+  },
+  "dependencies": {
+    "axios": "^1.6.8",
+    "cheerio": "^1.0.0-rc.12"
+  },
+  "devDependencies": {
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.biodl.downloader",
+    "productName": "BioDownloader",
+    "directories": {
+      "output": "dist"
+    },
+    "publish": null,
+    "extraResources": [
+      {
+        "from": "bin/",
+        "to": "bin/",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.utilities"
+    },
+    "win": {
+      "target": [
+        "portable"
+      ]
+    }
+  }
+}
