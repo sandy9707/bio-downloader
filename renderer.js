@@ -51,9 +51,9 @@ window.addEventListener('DOMContentLoaded', async () => {
       logoEl.innerHTML = `BioDownloader Pro <span style="font-size: 0.7rem; vertical-align: middle; opacity: 0.75; font-weight: normal; margin-left: 0.25rem;">v${version}</span>`;
     }
     const versionEl = document.getElementById('settingsAppVersion');
-    if (versionEl) {
-      versionEl.innerText = 'v' + version;
-    }
+    if (versionEl) versionEl.innerText = 'v' + version;
+    const sidebarVerEl = document.getElementById('sidebarVersion');
+    if (sidebarVerEl) sidebarVerEl.innerText = 'v' + version;
   } catch (e) {
     console.error('获取版本号失败:', e);
   }

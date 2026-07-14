@@ -37,12 +37,14 @@
       }
     ],
     "mac": {
+      "icon": "icons/icon.icns",
       "target": [
         "dmg"
       ],
       "category": "public.app-category.utilities"
     },
     "win": {
+      "icon": "icons/icon.ico",
       "target": [
         "portable"
       ]

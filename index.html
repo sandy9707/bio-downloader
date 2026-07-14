@@ -634,14 +634,18 @@
 
   <!-- 左侧边栏 -->
   <div class="sidebar">
-    <div class="brand" style="display: flex; align-items: center; gap: 0.5rem; justify-content: center; margin-bottom: 2rem;">
-      <img src="logo.png" alt="Logo" style="height: 28px; width: 28px; border-radius: 6px; box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);">
-      <span style="font-size: 1.25rem; font-weight: 800; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 0.5px;">BioDownloader</span>
+    <div class="brand" style="display: flex; flex-direction: column; align-items: center; gap: 0.25rem; justify-content: center; margin-bottom: 2rem;">
+      <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <img src="logo.png" alt="Logo" style="height: 28px; width: 28px; border-radius: 6px; box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);">
+        <span style="font-size: 1.25rem; font-weight: 800; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 0.5px;">BioDownloader</span>
+      </div>
+      <span id="sidebarVersion" style="font-size: 0.7rem; color: var(--text-muted); letter-spacing: 0.5px;">v-.-.-</span>
     </div>
     <div class="nav-menu">
       <div class="nav-item active" onclick="switchTab('download-hub')">下载中心</div>
       <div class="nav-item" onclick="switchTab('store-tab')">流量商店</div>
       <div class="nav-item" onclick="switchTab('profile-tab')">我的</div>
+      <div class="nav-item" onclick="switchTab('settings-tab')">设置</div>
     </div>
 
     <!-- 夜间模式切换按钮 -->
@@ -820,16 +824,22 @@
           <button class="btn btn-danger" style="margin-top:1rem;" onclick="handleLogout()">注销退出</button>
         </div>
 
-        <!-- 右侧：全局设置卡片 -->
-        <div class="card">
-          <h3 style="color:#6366f1; margin-bottom:1.5rem;">⚙️ 全局设置</h3>
-          <div style="font-size:0.85rem; color:var(--text-muted); margin-top:-1.25rem; margin-bottom:1.5rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
-            <div>当前客户端版本：<span id="settingsAppVersion">-</span></div>
-            <button class="btn btn-secondary" style="font-size: 0.8rem; padding: 0.25rem 0.75rem;" onclick="triggerCheckForUpdates()">检查更新</button>
-          </div>
+      </div>
+    </div>
 
-          <!-- 自动更新弹窗 / 卡片展示 -->
-          <div id="updateCard" class="form-group" style="display:none; margin-top:-0.5rem; margin-bottom:1.5rem; padding:1rem; background:rgba(99, 102, 241, 0.05); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 8px;">
+    <!-- VIEW: 设置 -->
+    <div class="tab-view" id="settings-tab">
+      <div class="card" style="max-width: 800px; margin: 0 auto; width: 100%;">
+        <h3 style="color:#6366f1; margin-bottom:1.5rem;">⚙️ 全局设置</h3>
+
+        <!-- 版本检测 -->
+        <div class="form-group">
+          <label style="font-weight:600;">🔔 软件更新</label>
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-top:0.5rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color);">
+            <div style="font-size:0.9rem; color:var(--text-muted);">当前版本：<span id="settingsAppVersion" style="color:var(--text-primary); font-weight:600;">-</span></div>
+            <button class="btn btn-secondary" style="font-size: 0.85rem; padding: 0.3rem 0.9rem;" onclick="triggerCheckForUpdates()">检查更新</button>
+          </div>
+          <div id="updateCard" style="display:none; margin-top:0.75rem; padding:1rem; background:rgba(99, 102, 241, 0.05); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 8px;">
             <div style="font-weight:700; color:#818cf8; font-size:0.95rem; margin-bottom:0.35rem; display:flex; justify-content:space-between; align-items:center;">
               <span>🎁 检测到新版本 v<span id="updateLatestVersion">-</span></span>
               <button onclick="closeUpdateCard()" style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:1.1rem; padding:0 0.2rem;">&times;</button>
@@ -844,35 +854,34 @@
               <button class="btn btn-secondary" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="openReleasePage()">发布页</button>
             </div>
           </div>
+        </div>
 
-          <!-- 默认下载文件夹 -->
-          <div class="form-group">
-            <label style="font-weight:600;">📁 默认下载文件夹</label>
-            <div class="dir-select-group">
-              <input type="text" id="settingsDefaultDirInput" placeholder="尚未设置，点击右侧选择..." readonly>
-              <button class="btn btn-primary" onclick="chooseDefaultDir()">选择文件夹</button>
-            </div>
-            <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.25rem;">每次启动软件时，下载路径将自动填充为此目录。</div>
+        <!-- 默认下载文件夹 -->
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">📁 默认下载文件夹</label>
+          <div class="dir-select-group" style="margin-top:0.5rem;">
+            <input type="text" id="settingsDefaultDirInput" placeholder="尚未设置，点击右侧选择..." readonly>
+            <button class="btn btn-primary" onclick="chooseDefaultDir()">选择文件夹</button>
           </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.25rem;">每次启动软件时，下载路径将自动填充为此目录。</div>
+        </div>
 
-          <!-- 下载加速器状态 -->
-          <div class="form-group" style="margin-top:1rem;">
-            <label style="font-weight:600;">🚀 下载加速器状态</label>
-            <div id="clashConfigInfo" style="font-size:0.9rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color); margin-top:0.35rem;">
-              尚未启动
-            </div>
-          </div>
-
-          <!-- 危险区 -->
-          <div class="form-group" style="margin-top:1.5rem; padding-top:1.5rem; border-top: 1px solid var(--border-color);">
-            <label style="font-weight:600; color:#ef4444;">⚠️ 危险操作</label>
-            <div style="margin-top:0.5rem;">
-              <button class="btn btn-danger" onclick="clearSettings()">重置本地所有配置 (退出登录)</button>
-            </div>
-            <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">这将清除本地缓存的登录 Token 和所有偏好设置，应用会在操作后退出。</div>
+        <!-- 下载加速器状态 -->
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">🚀 下载加速器状态</label>
+          <div id="clashConfigInfo" style="font-size:0.9rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color); margin-top:0.5rem;">
+            尚未启动
           </div>
         </div>
 
+        <!-- 危险区 -->
+        <div class="form-group" style="margin-top:2rem; padding-top:1.5rem; border-top: 1px solid var(--border-color);">
+          <label style="font-weight:600; color:#ef4444;">⚠️ 危险操作</label>
+          <div style="margin-top:0.5rem;">
+            <button class="btn btn-danger" onclick="clearSettings()">重置本地所有配置 (退出登录)</button>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">这将清除本地缓存的登录 Token 和所有偏好设置，应用会在操作后退出。</div>
+        </div>
       </div>
     </div>
 

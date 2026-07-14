@@ -187,12 +187,17 @@ function saveSettings(settings) {
 // 【窗口生命周期】
 // ==========================================
 function createWindow() {
+  const iconFile = process.platform === 'win32'
+    ? path.join(__dirname, 'icons', 'icon.ico')
+    : path.join(__dirname, 'icons', 'icon.icns');
+
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 700,
     minWidth: 800,
     minHeight: 600,
     title: '生信数据多线程加速下载器',
+    icon: iconFile,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
