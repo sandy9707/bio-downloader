@@ -92,7 +92,7 @@ function getRedisKey(key) {
 }
 
 // 根服务 URL 配置
-const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL || 'http://107.175.142.245:13000';
+const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL || 'http://localhost:13000';
 
 // 易支付 (Epay) 配置
 const EPAY_CONFIG = {

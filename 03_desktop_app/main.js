@@ -32,7 +32,7 @@ function loadEnv() {
 }
 loadEnv();
 
-const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL || 'http://107.175.142.245:13000';
+const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL || 'http://localhost:13000';
 
 let mainWindow;
 let clashProcess = null;

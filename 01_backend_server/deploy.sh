@@ -2,7 +2,7 @@
 
 # ==============================================================================
 # Deployment Script for Bio-Downloader Backend Server
-# Deploys code to tenney@107.175.142.245 and starts/restarts PM2 process.
+# Deploys code to server host configured in environment configs.
 # ==============================================================================
 
 set -eo pipefail
@@ -28,7 +28,7 @@ if [ -n "$ENV_FILE" ]; then
 fi
 
 if [ -z "$DEPLOY_SERVER" ]; then
-    echo "ERROR: DEPLOY_SERVER is not set in .env file (e.g. DEPLOY_SERVER=tenney@107.175.142.245)"
+    echo "ERROR: DEPLOY_SERVER is not set in .env file (e.g. DEPLOY_SERVER=username@your_server_ip)"
     exit 1
 fi
 
