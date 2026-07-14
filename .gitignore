@@ -30,3 +30,7 @@ test_clash.gz
 # Python 缓存
 __pycache__/
 *.pyc
+
+# 排除所有后端及第三方服务代码以防开源时泄露
+01_backend_server/
+04_password_reset_email_service/
