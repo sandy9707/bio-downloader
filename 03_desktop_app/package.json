@@ -38,14 +38,12 @@
     ],
     "mac": {
       "target": [
-        "dmg",
-        "zip"
+        "dmg"
       ],
       "category": "public.app-category.utilities"
     },
     "win": {
       "target": [
-        "nsis",
         "portable"
       ]
     }

@@ -44,6 +44,7 @@ const isTestEnv = process.env.NODE_ENV === 'test';
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
+app.use('/downloads', express.static(path.join(__dirname, 'downloads')));
 
 // ==========================================
 // 【安全与限流配置】
@@ -1156,6 +1157,648 @@ app.get('/mock-pay.html', (req, res) => {
     }
 
     loadOrder();
+  </script>
+</body>
+</html>
+  `);
+});
+
+// ==========================================
+// 【官方安装包下载与软件介绍首页】
+// ==========================================
+app.get('/', (req, res) => {
+  res.send(`
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BioDownloader Pro - 生信数据多线程加速下载器</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #090d16;
+      --card-bg: rgba(17, 25, 40, 0.75);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --primary: #4f46e5;
+      --primary-glow: rgba(79, 70, 229, 0.4);
+      --accent: #06b6d4;
+      --accent-glow: rgba(6, 182, 212, 0.4);
+      --baidu: #10b981;
+      --baidu-glow: rgba(16, 185, 129, 0.4);
+      --quark: #f97316;
+      --quark-glow: rgba(249, 115, 22, 0.4);
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    body {
+      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg-dark);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(circle at 10% 20%, rgba(79, 70, 229, 0.15) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(6, 182, 212, 0.15) 0%, transparent 40%);
+      background-attachment: fixed;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 3rem 1.5rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 4rem;
+      animation: fadeInDown 0.8s ease-out;
+    }
+
+    .logo-container {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    .logo-icon {
+      font-size: 2.5rem;
+      animation: spin 10s linear infinite;
+    }
+
+    .logo-text {
+      font-size: 2.2rem;
+      font-weight: 800;
+      letter-spacing: -0.05em;
+      background: linear-gradient(135deg, #a5b4fc, #22d3ee);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    h1 {
+      font-size: 2.8rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin-bottom: 1rem;
+      line-height: 1.2;
+    }
+
+    .subtitle {
+      font-size: 1.25rem;
+      color: var(--text-muted);
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    /* Glassmorphism Card */
+    .glass-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      padding: 2.5rem;
+      margin-bottom: 2.5rem;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+      animation: fadeInUp 0.8s ease-out;
+    }
+
+    .download-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-top: 1rem;
+    }
+
+    @media (max-width: 768px) {
+      .download-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .download-card {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      padding: 2.2rem 2rem 2rem;
+      text-align: center;
+      transition: all 0.3s ease;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      height: 100%;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .download-card:hover {
+      transform: translateY(-5px);
+      border-color: rgba(6, 182, 212, 0.3);
+      box-shadow: 0 10px 25px rgba(6, 182, 212, 0.15);
+    }
+
+    .card-badge {
+      position: absolute;
+      top: 0.75rem;
+      right: 0.75rem;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 0.25rem 0.65rem;
+      border-radius: 20px;
+      letter-spacing: 0.03em;
+    }
+
+    .card-badge.recommend {
+      background: rgba(16, 185, 129, 0.12);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.25);
+    }
+
+    .card-badge.direct {
+      background: rgba(99, 102, 241, 0.12);
+      color: #a5b4fc;
+      border: 1px solid rgba(99, 102, 241, 0.25);
+    }
+
+    .os-badge {
+      font-size: 3rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .os-name {
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+      color: #f1f5f9;
+    }
+
+    .file-desc {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+      line-height: 1.5;
+      min-height: 3rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .download-btn {
+      display: block;
+      width: 100%;
+      padding: 0.85rem 1.25rem;
+      border-radius: 10px;
+      font-weight: 700;
+      text-decoration: none;
+      transition: all 0.25s ease;
+      text-align: center;
+      font-size: 0.95rem;
+    }
+
+    .card-actions {
+      display: flex;
+      gap: 0.5rem;
+      width: 100%;
+      margin-top: auto;
+    }
+
+    .code-box {
+      display: flex;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      padding: 0.25rem 0.5rem 0.25rem 0.85rem;
+      font-size: 0.95rem;
+      gap: 0.5rem;
+    }
+
+    .code-label {
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    .code-text {
+      color: #38bdf8;
+      font-weight: 700;
+      font-family: monospace;
+      letter-spacing: 0.05em;
+      cursor: text;
+      user-select: text;
+      -webkit-user-select: text;
+      background: rgba(255, 255, 255, 0.05);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+    }
+
+    .mini-copy-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #f8fafc;
+      padding: 0.4rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    .mini-copy-btn:hover {
+      background: var(--primary);
+      border-color: var(--primary);
+      transform: translateY(-1px);
+    }
+
+    /* Toast Notification */
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      background: rgba(16, 185, 129, 0.9);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(16, 185, 129, 0.2);
+      color: white;
+      padding: 0.85rem 1.5rem;
+      border-radius: 12px;
+      font-weight: 700;
+      box-shadow: 0 10px 30px rgba(16, 185, 129, 0.3);
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.68, -0.55, 0.27, 1.55);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      user-select: none;
+    }
+
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    .download-btn.baidu {
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: white;
+      box-shadow: 0 4px 12px var(--baidu-glow);
+    }
+
+    .download-btn.baidu:hover {
+      background: linear-gradient(135deg, #059669, #047857);
+      box-shadow: 0 6px 18px var(--baidu-glow);
+    }
+
+    .download-btn.quark {
+      background: linear-gradient(135deg, #f97316, #ea580c);
+      color: white;
+      box-shadow: 0 4px 12px var(--quark-glow);
+    }
+
+    .download-btn.quark:hover {
+      background: linear-gradient(135deg, #ea580c, #c2410c);
+      box-shadow: 0 6px 18px var(--quark-glow);
+    }
+
+    .download-btn.primary {
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: white;
+      box-shadow: 0 4px 12px var(--primary-glow);
+    }
+
+    .download-btn.primary:hover {
+      background: linear-gradient(135deg, #4f46e5, #3730a3);
+      box-shadow: 0 6px 18px var(--primary-glow);
+    }
+
+    .download-btn.accent {
+      background: linear-gradient(135deg, #06b6d4, #0891b2);
+      color: white;
+      box-shadow: 0 4px 12px var(--accent-glow);
+    }
+
+    .download-btn.accent:hover {
+      background: linear-gradient(135deg, #0891b2, #0e7490);
+      box-shadow: 0 6px 18px var(--accent-glow);
+    }
+
+    .features-list {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 1.5rem;
+      margin-top: 1rem;
+    }
+
+    @media (max-width: 768px) {
+      .features-list {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .feature-item {
+      background: rgba(255, 255, 255, 0.01);
+      border: 1px solid rgba(255, 255, 255, 0.03);
+      padding: 1.5rem;
+      border-radius: 12px;
+      text-align: center;
+    }
+
+    .feature-icon {
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .feature-title {
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+      color: #38bdf8;
+    }
+
+    .feature-text {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+    }
+
+    h3 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 1.25rem;
+      color: #a5b4fc;
+      border-left: 4px solid var(--primary);
+      padding-left: 0.75rem;
+    }
+
+    .guide-step {
+      margin-bottom: 1.5rem;
+    }
+
+    .guide-step:last-child {
+      margin-bottom: 0;
+    }
+
+    .step-num {
+      display: inline-block;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #090d16;
+      font-weight: 700;
+      text-align: center;
+      line-height: 24px;
+      margin-right: 0.5rem;
+      font-size: 0.875rem;
+    }
+
+    .step-title {
+      font-weight: 600;
+      display: inline-block;
+    }
+
+    .step-content {
+      margin-left: 2rem;
+      margin-top: 0.35rem;
+      font-size: 0.95rem;
+      color: var(--text-muted);
+    }
+
+    code {
+      background: rgba(0, 0, 0, 0.4);
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-family: monospace;
+      color: #fb7185;
+      font-size: 0.9rem;
+    }
+
+    pre {
+      background: rgba(0, 0, 0, 0.4);
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-family: monospace;
+      color: #fb7185;
+      font-size: 0.9rem;
+      overflow-x: auto;
+      margin-top: 0.5rem;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    /* Keyframes */
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    @keyframes fadeInDown {
+      from { opacity: 0; transform: translateY(-30px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(30px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+
+  <!-- 下载面板 -->
+  <div class="glass-card">
+    <h3>📥 官方安装包下载</h3>
+      
+      <div class="download-grid">
+        <!-- Baidu Netdisk -->
+        <div class="download-card">
+          <span class="card-badge recommend">推荐 - 免代理</span>
+          <div>
+            <div class="os-badge">☁️</div>
+            <div class="os-name">百度网盘镜像</div>
+            <div class="file-desc">官方高速云端镜像。国内直连网络环境首选，下载速度最快。</div>
+          </div>
+          <div class="card-actions">
+            <a href="https://pan.baidu.com/s/1qKabwrWXufIEjHhOcXW-Rw?pwd=7pug" class="download-btn baidu" style="flex: 2;" target="_blank">百度网盘下载</a>
+            <div class="code-box">
+              <span class="code-label">提取码:</span>
+              <span class="code-text" onclick="selectText(this)">7pug</span>
+              <button onclick="copyToClipboard('7pug', this)" class="mini-copy-btn">复制</button>
+            </div>
+          </div>
+        </div>
+        <!-- Quark Netdisk -->
+        <div class="download-card">
+          <span class="card-badge recommend">推荐 - 免代理</span>
+          <div>
+            <div class="os-badge">⚡</div>
+            <div class="os-name">夸克网盘镜像</div>
+            <div class="file-desc">官方高速云端镜像。支持极速秒传，支持手机与PC快速保存。</div>
+          </div>
+          <div class="card-actions">
+            <a href="https://pan.quark.cn/s/1ca20a8200d3" class="download-btn quark" style="flex: 2;" target="_blank">夸克网盘下载</a>
+            <div class="code-box">
+              <span class="code-label">提取码:</span>
+              <span class="code-text" onclick="selectText(this)">ELQk</span>
+              <button onclick="copyToClipboard('ELQk', this)" class="mini-copy-btn">复制</button>
+            </div>
+          </div>
+        </div>
+        <!-- Mac -->
+        <div class="download-card">
+          <span class="card-badge direct">直连下载</span>
+          <div>
+            <div class="os-badge">🍏</div>
+            <div class="os-name">macOS 客户端</div>
+            <div class="file-desc">标准 DMG 磁盘映像。支持 Apple Silicon (M1-M4) 及 Intel 芯片。</div>
+          </div>
+          <div class="card-actions">
+            <a href="/downloads/BioDownloader-1.2.2-arm64.dmg" class="download-btn primary">下载 Mac 安装包 (.dmg)</a>
+          </div>
+        </div>
+        <!-- Win -->
+        <div class="download-card">
+          <span class="card-badge direct">直连下载</span>
+          <div>
+            <div class="os-badge">🪟</div>
+            <div class="os-name">Windows 客户端</div>
+            <div class="file-desc">单文件绿色免安装版。支持 64位 Windows 10/11 系统，即开即用。</div>
+          </div>
+          <div class="card-actions">
+            <a href="/downloads/BioDownloader-1.2.2.exe" class="download-btn accent">下载 Windows 绿色版 (.exe)</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 特性展示 -->
+    <div class="glass-card">
+      <h3>⚡ 软件核心优势</h3>
+      <div class="features-list">
+        <div class="feature-item">
+          <div class="feature-icon">🛡️</div>
+          <div class="feature-title">安全加密隧道</div>
+          <div class="feature-text">云端智能分配高带宽动态加速节点，多重安全隧道加密，全面保障数据传输稳定性。</div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">🚀</div>
+          <div class="feature-title">Axel 16 线程</div>
+          <div class="feature-text">内置超高速多线程 Axel 下载引擎，突破服务器单连接限速，跑满您的家庭宽带。</div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">📁</div>
+          <div class="feature-title">多数据源整合</div>
+          <div class="feature-text">支持输入 SRA/EBI 原始测序数据编号、GEO 系列号，并自动解析全部补充文件.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 运行说明 -->
+    <div class="glass-card">
+      <h3>⚙️ 安装与使用教程</h3>
+      
+      <div class="guide-step">
+        <div class="step-num">1</div>
+        <div class="step-title">macOS 首次打开提示“已损坏，打不开”？</div>
+        <div class="step-content">
+          由于软件未向 Apple 申请官方付费签名证书，macOS 系统的 Gatekeeper 会进行拦截并报此提示。属于正常拦截，请执行以下命令解除限制：
+          <br>
+          1. 打开 Mac 系统自带的 <strong>终端 (Terminal)</strong> 程序。
+          <br>
+          2. 复制并执行以下命令（输入电脑开机密码回车即可）：
+          <pre>sudo xattr -cr /Applications/BioDownloader.app</pre>
+        </div>
+      </div>
+
+      <div class="guide-step">
+        <div class="step-num">2</div>
+        <div class="step-title">快速启动与下载</div>
+        <div class="step-content">
+          1. 打开软件，进入「我的」页面注册并登录您的账户。
+          <br>
+          2. 在「下载中心」选择相应的数据源类型，输入需要下载的编号（已默认填入测试编号）。
+          <br>
+          3. 选择“下载目标文件夹”，点击“检验下载大小”。
+          <br>
+          4. 点击“开始加速下载”或“单项下载”，加速通道将自动建立，多线程引擎自动接管。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast">
+    <span>✅</span>
+    <span id="toast-message">复制成功！</span>
+  </div>
+
+  <script>
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      const toastMsg = document.getElementById('toast-message');
+      toastMsg.textContent = message;
+      toast.classList.add('show');
+      setTimeout(() => {
+        toast.classList.remove('show');
+      }, 2500);
+    }
+
+    function copyToClipboard(text, btn) {
+      function success() {
+        showToast('提取码 ' + text + ' 已成功复制！');
+        const originalText = btn.textContent;
+        btn.textContent = '已复制';
+        btn.style.background = '#10b981';
+        btn.style.borderColor = '#10b981';
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.style.background = '';
+          btn.style.borderColor = '';
+        }, 1500);
+      }
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(success).catch(err => {
+          fallbackCopy(text, success);
+        });
+      } else {
+        fallbackCopy(text, success);
+      }
+    }
+
+    function fallbackCopy(text, callback) {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.top = '0';
+      textarea.style.left = '0';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        const successful = document.execCommand('copy');
+        if (successful) {
+          callback();
+        } else {
+          console.error('Fallback copy failed');
+        }
+      } catch (err) {
+        console.error('Fallback copy error:', err);
+      }
+      document.body.removeChild(textarea);
+    }
+
+    function selectText(element) {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
   </script>
 </body>
 </html>

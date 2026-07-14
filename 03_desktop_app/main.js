@@ -40,6 +40,12 @@ if (!fs.existsSync(CLASH_WORK_DIR)) {
   fs.mkdirSync(CLASH_WORK_DIR, { recursive: true });
 }
 
+// 获取用户空间中用于存放二进制可执行文件的目录（避免在 Windows Temp 临时目录下由于权限/杀毒软件拦截导致无法执行）
+const USER_BIN_DIR = path.join(app.getPath('userData'), 'bin');
+if (!fs.existsSync(USER_BIN_DIR)) {
+  fs.mkdirSync(USER_BIN_DIR, { recursive: true });
+}
+
 // 拷贝 Country.mmdb 和 GeoSite.dat 依赖到工作空间
 function ensureClashDataFiles() {
   const mmdbSrc = path.join(BIN_DIR, 'Country.mmdb');
@@ -57,6 +63,51 @@ function ensureClashDataFiles() {
   }
 }
 
+// 拷贝加速器及多线程二进制可执行文件到用户空间以保障执行权限
+function ensureBinaries() {
+  const platform = os.platform();
+  const filesToCopy = [];
+
+  if (platform === 'darwin') {
+    filesToCopy.push(
+      { src: path.join(BIN_DIR, 'darwin', 'axel'), dest: 'axel' },
+      { src: path.join(BIN_DIR, 'darwin', 'mihomo_aarch64'), dest: 'mihomo_aarch64' },
+      { src: path.join(BIN_DIR, 'darwin', 'mihomo_x86_64'), dest: 'mihomo_x86_64' }
+    );
+  } else if (platform === 'win32') {
+    filesToCopy.push(
+      { src: path.join(BIN_DIR, 'win32', 'axel.exe'), dest: 'axel.exe' },
+      { src: path.join(BIN_DIR, 'win32', 'cygwin1.dll'), dest: 'cygwin1.dll' },
+      { src: path.join(BIN_DIR, 'win32', 'mihomo_windows_x86_64.exe'), dest: 'mihomo_windows_x86_64.exe' }
+    );
+  }
+
+  for (const item of filesToCopy) {
+    const destPath = path.join(USER_BIN_DIR, item.dest);
+    if (fs.existsSync(item.src)) {
+      if (!fs.existsSync(destPath) || fs.statSync(item.src).size !== fs.statSync(destPath).size) {
+        try {
+          fs.copyFileSync(item.src, destPath);
+          console.log(`Successfully copied binary ${item.dest} to user space`);
+        } catch (copyErr) {
+          console.error(`Failed to copy binary ${item.dest}:`, copyErr.message);
+        }
+      }
+      
+      // Unix 系统上确保可执行权限
+      if (platform !== 'win32') {
+        try {
+          fs.chmodSync(destPath, '755');
+        } catch (chmodErr) {
+          console.error(`Failed to chmod binary ${item.dest}:`, chmodErr.message);
+        }
+      }
+    } else {
+      console.warn(`Source binary not found at: ${item.src}`);
+    }
+  }
+}
+
 // 获取 Clash 执行路径
 function getClashBinaryPath() {
   const platform = os.platform();
@@ -64,10 +115,10 @@ function getClashBinaryPath() {
   
   if (platform === 'darwin') {
     return arch === 'arm64' 
-      ? path.join(BIN_DIR, 'darwin', 'mihomo_aarch64')
-      : path.join(BIN_DIR, 'darwin', 'mihomo_x86_64');
+      ? path.join(USER_BIN_DIR, 'mihomo_aarch64')
+      : path.join(USER_BIN_DIR, 'mihomo_x86_64');
   } else if (platform === 'win32') {
-    return path.join(BIN_DIR, 'win32', 'mihomo_windows_x86_64.exe');
+    return path.join(USER_BIN_DIR, 'mihomo_windows_x86_64.exe');
   }
   throw new Error('不支持的操作系统平台: ' + platform);
 }
@@ -76,9 +127,9 @@ function getClashBinaryPath() {
 function getAxelBinaryPath() {
   const platform = os.platform();
   if (platform === 'darwin') {
-    return path.join(BIN_DIR, 'darwin', 'axel');
+    return path.join(USER_BIN_DIR, 'axel');
   } else if (platform === 'win32') {
-    return path.join(BIN_DIR, 'win32', 'axel.exe');
+    return path.join(USER_BIN_DIR, 'axel.exe');
   }
   throw new Error('不支持的操作系统平台: ' + platform);
 }
@@ -137,6 +188,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  ensureBinaries();
   ensureClashDataFiles();
   createWindow();
 
@@ -242,7 +294,13 @@ async function startClash(token) {
 
     console.log(`Spawning Clash from ${binaryPath} with config at ${CLASH_WORK_DIR}`);
     
+    let spawnError = null;
     clashProcess = spawn(binaryPath, ['-d', CLASH_WORK_DIR]);
+
+    clashProcess.on('error', (err) => {
+      console.error('Clash spawn error:', err);
+      spawnError = err;
+    });
 
     clashProcess.stdout.on('data', (data) => {
       console.log(`[Clash stdout] ${data}`);
@@ -257,8 +315,21 @@ async function startClash(token) {
       clashProcess = null;
     });
 
-    // 延迟等待启动完成
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // 延迟等待启动完成，并在此期间捕获可能发生的启动错误
+    await new Promise((resolve, reject) => {
+      const startTimeout = setTimeout(() => {
+        if (spawnError) {
+          reject(spawnError);
+        } else {
+          resolve();
+        }
+      }, 2000);
+
+      clashProcess.once('error', (err) => {
+        clearTimeout(startTimeout);
+        reject(err);
+      });
+    });
     return true;
   } catch (err) {
     console.error('Failed to start Clash:', err.message);
@@ -607,6 +678,12 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
       try {
         await new Promise((resolve, reject) => {
           currentAxelProcess = spawn(axelBin, args, { env });
+
+          currentAxelProcess.on('error', (err) => {
+            console.error('Axel spawn error:', err);
+            currentAxelProcess = null;
+            reject(err);
+          });
 
           currentAxelProcess.stdout.on('data', (data) => {
             const output = data.toString();
