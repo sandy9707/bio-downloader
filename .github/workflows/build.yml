@@ -68,19 +68,20 @@ jobs:
         with:
           node-version: '20'
 
-      - name: 下载 axel.exe + cygwin1.dll (from nishad/axel-for-windows)
+      - name: 下载并解压现代版 axel.exe + MSYS2 DLLs
         shell: pwsh
         run: |
           $dest = "bin\win32"
           New-Item -ItemType Directory -Force -Path $dest
 
-          $baseUrl = "https://raw.githubusercontent.com/nishad/axel-for-windows/master"
+          Write-Host "下载 axel-2.17.14.zip..."
+          Invoke-WebRequest -Uri "https://github.com/uklee/axel-for-windows/releases/download/v2.17.14/axel-2.17.14.zip" -OutFile "axel.zip"
 
-          Write-Host "下载 axel.exe..."
-          Invoke-WebRequest -Uri "$baseUrl/axel.exe" -OutFile "$dest\axel.exe"
+          Write-Host "解压 axel.zip..."
+          Expand-Archive -Path "axel.zip" -DestinationPath "temp_axel" -Force
 
-          Write-Host "下载 cygwin1.dll..."
-          Invoke-WebRequest -Uri "$baseUrl/cygwin1.dll" -OutFile "$dest\cygwin1.dll"
+          Write-Host "复制到 bin/win32..."
+          Copy-Item -Path "temp_axel\axel-2.17.14\*" -Destination "$dest" -Recurse -Force
 
           Write-Host "完成，bin/win32 目录内容："
           Get-ChildItem "$dest"

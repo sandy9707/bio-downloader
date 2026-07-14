@@ -534,11 +534,7 @@ ipcMain.handle('clash-stop', () => {
 // --- 自动更新与外部链接 ---
 ipcMain.handle('check-for-updates', async () => {
   try {
-    const axiosOptions = { timeout: 5000 };
-    if (clashProcess) {
-      axiosOptions.proxy = { protocol: 'http', host: '127.0.0.1', port: 43289 };
-    }
-    const res = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, axiosOptions);
+    const res = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, { timeout: 5000 });
     const currentVersion = app.getVersion();
     const latestVersion = res.data.version;
     
