@@ -819,7 +819,13 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
 
   async function downloadSingleFile(file, fileIndex) {
     if (cancelled) return;
-    const fileDestFolder = file.folder ? path.join(targetDir, file.folder) : targetDir;
+    
+    let fileDestFolder;
+    if (file.isUpdate) {
+      fileDestFolder = app.getPath('downloads');
+    } else {
+      fileDestFolder = file.folder ? path.join(targetDir, file.folder) : targetDir;
+    }
     
     if (!fs.existsSync(fileDestFolder)) {
       fs.mkdirSync(fileDestFolder, { recursive: true });
@@ -983,14 +989,22 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     cancelTokens.delete(fileIndex);
 
     if (downloadSuccess) {
-      try {
-        console.log(`Download success. Reporting consumed bytes: ${file.size}`);
-        await axios.post(`${BACKEND_BASE_URL}/api/user/consume`, {
-          token,
-          bytes: file.size
-        });
-      } catch (e) {
-        console.error('Failed to report traffic consume:', e.message);
+      if (!file.isUpdate) {
+        try {
+          console.log(`Download success. Reporting consumed bytes: ${file.size}`);
+          await axios.post(`${BACKEND_BASE_URL}/api/user/consume`, {
+            token,
+            bytes: file.size
+          });
+        } catch (e) {
+          console.error('Failed to report traffic consume:', e.message);
+        }
+      } else {
+        try {
+          shell.showItemInFolder(savePath);
+        } catch (e) {
+          console.error('Failed to show update package in folder:', e.message);
+        }
       }
 
       mainWindow.webContents.send('download-status', {
@@ -998,7 +1012,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
         fileName: file.name,
         status: 'completed',
         percentage: 100,
-        speed: '已保存',
+        speed: file.isUpdate ? '已下载(更新包)' : '已保存',
         savePath
       });
     } else {

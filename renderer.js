@@ -344,42 +344,56 @@ async function downloadUpdate(platform) {
   const url = platform === 'win' ? updateInfoGlobal.winUrl : updateInfoGlobal.macUrl;
   const fileName = url.substring(url.lastIndexOf('/') + 1);
   const btnId = platform === 'win' ? 'downloadWinUpdateBtn' : 'downloadMacUpdateBtn';
-  const otherBtnId = platform === 'win' ? 'downloadMacUpdateBtn' : 'downloadWinUpdateBtn';
   
   const btn = document.getElementById(btnId);
-  const otherBtn = document.getElementById(otherBtnId);
-  const originalText = btn.innerText;
+  const originalText = btn ? btn.innerText : '下载';
+
+  const updateFile = {
+    name: fileName,
+    url: url,
+    size: 150 * 1024 * 1024, // 150MB placeholder
+    originalIndex: 9999, // Special index for update
+    percentage: 0,
+    status: 'waiting',
+    speed: '排队中...',
+    isUpdate: true
+  };
+
+  // 写入正在下载队列
+  if (!activeDownloads.find(d => d.originalIndex === 9999)) {
+    activeDownloads.push(updateFile);
+    renderDownloadingList();
+    updateTransferCounts();
+  }
+
+  showToast('更新包已加入传输列表！开始高速通道免费下载更新...', 'success');
+  
+  // 切换至传输中心
+  switchTab('transfers-tab');
+  switchTransferSubTab('downloading');
 
   try {
     isUpdating = true;
-    btn.disabled = true;
-    otherBtn.disabled = true;
-    btn.innerText = '正在启动加速下载...';
-    showToast('正在通过加速通道下载软件更新，本下载完全免费（不计流量限额）...', 'info');
-
-    // 监听下载进度
-    window.api.onUpdateProgress((data) => {
-      const { percentage, speed } = data;
-      let statusText = '正在加速下载...';
-      if (percentage !== null) statusText += ` [${percentage}%]`;
-      if (speed !== null) statusText += ` (${speed})`;
-      btn.innerText = statusText;
-    });
-
-    const res = await window.api.downloadAppUpdate(url, fileName);
-    if (res && res.success) {
-      btn.innerText = '下载成功！已在文件夹中选中';
-      showToast('更新包下载完成！已在系统下载目录中选中，双击即可安装更新。', 'success');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerText = '已加入传输列表下载...';
+    }
+    
+    await window.api.startDownload([updateFile], defaultDir, currentUser ? currentUser.token : '', maxConcurrentDownloadsSetting);
+    
+    if (btn) {
+      btn.innerText = '下载完成！已在文件夹中高亮';
     }
   } catch (err) {
-    btn.innerText = originalText;
-    showToast('加速下载更新包失败，已自动为您打开默认浏览器下载...', 'error');
-    // 发生任何异常，自动降级回退到系统浏览器下载
+    if (btn) btn.innerText = originalText;
+    showToast('加速下载更新包失败，已自动为您打开浏览器下载...', 'error');
     window.api.openExternalUrl(url);
   } finally {
     isUpdating = false;
-    btn.disabled = false;
-    otherBtn.disabled = false;
+    if (btn) btn.disabled = false;
+    activeDownloads = activeDownloads.filter(d => d.originalIndex !== 9999);
+    renderDownloadingList();
+    updateTransferCounts();
   }
 }
 
