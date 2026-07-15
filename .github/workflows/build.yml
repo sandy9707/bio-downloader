@@ -37,7 +37,7 @@ jobs:
         run: |
           url="${{ secrets.BACKEND_BASE_URL }}"
           if [ -z "$url" ]; then
-            url="http://107.175.142.245:13000"
+            url="https://biodown.yeyeziblog.eu.org"
           fi
           echo "{\"BACKEND_BASE_URL\":\"$url\"}" > config.json
           echo "Injecting backend URL: $url"
@@ -97,7 +97,7 @@ jobs:
         run: |
           $url = "${{ secrets.BACKEND_BASE_URL }}"
           if ([string]::IsNullOrEmpty($url)) {
-              $url = "http://107.175.142.245:13000"
+              $url = "https://biodown.yeyeziblog.eu.org"
           }
           $config = @{ BACKEND_BASE_URL = $url }
           $config | ConvertTo-Json | Set-Content -Path config.json -Encoding utf8

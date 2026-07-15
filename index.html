@@ -628,6 +628,226 @@
       from { transform: translateX(100%); opacity: 0; }
       to { transform: translateX(0); opacity: 1; }
     }
+
+    /* ==========================================
+       【传输列表专属样式】
+       ========================================== */
+    .transfers-container {
+      max-width: 900px;
+      margin: 0 auto;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .transfers-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border-color);
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .transfer-sub-tabs {
+      display: flex;
+      gap: 0.5rem;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 0.25rem;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+    }
+
+    .sub-tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 0.5rem 1.25rem;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .sub-tab-btn:hover {
+      color: var(--text-color);
+    }
+
+    .sub-tab-btn.active {
+      background: var(--card-bg-selected);
+      color: var(--primary-color);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+
+    .transfer-list-container {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      min-height: 300px;
+    }
+
+    .transfer-item {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      position: relative;
+      transition: border-color 0.2s ease;
+    }
+
+    .transfer-item:hover {
+      border-color: rgba(99, 102, 241, 0.3);
+    }
+
+    .transfer-item-info {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .transfer-item-name-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .transfer-item-name {
+      font-size: 0.95rem;
+      font-weight: bold;
+      color: var(--text-color);
+      word-break: break-all;
+      flex: 1;
+    }
+
+    .transfer-item-badge {
+      font-size: 0.75rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      background: rgba(99, 102, 241, 0.1);
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      color: var(--primary-light);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .transfer-item-meta {
+      display: flex;
+      gap: 1.5rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      flex-wrap: wrap;
+    }
+
+    .transfer-item-status {
+      font-weight: 600;
+    }
+
+    .transfer-item-status.completed {
+      color: #10b981;
+    }
+
+    .transfer-item-status.failed {
+      color: #ef4444;
+    }
+
+    .transfer-progress-bar {
+      height: 6px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 99px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .transfer-progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #6366f1, #3b82f6);
+      border-radius: 99px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+
+    .transfer-item-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.75rem;
+      margin-top: 0.25rem;
+    }
+
+    .action-btn {
+      font-size: 0.8rem;
+      padding: 0.35rem 0.8rem;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid var(--border-color);
+      background: transparent;
+      color: var(--text-color);
+      transition: all 0.2s;
+    }
+
+    .action-btn:hover {
+      background: rgba(255,255,255,0.05);
+      border-color: var(--text-muted);
+    }
+
+    .action-btn.cancel-btn {
+      border-color: rgba(239, 68, 68, 0.3);
+      color: #ef4444;
+    }
+
+    .action-btn.cancel-btn:hover {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: #ef4444;
+    }
+
+    .action-btn.open-file-btn {
+      border-color: rgba(16, 185, 129, 0.3);
+      color: #10b981;
+    }
+
+    .action-btn.open-file-btn:hover {
+      background: rgba(16, 185, 129, 0.1);
+      border-color: #10b981;
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 4rem 2rem;
+      color: var(--text-muted);
+      text-align: center;
+      gap: 1rem;
+    }
+
+    .empty-icon {
+      font-size: 3rem;
+      opacity: 0.4;
+    }
+
+    .badge {
+      display: inline-block;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 4px;
+      border-radius: 9px;
+      background: #ef4444;
+      color: white;
+      font-size: 0.7rem;
+      font-weight: bold;
+      line-height: 18px;
+      text-align: center;
+      margin-left: 0.5rem;
+      vertical-align: middle;
+    }
   </style>
 </head>
 <body>
@@ -643,6 +863,7 @@
     </div>
     <div class="nav-menu">
       <div class="nav-item active" onclick="switchTab('download-hub')">下载中心</div>
+      <div class="nav-item" onclick="switchTab('transfers-tab')" id="navTransfers">传输列表<span class="badge" id="activeDownloadsBadge" style="display: none;">0</span></div>
       <div class="nav-item" onclick="switchTab('store-tab')">流量商店</div>
       <div class="nav-item" onclick="switchTab('profile-tab')">我的</div>
       <div class="nav-item" onclick="switchTab('settings-tab')">设置</div>
@@ -737,6 +958,38 @@
         </div>
         <div class="queue-list" id="queueList">
           <!-- 动态加载队列 -->
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: 传输列表 -->
+    <div class="tab-view" id="transfers-tab">
+      <div class="transfers-container">
+        <div class="transfers-header">
+          <div class="transfer-sub-tabs">
+            <button class="sub-tab-btn active" id="tabBtnDownloading" onclick="switchTransferSubTab('downloading')">正在下载 (<span id="downloadingCount">0</span>)</button>
+            <button class="sub-tab-btn" id="tabBtnCompleted" onclick="switchTransferSubTab('completed')">已完成 (<span id="completedCount">0</span>)</button>
+          </div>
+          <div class="transfer-actions">
+            <button class="btn btn-secondary" onclick="window.api.openDownloadsFolder()" style="font-size: 0.85rem; padding: 0.45rem 1rem;">📂 打开下载目录</button>
+            <button class="btn btn-danger" id="btnClearCompleted" onclick="clearCompletedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空已完成</button>
+          </div>
+        </div>
+
+        <!-- 正在下载列表 -->
+        <div class="transfer-list-container" id="transferDownloadingList">
+          <div class="empty-state" id="emptyDownloadingState">
+            <div class="empty-icon">📥</div>
+            <p>暂无正在下载的任务</p>
+          </div>
+        </div>
+
+        <!-- 已完成列表 -->
+        <div class="transfer-list-container" id="transferCompletedList" style="display: none;">
+          <div class="empty-state" id="emptyCompletedState">
+            <div class="empty-icon">✓</div>
+            <p>暂无已完成的下载历史</p>
+          </div>
         </div>
       </div>
     </div>
@@ -871,6 +1124,31 @@
           <label style="font-weight:600;">🚀 下载加速器状态</label>
           <div id="clashConfigInfo" style="font-size:0.9rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color); margin-top:0.5rem;">
             尚未启动
+          </div>
+        </div>
+
+        <!-- 并发下载设置 -->
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">⚡ 并发任务设置</label>
+          <div style="display: flex; align-items: center; gap: 1rem; margin-top:0.5rem;">
+            <span style="font-size:0.9rem; color:var(--text-muted);">最大同时下载任务数：</span>
+            <select id="settingsMaxConcurrent" onchange="changeMaxConcurrent(this.value)" style="background:var(--bg-input); color:var(--text-color); border: 1px solid var(--border-color); border-radius:6px; padding:0.4rem 1rem; font-size:0.9rem; outline:none; cursor:pointer;">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3" selected>3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.25rem;">设置同时下载的最大文件个数。并发过高可能会导致宽带饱和。</div>
+        </div>
+
+        <!-- 网络测速 -->
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">🌐 网络测速</label>
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-top:0.5rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color);">
+            <div style="font-size:0.9rem; color:var(--text-muted);">使用中国科学技术大学（USTC）测速节点测试您的最大下载带宽。</div>
+            <button class="btn btn-secondary" style="font-size: 0.85rem; padding: 0.3rem 0.9rem;" onclick="window.api.openExternalUrl('https://test.ustc.edu.cn/')">开始测速</button>
           </div>
         </div>
 

@@ -9,6 +9,11 @@ let defaultDir = '';
 let currentOrderId = null;
 let isDownloading = false;
 
+// 传输列表状态
+let activeDownloads = [];
+let completedDownloads = [];
+let maxConcurrentDownloadsSetting = 3;
+
 // 存储下载中心不同 Tab 的独立状态，防止切换时状态丢失与互相覆盖
 const tabStates = {
   sra_raw: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
@@ -118,7 +123,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   // 3. 渲染充値包
   loadPackages();
 
-  // 4. 定时更新加速器状态
+  // 4. 初始化传输中心历史记录与并发限制
+  initTransfersAndSettings(settings);
+
+  // 5. 定时更新加速器状态
   updateClashUIState();
   setInterval(updateClashUIState, 3000);
 });
@@ -230,8 +238,10 @@ function switchTab(tabId) {
   currentTab = tabId;
   const titles = {
     'download-hub': '下载中心',
+    'transfers-tab': '传输列表',
     'store-tab': '流量商店',
-    'profile-tab': '个人中心'
+    'profile-tab': '个人中心',
+    'settings-tab': '全局设置'
   };
   document.getElementById('tabTitle').innerText = titles[tabId] || '下载中心';
 }
@@ -518,60 +528,41 @@ async function startDownload() {
     return;
   }
 
+  // 初始化传输任务属性与正在下载队列
+  currentQueue.forEach((file, index) => {
+    file.originalIndex = index;
+    file.percentage = 0;
+    file.status = 'waiting';
+    file.speed = '排队中...';
+  });
+
+  activeDownloads = [...currentQueue];
+  renderDownloadingList();
+  updateTransferCounts();
+
   // 锁定控制按钮状态
   isDownloading = true;
   document.getElementById('checkSizeBtn').disabled = true;
   document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('cancelBtn').style.display = 'block';
 
-  // 绑定进度事件回调
-  window.api.onDownloadStatus((data) => {
-    const { index, status, fileName } = data;
-    const fill = document.getElementById(`progress-fill-${index}`);
-    const pct = document.getElementById(`progress-pct-${index}`);
-    const txt = document.getElementById(`status-text-${index}`);
-    
-    if (status === 'downloading') {
-      txt.className = 'item-status status-downloading';
-      txt.innerText = '正在高速下载';
-      if (data.speed && data.speed.includes('重试')) {
-        document.getElementById(`speed-text-${index}`).innerText = data.speed;
-      }
-    } else if (status === 'completed') {
-      txt.className = 'item-status status-completed';
-      txt.innerText = '下载完成';
-      fill.style.width = '100%';
-      pct.innerText = '100%';
-      document.getElementById(`speed-text-${index}`).innerText = '已保存';
-    } else if (status === 'failed') {
-      txt.className = 'item-status status-failed';
-      txt.innerText = '下载失败';
-      if (data.speed && data.speed.includes('失败')) {
-        document.getElementById(`speed-text-${index}`).innerText = data.speed;
-      }
-    }
-  });
-
-  window.api.onDownloadProgress((data) => {
-    const { index, percentage, speed } = data;
-    
-    if (percentage !== null) {
-      document.getElementById(`progress-fill-${index}`).style.width = percentage + '%';
-      document.getElementById(`progress-pct-${index}`).innerText = percentage + '%';
-    }
-    if (speed !== null) {
-      document.getElementById(`speed-text-${index}`).innerText = '当前速度: ' + speed;
-    }
-  });
+  // 自动切换至传输列表 tab
+  switchTab('transfers-tab');
+  switchTransferSubTab('downloading');
 
   try {
-    showToast('生信原始数据多线程加速下载已开始...');
-    await window.api.startDownload(currentQueue, defaultDir, currentUser.token);
-    showToast('恭喜，所有生信数据包下载完毕！', 'success');
+    showToast('已加入传输中心，开始并行下载生信数据包...', 'info');
+    await window.api.startDownload(currentQueue, defaultDir, currentUser.token, maxConcurrentDownloadsSetting);
+    showToast('生信数据包下载任务运行结束', 'info');
   } catch (e) {
     showToast(e.message, 'error');
   } finally {
     isDownloading = false;
+    // 清空下载中的残留
+    activeDownloads = [];
+    renderDownloadingList();
+    updateTransferCounts();
+
     // 恢复按钮状态
     document.getElementById('checkSizeBtn').disabled = false;
     document.getElementById('downloadBtn').style.display = 'block';
@@ -584,10 +575,8 @@ async function startDownload() {
 }
 
 async function cancelDownload() {
-  const cancelled = await window.api.cancelDownload();
-  if (cancelled) {
-    showToast('下载已被用户中断取消');
-  }
+  showToast('正在发送全局取消下载信号...');
+  window.api.cancelAllDownloadsSignal();
 }
 
 // ==========================================
@@ -1121,54 +1110,18 @@ async function downloadSingle(index) {
     return;
   }
 
-  // 绑定进度事件回调
-  window.api.onDownloadStatus((data) => {
-    const { index: fileIdx, status, fileName } = data;
-    const fill = document.getElementById(`progress-fill-${fileIdx}`);
-    const pct = document.getElementById(`progress-pct-${fileIdx}`);
-    const txt = document.getElementById(`status-text-${fileIdx}`);
-    
-    if (!fill || !pct || !txt) return;
+  // 初始化属性
+  file.originalIndex = index;
+  file.percentage = 0;
+  file.status = 'waiting';
+  file.speed = '排队中...';
 
-    if (status === 'downloading') {
-      txt.className = 'item-status status-downloading';
-      txt.innerText = '正在高速下载';
-      if (data.speed && data.speed.includes('重试')) {
-        const speedEl = document.getElementById(`speed-text-${fileIdx}`);
-        if (speedEl) speedEl.innerText = data.speed;
-      }
-    } else if (status === 'completed') {
-      txt.className = 'item-status status-completed';
-      txt.innerText = '下载完成';
-      fill.style.width = '100%';
-      pct.innerText = '100%';
-      const speedEl = document.getElementById(`speed-text-${fileIdx}`);
-      if (speedEl) speedEl.innerText = '已保存';
-      // 刷新账户流量余额
-      refreshUserInfo();
-    } else if (status === 'failed') {
-      txt.className = 'item-status status-failed';
-      txt.innerText = '下载失败';
-      if (data.speed && data.speed.includes('失败')) {
-        const speedEl = document.getElementById(`speed-text-${fileIdx}`);
-        if (speedEl) speedEl.innerText = data.speed;
-      }
-    }
-  });
-
-  window.api.onDownloadProgress((data) => {
-    const { index: fileIdx, percentage, speed } = data;
-    const fill = document.getElementById(`progress-fill-${fileIdx}`);
-    const pct = document.getElementById(`progress-pct-${fileIdx}`);
-    if (fill && pct && percentage !== null) {
-      fill.style.width = percentage + '%';
-      pct.innerText = percentage + '%';
-    }
-    if (speed !== null) {
-      const speedEl = document.getElementById(`speed-text-${fileIdx}`);
-      if (speedEl) speedEl.innerText = '当前速度: ' + speed;
-    }
-  });
+  // 加入正在下载列表
+  if (!activeDownloads.find(d => d.originalIndex === index)) {
+    activeDownloads.push(file);
+    renderDownloadingList();
+    updateTransferCounts();
+  }
 
   // 锁定相关按钮防止二次并发操作
   const singleBtn = document.getElementById(`btn-single-dl-${index}`);
@@ -1177,14 +1130,355 @@ async function downloadSingle(index) {
   document.getElementById('downloadBtn').disabled = true;
 
   try {
-    showToast(`文件 ${file.name} 独立高速加速下载已启动...`);
-    await window.api.startDownload([file], defaultDir, currentUser.token);
-    showToast(`文件 ${file.name} 单项下载完毕！`, 'success');
+    showToast(`文件 ${file.name} 独立多线程加速下载已启动，请在「传输列表」查看进度...`);
+    await window.api.startDownload([file], defaultDir, currentUser.token, maxConcurrentDownloadsSetting);
+    showToast(`文件 ${file.name} 下载任务运行完毕！`, 'info');
   } catch (e) {
     showToast(e.message, 'error');
   } finally {
     if (singleBtn) singleBtn.disabled = false;
     document.getElementById('checkSizeBtn').disabled = false;
     document.getElementById('downloadBtn').disabled = false;
+    
+    // 刷新
+    activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
+    renderDownloadingList();
+    updateTransferCounts();
+    await refreshUserInfo();
   }
 }
+
+// ==========================================
+// 【传输列表与排队管理控制器】
+// ==========================================
+let currentTransferSubTab = 'downloading';
+
+function switchTransferSubTab(subTab) {
+  currentTransferSubTab = subTab;
+  const btnDownloading = document.getElementById('tabBtnDownloading');
+  const btnCompleted = document.getElementById('tabBtnCompleted');
+  const listDownloading = document.getElementById('transferDownloadingList');
+  const listCompleted = document.getElementById('transferCompletedList');
+  const btnClear = document.getElementById('btnClearCompleted');
+
+  if (subTab === 'downloading') {
+    if (btnDownloading) btnDownloading.classList.add('active');
+    if (btnCompleted) btnCompleted.classList.remove('active');
+    if (listDownloading) listDownloading.style.display = 'flex';
+    if (listCompleted) listCompleted.style.display = 'none';
+    if (btnClear) btnClear.style.display = 'none';
+  } else {
+    if (btnDownloading) btnDownloading.classList.remove('active');
+    if (btnCompleted) btnCompleted.classList.add('active');
+    if (listDownloading) listDownloading.style.display = 'none';
+    if (listCompleted) listCompleted.style.display = 'flex';
+    if (btnClear) btnClear.style.display = 'block';
+  }
+}
+
+function updateTransferCounts() {
+  const downloadingCount = activeDownloads.length;
+  const downloadingCountEl = document.getElementById('downloadingCount');
+  const completedCountEl = document.getElementById('completedCount');
+  if (downloadingCountEl) downloadingCountEl.innerText = downloadingCount;
+  if (completedCountEl) completedCountEl.innerText = completedDownloads.length;
+
+  const badge = document.getElementById('activeDownloadsBadge');
+  if (badge) {
+    if (downloadingCount > 0) {
+      badge.innerText = downloadingCount;
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+}
+
+function renderDownloadingList() {
+  const container = document.getElementById('transferDownloadingList');
+  if (!container) return;
+
+  const emptyState = document.getElementById('emptyDownloadingState');
+  const cards = container.querySelectorAll('.transfer-item');
+  cards.forEach(c => c.remove());
+
+  if (activeDownloads.length === 0) {
+    if (emptyState) emptyState.style.display = 'flex';
+    return;
+  }
+  if (emptyState) emptyState.style.display = 'none';
+
+  activeDownloads.forEach((file) => {
+    const fileId = file.originalIndex;
+    const itemEl = document.createElement('div');
+    itemEl.className = 'transfer-item';
+    itemEl.id = `transfer-card-${fileId}`;
+
+    const totalSizeStr = formatBytes(file.size || 0);
+    const speedText = file.speed || '排队中...';
+    const percentage = file.percentage || 0;
+    const statusText = file.status === 'waiting' ? '排队中...' : '正在高速下载';
+
+    itemEl.innerHTML = `
+      <div class="transfer-item-info">
+        <div class="transfer-item-name-row">
+          <span class="transfer-item-name">${file.name}</span>
+          <span class="transfer-item-badge">${getFileTypeBadge(file.url || '')}</span>
+        </div>
+        <div class="transfer-item-meta">
+          <span class="transfer-item-size" id="trans-size-${fileId}">${formatBytes((file.size * percentage) / 100)} / ${totalSizeStr}</span>
+          <span class="transfer-item-speed" id="trans-speed-${fileId}">${speedText}</span>
+          <span class="transfer-item-status" id="trans-status-${fileId}">${statusText}</span>
+        </div>
+      </div>
+      <div class="transfer-progress-bar">
+        <div class="transfer-progress-fill" id="trans-progress-fill-${fileId}" style="width: ${percentage}%"></div>
+      </div>
+      <div class="transfer-item-actions">
+        <button class="action-btn cancel-btn" onclick="cancelSingleDownload(${fileId})">取消任务</button>
+      </div>
+    `;
+    container.appendChild(itemEl);
+  });
+}
+
+function renderCompletedList() {
+  const container = document.getElementById('transferCompletedList');
+  if (!container) return;
+
+  const emptyState = document.getElementById('emptyCompletedState');
+  const cards = container.querySelectorAll('.transfer-item');
+  cards.forEach(c => c.remove());
+
+  if (completedDownloads.length === 0) {
+    if (emptyState) emptyState.style.display = 'flex';
+    return;
+  }
+  if (emptyState) emptyState.style.display = 'none';
+
+  completedDownloads.forEach((item, index) => {
+    const itemEl = document.createElement('div');
+    itemEl.className = 'transfer-item completed';
+    itemEl.innerHTML = `
+      <div class="transfer-item-info">
+        <div class="transfer-item-name-row">
+          <span class="transfer-item-name">${item.name}</span>
+          <span class="transfer-item-badge">${getFileTypeBadge(item.url || '')}</span>
+        </div>
+        <div class="transfer-item-meta">
+          <span class="transfer-item-size">${formatBytes(item.size || 0)}</span>
+          <span class="transfer-item-status completed">${item.skip ? '已校验 (跳过)' : '下载完成'}</span>
+          <span class="transfer-item-time">${item.completedAt}</span>
+        </div>
+      </div>
+      <div class="transfer-item-actions">
+        <button class="action-btn open-file-btn" onclick="openCompletedFile('${item.savePath || ''}')">📂 打开文件</button>
+        <button class="action-btn" onclick="deleteCompletedRecord(${index})">✕ 删除记录</button>
+      </div>
+    `;
+    container.appendChild(itemEl);
+  });
+}
+
+function getFileTypeBadge(url) {
+  if (url.includes('sra_raw') || url.includes('sra-pub-run-odp')) return 'SRA Raw';
+  if (url.includes('ebi.ac.uk')) return 'EBI Raw';
+  if (url.includes('geo/series')) return 'GEO Suppl';
+  return 'Direct Link';
+}
+
+function openCompletedFile(savePath) {
+  if (!savePath) {
+    showToast('该任务无文件存储路径', 'error');
+    return;
+  }
+  window.api.openDownloadsFolder(savePath);
+}
+
+function deleteCompletedRecord(index) {
+  completedDownloads.splice(index, 1);
+  localStorage.setItem('completed_downloads', JSON.stringify(completedDownloads));
+  renderCompletedList();
+  updateTransferCounts();
+}
+
+function clearCompletedDownloads() {
+  completedDownloads = [];
+  localStorage.setItem('completed_downloads', JSON.stringify([]));
+  renderCompletedList();
+  updateTransferCounts();
+}
+
+async function cancelSingleDownload(fileId) {
+  try {
+    showToast('正在取消下载任务...');
+    const res = await window.api.cancelDownload(fileId);
+    if (res) {
+      showToast('任务已取消', 'success');
+      activeDownloads = activeDownloads.filter(d => d.originalIndex !== fileId);
+      renderDownloadingList();
+      updateTransferCounts();
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function changeMaxConcurrent(val) {
+  maxConcurrentDownloadsSetting = parseInt(val, 10) || 3;
+  try {
+    const settings = await window.api.getSettings();
+    settings.maxConcurrent = maxConcurrentDownloadsSetting;
+    await window.api.saveSettings(settings);
+    showToast(`同时下载数量已修改为：${maxConcurrentDownloadsSetting}`, 'success');
+  } catch (err) {
+    console.error('保存并发设置失败:', err);
+  }
+}
+
+// 载入已下载历史与并发数
+function initTransfersAndSettings(settings) {
+  // 1. 载入已完成历史
+  try {
+    const stored = localStorage.getItem('completed_downloads');
+    if (stored) {
+      completedDownloads = JSON.parse(stored);
+    }
+  } catch (e) {
+    console.error('Failed to load completed history:', e);
+  }
+
+  // 2. 载入并发数量设置
+  if (settings && settings.maxConcurrent) {
+    maxConcurrentDownloadsSetting = parseInt(settings.maxConcurrent, 10) || 3;
+    const select = document.getElementById('settingsMaxConcurrent');
+    if (select) select.value = maxConcurrentDownloadsSetting;
+  }
+
+  renderCompletedList();
+  renderDownloadingList();
+  updateTransferCounts();
+}
+
+// ==========================================
+// 【全局 IPC 进度监听事件绑定】
+// ==========================================
+window.api.onDownloadStatus((data) => {
+  const { index, status, fileName, savePath } = data;
+  
+  // 1. 更新下载中心的队列 UI
+  const fill = document.getElementById(`progress-fill-${index}`);
+  const pct = document.getElementById(`progress-pct-${index}`);
+  const txt = document.getElementById(`status-text-${index}`);
+  
+  if (txt) {
+    if (status === 'downloading') {
+      txt.className = 'item-status status-downloading';
+      txt.innerText = '正在高速下载';
+      if (data.speed && data.speed.includes('重试')) {
+        const speedEl = document.getElementById(`speed-text-${index}`);
+        if (speedEl) speedEl.innerText = data.speed;
+      }
+    } else if (status === 'completed') {
+      txt.className = 'item-status status-completed';
+      txt.innerText = '下载完成';
+      if (fill) fill.style.width = '100%';
+      if (pct) pct.innerText = '100%';
+      const speedEl = document.getElementById(`speed-text-${index}`);
+      if (speedEl) speedEl.innerText = data.speed || '已保存';
+    } else if (status === 'failed') {
+      txt.className = 'item-status status-failed';
+      txt.innerText = '下载失败';
+      const speedEl = document.getElementById(`speed-text-${index}`);
+      if (speedEl) speedEl.innerText = data.speed || '下载失败';
+    } else if (status === 'cancelled') {
+      txt.className = 'item-status status-failed';
+      txt.innerText = '已取消';
+      const speedEl = document.getElementById(`speed-text-${index}`);
+      if (speedEl) speedEl.innerText = '已取消';
+    }
+  }
+
+  // 2. 更新传输中心的正在下载/已完成任务状态
+  const activeItem = activeDownloads.find(d => d.originalIndex === index);
+  if (activeItem) {
+    activeItem.status = status;
+    if (data.speed) activeItem.speed = data.speed;
+    
+    if (status === 'completed') {
+      activeItem.percentage = 100;
+      const completedItem = {
+        name: activeItem.name,
+        url: activeItem.url,
+        size: activeItem.size,
+        savePath: savePath || '',
+        completedAt: new Date().toLocaleString(),
+        skip: (data.speed && data.speed.includes('跳过'))
+      };
+      completedDownloads.unshift(completedItem);
+      localStorage.setItem('completed_downloads', JSON.stringify(completedDownloads));
+      
+      activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
+      renderCompletedList();
+      renderDownloadingList();
+    } else if (status === 'failed' || status === 'cancelled') {
+      activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
+      renderDownloadingList();
+    } else {
+      const transStatus = document.getElementById(`trans-status-${index}`);
+      const transSpeed = document.getElementById(`trans-speed-${index}`);
+      if (transStatus) {
+        transStatus.innerText = status === 'waiting' ? '排队中...' : '正在高速下载';
+      }
+      if (transSpeed && data.speed) {
+        transSpeed.innerText = data.speed;
+      }
+    }
+    updateTransferCounts();
+  }
+});
+
+window.api.onDownloadProgress((data) => {
+  const { index, percentage, speed } = data;
+  
+  // 1. 更新下载中心的队列 UI
+  if (percentage !== null) {
+    const fill = document.getElementById(`progress-fill-${index}`);
+    const pct = document.getElementById(`progress-pct-${index}`);
+    if (fill) fill.style.width = percentage + '%';
+    if (pct) pct.innerText = percentage + '%';
+  }
+  if (speed !== null) {
+    const speedEl = document.getElementById(`speed-text-${index}`);
+    if (speedEl) speedEl.innerText = '当前速度: ' + speed;
+  }
+
+  // 2. 更新传输中心 UI
+  const activeItem = activeDownloads.find(d => d.originalIndex === index);
+  if (activeItem) {
+    if (percentage !== null) {
+      activeItem.percentage = percentage;
+      const fill = document.getElementById(`trans-progress-fill-${index}`);
+      const sizeEl = document.getElementById(`trans-size-${index}`);
+      if (fill) fill.style.width = percentage + '%';
+      if (sizeEl) {
+        const totalSizeStr = formatBytes(activeItem.size || 0);
+        sizeEl.innerText = `${formatBytes((activeItem.size * percentage) / 100)} / ${totalSizeStr}`;
+      }
+    }
+    if (speed !== null) {
+      activeItem.speed = speed;
+      const speedEl = document.getElementById(`trans-speed-${index}`);
+      if (speedEl) speedEl.innerText = '当前速度: ' + speed;
+    }
+  }
+});
+
+// 绑定到 window 暴露给 HTML 属性
+window.switchTransferSubTab = switchTransferSubTab;
+window.changeMaxConcurrent = changeMaxConcurrent;
+window.openCompletedFile = openCompletedFile;
+window.deleteCompletedRecord = deleteCompletedRecord;
+window.clearCompletedDownloads = clearCompletedDownloads;
+window.cancelSingleDownload = cancelSingleDownload;
+window.initTransfersAndSettings = initTransfersAndSettings;

@@ -67,6 +67,7 @@ loadConfiguration();
 let mainWindow;
 let clashProcess = null;
 let currentAxelProcess = null;
+const activeAxelProcesses = new Map();
 
 function killProcess(proc) {
   if (!proc) return;
@@ -84,6 +85,16 @@ function killProcess(proc) {
   } catch (e) {
     console.error(`Error killing process:`, e);
   }
+}
+
+function killAllAxelProcesses() {
+  for (const [index, proc] of activeAxelProcesses.entries()) {
+    if (proc) {
+      console.log(`Terminating Axel process for index ${index}...`);
+      killProcess(proc);
+    }
+  }
+  activeAxelProcesses.clear();
 }
 
 function ensureExecutable(filePath) {
@@ -280,11 +291,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   stopClash();
-  if (currentAxelProcess) {
-    console.log('Terminating Axel process...');
-    killProcess(currentAxelProcess);
-    currentAxelProcess = null;
-  }
+  killAllAxelProcesses();
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -292,11 +299,7 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   stopClash();
-  if (currentAxelProcess) {
-    console.log('Terminating Axel process...');
-    killProcess(currentAxelProcess);
-    currentAxelProcess = null;
-  }
+  killAllAxelProcesses();
 });
 
 // ==========================================
@@ -536,7 +539,24 @@ ipcMain.handle('clash-stop', () => {
 // --- 自动更新与外部链接 ---
 ipcMain.handle('check-for-updates', async () => {
   try {
-    const res = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, { timeout: 5000 });
+    let res;
+    // 优先尝试走 Clash 代理
+    if (clashProcess) {
+      try {
+        console.log('Attempting check-for-updates via Clash proxy...');
+        res = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, {
+          timeout: 3000,
+          proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 }
+        });
+      } catch (proxyErr) {
+        console.warn(`Version check via proxy failed: ${proxyErr.message}, falling back to direct connection`);
+      }
+    }
+    
+    // 代理不通或未开启时，走直连
+    if (!res) {
+      res = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, { timeout: 4000 });
+    }
     const currentVersion = app.getVersion();
     const latestVersion = res.data.version;
     
@@ -761,8 +781,8 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
   return files;
 });
 
-// --- 下载调度引擎 ---
-ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
+// --- 下载调度引擎 (支持多任务并行调度) ---
+ipcMain.handle('start-download', async (event, { files, targetDir, token, maxConcurrent }) => {
   if (!fs.existsSync(targetDir)) {
     fs.mkdirSync(targetDir, { recursive: true });
   }
@@ -771,7 +791,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
   try {
     const totalRequiredSpace = files.reduce((acc, f) => acc + (f.size || 0), 0);
     const stats = await fs.promises.statfs(targetDir);
-    const freeSpace = stats.bavail * stats.bsize; // 针对普通用户可用的空闲块字节数
+    const freeSpace = stats.bavail * stats.bsize;
     if (freeSpace < totalRequiredSpace) {
       throw new Error(`磁盘可用空间不足！所需空间: ${(totalRequiredSpace / (1024 * 1024 * 1024)).toFixed(2)} GB, 可用空间: ${(freeSpace / (1024 * 1024 * 1024)).toFixed(2)} GB`);
     }
@@ -788,10 +808,17 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
   ensureExecutable(axelBin);
 
   const MAX_RETRIES = 3;
+  const maxConcurrentCount = parseInt(maxConcurrent, 10) || 3;
 
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    const fileIndex = file.originalIndex !== undefined ? file.originalIndex : i;
+  let activeCount = 0;
+  let fileIndexInQueue = 0;
+  let cancelled = false;
+
+  // 保存每个正在下载的文件的取消控制器函数（防止中途取消）
+  const cancelTokens = new Map();
+
+  async function downloadSingleFile(file, fileIndex) {
+    if (cancelled) return;
     const fileDestFolder = file.folder ? path.join(targetDir, file.folder) : targetDir;
     
     if (!fs.existsSync(fileDestFolder)) {
@@ -800,15 +827,35 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
 
     const savePath = path.join(fileDestFolder, file.name);
 
+    // 1. 去重与文件完整性大小核验
+    if (fs.existsSync(savePath)) {
+      try {
+        const localStats = fs.statSync(savePath);
+        if (file.size && localStats.size === file.size) {
+          console.log(`File ${file.name} already exists and matches expected size. Skipping download.`);
+          mainWindow.webContents.send('download-status', {
+            index: fileIndex,
+            fileName: file.name,
+            status: 'completed',
+            percentage: 100,
+            speed: '已校验(跳过)',
+            savePath
+          });
+          return;
+        }
+      } catch (err) {
+        console.warn(`Failed to verify file integrity for ${file.name}, proceeding with download:`, err.message);
+      }
+    }
+
     let attempt = 0;
     let downloadSuccess = false;
     let lastErrorMsg = '';
 
-    while (attempt < MAX_RETRIES && !downloadSuccess) {
+    while (attempt < MAX_RETRIES && !downloadSuccess && !cancelled) {
       attempt++;
 
       if (attempt > 1) {
-        // 指数退避重试延迟
         const backoffTime = Math.pow(2, attempt) * 1000;
         console.log(`Retrying download for ${file.name} in ${backoffTime}ms (Attempt ${attempt}/${MAX_RETRIES})`);
         mainWindow.webContents.send('download-status', {
@@ -818,15 +865,33 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
           percentage: null,
           speed: `网络波动重试中 (${attempt}/${MAX_RETRIES})...`
         });
-        await new Promise(resolve => setTimeout(resolve, backoffTime));
+        
+        // 等待重试或被取消
+        let sleepFinished = false;
+        await Promise.race([
+          new Promise(resolve => setTimeout(() => { sleepFinished = true; resolve(); }, backoffTime)),
+          new Promise((resolve, reject) => {
+            cancelTokens.set(fileIndex, () => {
+              reject(new Error('Cancelled'));
+            });
+          })
+        ]).catch(() => {
+          lastErrorMsg = '任务已取消';
+        });
+
+        if (!sleepFinished) {
+          break; // 已经被取消
+        }
       }
 
-      // 仅在首次尝试且无断点 st 文件时，清理上一次被破坏的废件
       if (attempt === 1 && fs.existsSync(savePath) && !fs.existsSync(savePath + '.st')) {
-        fs.unlinkSync(savePath);
+        try {
+          fs.unlinkSync(savePath);
+        } catch (e) {
+          console.warn(`Failed to clean initial broken file ${savePath}:`, e.message);
+        }
       }
 
-      // 告知前端当前正在下载/重试第几个文件
       mainWindow.webContents.send('download-status', {
         index: fileIndex,
         fileName: file.name,
@@ -835,21 +900,20 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
         speed: '正在高速下载...'
       });
 
-      // 组装 Axel 环境变量 (强制走本地 Clash 代理端口 43289)
       const env = {
         ...process.env,
         http_proxy: 'http://127.0.0.1:43289',
         https_proxy: 'http://127.0.0.1:43289',
         all_proxy: 'http://127.0.0.1:43289'
       };
-      // 默认使用 16 线程，小文件限制较低线程数以防触发 NCBI/EBI 速率控制屏蔽
+
       let threads = 16;
       if (file.size) {
-        if (file.size < 500 * 1024) { // < 500 KB
+        if (file.size < 500 * 1024) {
           threads = 1;
-        } else if (file.size < 5 * 1024 * 1024) { // < 5 MB
+        } else if (file.size < 5 * 1024 * 1024) {
           threads = 4;
-        } else if (file.size < 50 * 1024 * 1024) { // < 50 MB
+        } else if (file.size < 50 * 1024 * 1024) {
           threads = 8;
         }
       }
@@ -859,20 +923,29 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
 
       try {
         await new Promise((resolve, reject) => {
-          currentAxelProcess = spawn(axelBin, args, { env });
+          if (cancelled) {
+            return reject(new Error('Cancelled'));
+          }
 
-          currentAxelProcess.on('error', (err) => {
+          const proc = spawn(axelBin, args, { env });
+          activeAxelProcesses.set(fileIndex, proc);
+
+          // 注册当前文件任务的取消执行逻辑
+          cancelTokens.set(fileIndex, () => {
+            killProcess(proc);
+            activeAxelProcesses.delete(fileIndex);
+            reject(new Error('Cancelled'));
+          });
+
+          proc.on('error', (err) => {
             console.error('Axel spawn error:', err);
-            currentAxelProcess = null;
+            activeAxelProcesses.delete(fileIndex);
             reject(err);
           });
 
-          currentAxelProcess.stdout.on('data', (data) => {
+          proc.stdout.on('data', (data) => {
             const output = data.toString();
-            
-            // 解析进度百分比
             const pctMatch = output.match(/\[\s*(\d+)%\]/);
-            // 解析下载速度
             const speedMatch = output.match(/\[\s*([\d\.]+\s*[KMGT]*B\/s)\]/);
 
             let percentage = pctMatch ? parseInt(pctMatch[1]) : null;
@@ -887,12 +960,8 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
             }
           });
 
-          currentAxelProcess.stderr.on('data', (data) => {
-            console.error(`[Axel Error] ${data}`);
-          });
-
-          currentAxelProcess.on('close', (code) => {
-            currentAxelProcess = null;
+          proc.on('close', (code) => {
+            activeAxelProcesses.delete(fileIndex);
             if (code === 0) {
               resolve();
             } else {
@@ -905,11 +974,15 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
       } catch (err) {
         lastErrorMsg = err.message;
         console.warn(`Attempt ${attempt} for ${file.name} failed: ${lastErrorMsg}`);
+        if (lastErrorMsg === 'Cancelled') {
+          break; // 被取消时立即中断重试循环
+        }
       }
     }
 
+    cancelTokens.delete(fileIndex);
+
     if (downloadSuccess) {
-      // 下载成功，上报流量消耗到后端
       try {
         console.log(`Download success. Reporting consumed bytes: ${file.size}`);
         await axios.post(`${BACKEND_BASE_URL}/api/user/consume`, {
@@ -925,27 +998,83 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token }) => {
         fileName: file.name,
         status: 'completed',
         percentage: 100,
-        speed: '已保存'
+        speed: '已保存',
+        savePath
       });
     } else {
       mainWindow.webContents.send('download-status', {
         index: fileIndex,
         fileName: file.name,
-        status: 'failed',
+        status: lastErrorMsg === 'Cancelled' ? 'cancelled' : 'failed',
         percentage: 0,
-        speed: '下载失败'
+        speed: lastErrorMsg === 'Cancelled' ? '已取消' : '下载失败'
       });
-      throw new Error(`文件 ${file.name} 下载在重试 ${MAX_RETRIES} 次后均失败: ${lastErrorMsg}`);
     }
   }
 
-  return { success: true };
+  // 开始并行执行队列池
+  return new Promise((resolve) => {
+    let completedCount = 0;
+
+    async function startNext() {
+      if (cancelled) return;
+      
+      if (fileIndexInQueue >= files.length) {
+        if (activeCount === 0) {
+          resolve({ success: true, completed: completedCount });
+        }
+        return;
+      }
+
+      const fileIdx = fileIndexInQueue++;
+      const file = files[fileIdx];
+      const fileIndex = file.originalIndex !== undefined ? file.originalIndex : fileIdx;
+
+      activeCount++;
+      try {
+        await downloadSingleFile(file, fileIndex);
+        completedCount++;
+      } catch (err) {
+        console.error(`Task execution for ${file.name} finished:`, err.message);
+      } finally {
+        activeCount--;
+        startNext();
+      }
+    }
+
+    // 注册全局取消钩子
+    event.sender.on('cancel-all-downloads-signal', () => {
+      cancelled = true;
+      killAllAxelProcesses();
+      resolve({ success: true, cancelled: true });
+    });
+
+    for (let w = 0; w < Math.min(maxConcurrentCount, files.length); w++) {
+      startNext();
+    }
+  });
 });
 
-ipcMain.handle('cancel-download', () => {
-  if (currentAxelProcess) {
-    killProcess(currentAxelProcess);
-    currentAxelProcess = null;
+ipcMain.handle('cancel-download', (event, fileIndex) => {
+  if (fileIndex !== undefined && fileIndex !== null) {
+    const proc = activeAxelProcesses.get(fileIndex);
+    if (proc) {
+      console.log(`Cancelling single task at index: ${fileIndex}`);
+      killProcess(proc);
+      activeAxelProcesses.delete(fileIndex);
+      return true;
+    }
+  } else {
+    console.log('Cancelling all active downloads...');
+    killAllAxelProcesses();
+    return true;
+  }
+  return false;
+});
+
+ipcMain.handle('open-downloads-folder', (event, folderPath) => {
+  if (folderPath && fs.existsSync(folderPath)) {
+    shell.openPath(folderPath);
     return true;
   }
   return false;

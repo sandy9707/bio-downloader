@@ -29,8 +29,10 @@ contextBridge.exposeInMainWorld('api', {
 
   // 下载管理
   checkSize: (type, inputVal) => ipcRenderer.invoke('check-download-size', { type, inputVal }),
-  startDownload: (files, targetDir, token) => ipcRenderer.invoke('start-download', { files, targetDir, token }),
-  cancelDownload: () => ipcRenderer.invoke('cancel-download'),
+  startDownload: (files, targetDir, token, maxConcurrent) => ipcRenderer.invoke('start-download', { files, targetDir, token, maxConcurrent }),
+  cancelDownload: (fileIndex) => ipcRenderer.invoke('cancel-download', fileIndex),
+  openDownloadsFolder: (folderPath) => ipcRenderer.invoke('open-downloads-folder', folderPath),
+  cancelAllDownloadsSignal: () => ipcRenderer.send('cancel-all-downloads-signal'),
 
   // 自动更新与发布页
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
