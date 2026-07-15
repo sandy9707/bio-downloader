@@ -341,16 +341,34 @@ async function downloadUpdate(platform) {
   }
   if (!updateInfoGlobal) return;
 
-  const url = platform === 'win' ? updateInfoGlobal.winUrl : updateInfoGlobal.macUrl;
-  const fileName = url.substring(url.lastIndexOf('/') + 1);
+  const backendUrl = platform === 'win' ? updateInfoGlobal.winUrl : updateInfoGlobal.macUrl;
+  const fileName = backendUrl.substring(backendUrl.lastIndexOf('/') + 1);
   const btnId = platform === 'win' ? 'downloadWinUpdateBtn' : 'downloadMacUpdateBtn';
   
   const btn = document.getElementById(btnId);
   const originalText = btn ? btn.innerText : '下载';
 
+  // 根据当前版本号动态生成 GitHub Release 下载直链
+  const githubUrl = platform === 'win'
+    ? `https://github.com/sandy9707/bio-downloader/releases/download/v${updateInfoGlobal.latestVersion}/BioDownloader.${updateInfoGlobal.latestVersion}.exe`
+    : `https://github.com/sandy9707/bio-downloader/releases/download/v${updateInfoGlobal.latestVersion}/BioDownloader-${updateInfoGlobal.latestVersion}-arm64.dmg`;
+
+  // 检测 Clash 内置加速代理是否启动
+  const clashRunning = await window.api.clashStatus();
+  let targetUrl = backendUrl;
+  let usingGithub = false;
+
+  if (clashRunning) {
+    console.log('检测到加速通道已开启，优先使用 GitHub Releases 下载源:', githubUrl);
+    targetUrl = githubUrl;
+    usingGithub = true;
+  } else {
+    console.log('使用默认发布站下载源:', backendUrl);
+  }
+
   const updateFile = {
     name: fileName,
-    url: url,
+    url: targetUrl,
     size: 150 * 1024 * 1024, // 150MB placeholder
     originalIndex: 9999, // Special index for update
     percentage: 0,
@@ -379,15 +397,32 @@ async function downloadUpdate(platform) {
       btn.innerText = '已加入传输列表下载...';
     }
     
+    // 执行第一次下载尝试
     await window.api.startDownload([updateFile], defaultDir, currentUser ? currentUser.token : '', maxConcurrentDownloadsSetting);
     
     if (btn) {
       btn.innerText = '下载完成！已在文件夹中高亮';
     }
   } catch (err) {
+    // 如果是 GitHub 源下载失败，自动降级切换至发布页自建源重试
+    if (usingGithub) {
+      console.warn('GitHub 下载失败，自动回退到自建发布站下载源重试:', backendUrl);
+      showToast('加速通道连接超时，已自动为您切换到发布站下载源重新下载...', 'warning');
+      updateFile.url = backendUrl;
+      try {
+        await window.api.startDownload([updateFile], defaultDir, currentUser ? currentUser.token : '', maxConcurrentDownloadsSetting);
+        if (btn) {
+          btn.innerText = '下载完成！已在文件夹中高亮';
+        }
+        return;
+      } catch (err2) {
+        console.error('自建发布站下载源也重试失败:', err2.message);
+      }
+    }
+
     if (btn) btn.innerText = originalText;
     showToast('加速下载更新包失败，已自动为您打开浏览器下载...', 'error');
-    window.api.openExternalUrl(url);
+    window.api.openExternalUrl(backendUrl);
   } finally {
     isUpdating = false;
     if (btn) btn.disabled = false;
@@ -791,11 +826,14 @@ async function loadPackages() {
         card.className = 'package-card';
         
         const trafficStr = formatBytes(pkg.trafficBytes);
+        const priceHtml = pkg.originalPrice
+          ? `<span style="text-decoration: line-through; font-size: 0.9rem; color: var(--text-muted); margin-right: 0.5rem; font-weight: normal;">¥ ${pkg.originalPrice.toFixed(2)}</span>¥ ${pkg.price.toFixed(2)}`
+          : `¥ ${pkg.price.toFixed(2)}`;
         
         card.innerHTML = `
           <h4 style="font-weight:bold;">${pkg.name}</h4>
           <div style="font-size:0.85rem;color:var(--text-muted);">有效期: ${pkg.days} 天 | 纯流量包</div>
-          <div class="package-price">¥ ${pkg.price.toFixed(2)}</div>
+          <div class="package-price">${priceHtml}</div>
           <div style="font-size:1.1rem;font-weight:bold;color:#10b981;margin-bottom:0.5rem;">高速流量: ${trafficStr}</div>
           <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-top:0.5rem; margin-bottom:0.75rem; background:rgba(255,255,255,0.03); padding:0.4rem 0.6rem; border-radius:6px; border:1px solid var(--border-color);">
             <span style="font-size:0.85rem; color:var(--text-muted);">选择购买数量:</span>
