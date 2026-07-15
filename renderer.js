@@ -650,6 +650,10 @@ async function verifyToken(token, isAutoLogin = false) {
       // 更新文字
       document.getElementById('headerUsername').innerText = res.username;
       document.getElementById('profUsername').innerText = res.username;
+      
+      const profUidEl = document.getElementById('profUid');
+      if (profUidEl) profUidEl.innerText = res.uid || '无';
+      
       document.getElementById('profToken').value = res.token;
       
       const expiryDate = new Date(res.expireAt);

@@ -1052,6 +1052,10 @@
             <label>用户名</label>
             <div id="profUsername" style="font-weight:bold;font-size:1.1rem;margin-top:0.25rem;">-</div>
           </div>
+          <div class="form-group">
+            <label>用户 UID (充值凭证)</label>
+            <div id="profUid" style="font-weight:bold;font-size:1.1rem;color:#eab308;margin-top:0.25rem;">-</div>
+          </div>
           <div class="form-group" style="display: none;">
             <label>我的 Token (用于加速器连接)</label>
             <input type="text" id="profToken" readonly style="cursor:pointer;" onclick="this.select()">
@@ -1105,6 +1109,21 @@
               <button id="downloadWinUpdateBtn" class="btn btn-success" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="downloadUpdate('win')">下载 Windows 绿色版</button>
               <button id="downloadMacUpdateBtn" class="btn btn-primary" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="downloadUpdate('mac')">下载 Mac 安装包</button>
               <button class="btn btn-secondary" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="openReleasePage()">发布页</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 官方发布渠道 -->
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">📋 官方发布渠道</label>
+          <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-top:0.5rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color);">
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.9rem; flex-wrap:wrap; gap:0.5rem;">
+              <span style="color:var(--text-muted);">官方高速主页:</span>
+              <a href="#" style="color:#38bdf8; text-decoration:none; font-weight:600;" onclick="window.api.openExternalUrl('https://biodown.yeyeziblog.eu.org/'); return false;">https://biodown.yeyeziblog.eu.org/</a>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.9rem; flex-wrap:wrap; gap:0.5rem; border-top:1px solid rgba(255,255,255,0.05); padding-top:0.5rem;">
+              <span style="color:var(--text-muted);">GitHub Releases 开源托管:</span>
+              <a href="#" style="color:#38bdf8; text-decoration:none; font-weight:600;" onclick="window.api.openExternalUrl('https://github.com/sandy9707/bio-downloader/releases'); return false;">GitHub Releases 🚀</a>
             </div>
           </div>
         </div>
