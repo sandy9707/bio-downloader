@@ -19,7 +19,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // 支付计费
   getPackages: () => ipcRenderer.invoke('api-get-packages'),
-  createOrder: (token, packageId, payType) => ipcRenderer.invoke('api-create-order', { token, packageId, payType }),
+  createOrder: (token, packageId, payType, quantity) => ipcRenderer.invoke('api-create-order', { token, packageId, payType, quantity }),
   mockConfirm: (orderId) => ipcRenderer.invoke('api-mock-confirm', { orderId }),
 
   // Clash 代理内核控制

@@ -782,7 +782,11 @@ async function loadPackages() {
           <h4 style="font-weight:bold;">${pkg.name}</h4>
           <div style="font-size:0.85rem;color:var(--text-muted);">有效期: ${pkg.days} 天 | 纯流量包</div>
           <div class="package-price">¥ ${pkg.price.toFixed(2)}</div>
-          <div style="font-size:1.1rem;font-weight:bold;color:#10b981;">高速流量: ${trafficStr}</div>
+          <div style="font-size:1.1rem;font-weight:bold;color:#10b981;margin-bottom:0.5rem;">高速流量: ${trafficStr}</div>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-top:0.5rem; margin-bottom:0.75rem; background:rgba(255,255,255,0.03); padding:0.4rem 0.6rem; border-radius:6px; border:1px solid var(--border-color);">
+            <span style="font-size:0.85rem; color:var(--text-muted);">选择购买数量:</span>
+            <input type="number" id="qty-${pkg.id}" value="1" min="1" max="99" style="width:60px; background:var(--bg-input); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:0.2rem; text-align:center; outline:none; font-weight:bold;">
+          </div>
           <div style="margin-top:0.5rem;">
             <button class="btn btn-primary" style="width:100%;padding:0.5rem;" onclick="buyPackage('${pkg.id}', 'alipay')">立即购买（支付宝）</button>
           </div>
@@ -802,9 +806,12 @@ async function buyPackage(packageId, payType) {
     return;
   }
   
+  const qtyInput = document.getElementById(`qty-${packageId}`);
+  const quantity = qtyInput ? parseInt(qtyInput.value, 10) || 1 : 1;
+  
   try {
     showToast('正在创建交易订单...');
-    const res = await window.api.createOrder(currentUser.token, packageId, payType);
+    const res = await window.api.createOrder(currentUser.token, packageId, payType, quantity);
     if (res.success) {
       currentOrderId = res.checkoutUrl.match(/orderId=(ORD_\w+)/)?.[1] || 'MOCK';
       

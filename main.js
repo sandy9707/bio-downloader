@@ -516,8 +516,8 @@ ipcMain.handle('api-get-packages', async () => {
   return res.data;
 });
 
-ipcMain.handle('api-create-order', async (event, { token, packageId, payType }) => {
-  const res = await axios.post(`${BACKEND_BASE_URL}/api/pay/create`, { token, packageId, payType });
+ipcMain.handle('api-create-order', async (event, { token, packageId, payType, quantity }) => {
+  const res = await axios.post(`${BACKEND_BASE_URL}/api/pay/create`, { token, packageId, payType, quantity });
   return res.data;
 });
 
