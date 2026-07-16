@@ -1418,6 +1418,12 @@ function initTransfersAndSettings(settings) {
     if (select) select.value = maxConcurrentDownloadsSetting;
   }
 
+  // 3. 载入诊断日志开关设置
+  const toggle = document.getElementById('settingsLoggingToggle');
+  if (toggle) {
+    toggle.checked = (settings && settings.loggingEnabled) || false;
+  }
+
   renderCompletedList();
   renderDownloadingList();
   updateTransferCounts();
@@ -1545,3 +1551,193 @@ window.deleteCompletedRecord = deleteCompletedRecord;
 window.clearCompletedDownloads = clearCompletedDownloads;
 window.cancelSingleDownload = cancelSingleDownload;
 window.initTransfersAndSettings = initTransfersAndSettings;
+
+// ==========================================
+// 【节点诊断与测速功能 (v1.4.5)】
+// ==========================================
+
+function runUstcSpeedTest() {
+  window.api.openExternalUrl('https://test.ustc.edu.cn/');
+}
+
+async function checkNodeConnection() {
+  const statusEl = document.getElementById('diagStatus');
+  const btn = document.getElementById('diagBtn');
+  const icon = document.getElementById('diagIcon');
+  
+  statusEl.innerText = '正在测速诊断中...';
+  statusEl.style.color = 'var(--text-muted)';
+  btn.disabled = true;
+  icon.innerText = '🔄';
+
+  try {
+    const res = await window.api.testNodeConnection();
+    if (res.proxy.ok) {
+      statusEl.innerHTML = `<span style="color:#10b981;">🟢 加速节点连通正常 (${res.proxy.time}ms)</span><br>` + 
+                           `<span style="font-size:0.75rem;color:var(--text-muted);">本地直连结果: ${res.direct.ok ? `已连通 (${res.direct.time}ms)` : '❌ 无法连通'}</span>`;
+      icon.innerText = '✅';
+    } else {
+      statusEl.innerHTML = `<span style="color:#ef4444;">❌ 加速节点连接异常</span><br>` +
+                           `<span style="font-size:0.75rem;color:var(--text-muted);">请核对是否已登录账户且开启了加速通道</span>`;
+      icon.innerText = '⚠️';
+    }
+  } catch (err) {
+    statusEl.innerHTML = `<span style="color:#ef4444;">诊断出错: ${err.message}</span>`;
+    icon.innerText = '⚠️';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ==========================================
+// 【诊断日志系统管理 (v1.4.5)】
+// ==========================================
+
+async function toggleLogging(checked) {
+  try {
+    const oldSettings = await window.api.getSettings();
+    await window.api.saveSettings({ loggingEnabled: checked });
+    
+    // 如果是关闭日志，且之前是开启状态，主动提示用户上报刚刚生成的错误日志
+    if (!checked && oldSettings.loggingEnabled) {
+      const logs = await window.api.getLogsList();
+      if (logs && logs.length > 0) {
+        setTimeout(() => {
+          if (confirm('检测到您刚刚关闭了日志记录。是否需要打开日志管理器，查看刚刚捕获的下载错误日志并一键上传给开发者排查？')) {
+            openLogManagerModal();
+          }
+        }, 300);
+      }
+    }
+    showToast(checked ? '已启用详细下载诊断日志' : '已关闭下载诊断日志');
+  } catch (err) {
+    console.error('Failed to toggle logging settings:', err);
+  }
+}
+
+let localLogsList = [];
+let selectedLogFilename = '';
+
+async function openLogManagerModal() {
+  document.getElementById('logManagerModal').style.display = 'flex';
+  hideLogPreview();
+  await loadLocalLogsList();
+}
+
+function closeLogManagerModal() {
+  document.getElementById('logManagerModal').style.display = 'none';
+}
+
+async function loadLocalLogsList() {
+  try {
+    localLogsList = await window.api.getLogsList();
+    renderLocalLogsTable(localLogsList);
+  } catch (err) {
+    console.error('Failed to load local logs:', err);
+  }
+}
+
+function renderLocalLogsTable(list) {
+  const tbody = document.getElementById('localLogsTableBody');
+  tbody.innerHTML = '';
+  
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding: 1rem; color: var(--text-muted);">暂无捕获的下载诊断日志</td></tr>';
+    return;
+  }
+  
+  list.forEach(log => {
+    const tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid rgba(255,255,255,0.02)';
+    
+    const timeStr = new Date(log.time).toLocaleString();
+    const sizeKB = (log.size / 1024).toFixed(2) + ' KB';
+    
+    tr.innerHTML = `
+      <td style="padding: 0.5rem; text-align: left; font-family: monospace; font-size: 0.8rem; word-break: break-all;">
+        ${log.name}<br>
+        <span style="font-size: 0.7rem; color: var(--text-muted); font-family: inherit;">时间: ${timeStr}</span>
+      </td>
+      <td style="padding: 0.5rem; text-align: right; color: var(--text-muted);">${sizeKB}</td>
+      <td style="padding: 0.5rem; text-align: center; white-space: nowrap;">
+        <button class="btn btn-secondary" style="font-size:0.75rem; padding: 0.2rem 0.4rem; margin-right: 0.25rem;" onclick="viewLocalLogDetail('${log.name}')">查看</button>
+        <button class="btn btn-danger" style="font-size:0.75rem; padding: 0.2rem 0.4rem;" onclick="deleteLocalLog('${log.name}')">删除</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function viewLocalLogDetail(filename) {
+  try {
+    selectedLogFilename = filename;
+    const content = await window.api.readLogContent(filename);
+    document.getElementById('previewLogName').innerText = filename;
+    document.getElementById('logPreviewContent').innerText = content || '(空日志文件)';
+    document.getElementById('logPreviewSection').style.display = 'flex';
+  } catch (err) {
+    showToast('读取日志文件失败: ' + err.message, 'error');
+  }
+}
+
+function hideLogPreview() {
+  document.getElementById('logPreviewSection').style.display = 'none';
+  selectedLogFilename = '';
+}
+
+async function deleteLocalLog(filename) {
+  if (!confirm(`确定删除本地日志文件 ${filename} 吗？`)) return;
+  try {
+    const ok = await window.api.deleteLog(filename);
+    if (ok) {
+      showToast('日志文件已删除');
+      if (selectedLogFilename === filename) {
+        hideLogPreview();
+      }
+      await loadLocalLogsList();
+    } else {
+      showToast('删除失败', 'error');
+    }
+  } catch (err) {
+    showToast('删除出错: ' + err.message, 'error');
+  }
+}
+
+async function uploadSelectedLog() {
+  if (!selectedLogFilename) return;
+  if (!currentUser) {
+    showToast('上报日志前请先登录您的账户！', 'error');
+    return;
+  }
+  
+  const content = document.getElementById('logPreviewContent').innerText;
+  const btn = document.getElementById('btnUploadLog');
+  btn.disabled = true;
+  btn.innerText = '正在上报中...';
+  
+  try {
+    const res = await window.api.uploadLogContent(currentUser.token, selectedLogFilename, content);
+    if (res.success) {
+      showToast(res.message || '诊断日志已成功上报，非常感谢您的反馈！');
+      hideLogPreview();
+    } else {
+      showToast('日志上报失败: ' + (res.error || '未知错误'), 'error');
+    }
+  } catch (err) {
+    showToast('网络请求失败: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerText = '📤 上传日志至云端';
+  }
+}
+
+// 绑定到 window 暴露给 HTML 属性
+window.runUstcSpeedTest = runUstcSpeedTest;
+window.checkNodeConnection = checkNodeConnection;
+window.toggleLogging = toggleLogging;
+window.openLogManagerModal = openLogManagerModal;
+window.closeLogManagerModal = closeLogManagerModal;
+window.viewLocalLogDetail = viewLocalLogDetail;
+window.hideLogPreview = hideLogPreview;
+window.deleteLocalLog = deleteLocalLog;
+window.uploadSelectedLog = uploadSelectedLog;

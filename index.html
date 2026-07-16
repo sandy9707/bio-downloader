@@ -848,6 +848,27 @@
       margin-left: 0.5rem;
       vertical-align: middle;
     }
+    /* Switch toggle styles */
+    .switch {
+      position: relative; display: inline-block; width: 44px; height: 24px;
+    }
+    .switch input {
+      opacity: 0; width: 0; height: 0;
+    }
+    .switch-slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #374151; transition: .3s; border-radius: 24px;
+    }
+    .switch-slider:before {
+      position: absolute; content: ""; height: 16px; width: 16px; left: 4px; bottom: 4px;
+      background-color: white; transition: .3s; border-radius: 50%;
+    }
+    input:checked + .switch-slider {
+      background-color: #6366f1;
+    }
+    input:checked + .switch-slider:before {
+      transform: translateX(20px);
+    }
   </style>
 </head>
 <body>
@@ -1000,6 +1021,27 @@
         <h3 style="color:#38bdf8; margin-bottom: 1.5rem; text-align: center;">流量充值套餐</h3>
         <div class="package-grid" id="packageList">
           <!-- 动态载入充值包 -->
+        </div>
+      </div>
+
+      <div class="card" style="max-width: 800px; margin: 1.5rem auto 0 auto; width: 100%;">
+        <h3 style="color:#10b981; margin-bottom: 1.5rem; text-align: center;">节点与网络诊断</h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+          <!-- Speed Test Card -->
+          <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; align-items: center; text-align: center;">
+            <div style="font-size: 1.75rem;">🚀</div>
+            <h4 style="font-weight: bold; font-size: 0.95rem;">中科院网页测速</h4>
+            <p style="font-size: 0.8rem; color: var(--text-muted);">核验您的本地最大下行带宽与网络吞吐能力。</p>
+            <button class="btn btn-secondary" style="width: 100%; margin-top: auto; padding: 0.5rem;" onclick="runUstcSpeedTest()">立即检测 (网页测速)</button>
+          </div>
+          <!-- Connection Status Card -->
+          <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; align-items: center; text-align: center;">
+            <div style="font-size: 1.75rem;" id="diagIcon">🌐</div>
+            <h4 style="font-weight: bold; font-size: 0.95rem;">海外学术加速核验</h4>
+            <p style="font-size: 0.8rem; color: var(--text-muted);" id="diagDesc">核验内置加速器是否能正常连通海外学术数据库节点（SRA/EBI/NCBI）。</p>
+            <div id="diagStatus" style="font-size: 0.85rem; font-weight: bold; min-height: 1.5rem; margin-top: auto; color: var(--text-muted);">等待开始...</div>
+            <button class="btn btn-primary" id="diagBtn" style="width: 100%; padding: 0.5rem;" onclick="checkNodeConnection()">立即核验 (通道核验)</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1171,6 +1213,26 @@
           </div>
         </div>
 
+        <!-- 下载诊断日志 -->
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">📋 下载故障排查与诊断日志</label>
+          <div style="margin-top:0.5rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color); display:flex; flex-direction:column; gap:0.75rem;">
+            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
+              <div style="font-size:0.9rem; color:var(--text-muted);">
+                记录详细下载诊断日志 (排查 Axel 下载报错)：
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="settingsLoggingToggle" onchange="toggleLogging(this.checked)">
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+            <div style="font-size:0.8rem; color:var(--text-muted); border-top:1px solid rgba(255,255,255,0.05); padding-top:0.5rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+              <span>如果下载经常报错失败，请开启日志并在复现报错后在此处管理并上传日志。</span>
+              <button class="btn btn-primary" style="font-size: 0.75rem; padding: 0.25rem 0.65rem;" onclick="openLogManagerModal()">管理与上传错误日志</button>
+            </div>
+          </div>
+        </div>
+
         <!-- 危险区 -->
         <div class="form-group" style="margin-top:2rem; padding-top:1.5rem; border-top: 1px solid var(--border-color);">
           <label style="font-weight:600; color:#ef4444;">⚠️ 危险操作</label>
@@ -1193,6 +1255,48 @@
       <div style="display:flex; flex-direction:column; gap:0.5rem; margin-top:1rem;">
         <button class="btn btn-success" id="mockPayBtn" style="display:none;" onclick="confirmMockPayment()">[开发者调试] 模拟支付成功 (免费)</button>
         <button class="btn btn-secondary" onclick="closePayModal()">我已完成付款并关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 日志管理模态框 -->
+  <div class="modal-overlay" id="logManagerModal">
+    <div class="modal" style="max-width: 750px; width: 90%;">
+      <h3>📋 下载诊断日志管理</h3>
+      <p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:1rem;text-align:left;">
+        这里是最近 7 天内您开启日志记录后捕获的 Axel 下载命令与报错输出。您可以将其上传给开发者，以便排查修复下载失败问题。
+      </p>
+      
+      <!-- 日志列表 -->
+      <div style="max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.5rem; text-align: left; margin-bottom: 1rem;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+          <thead>
+            <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-muted);">
+              <th style="padding: 0.5rem; text-align: left;">日志文件名称</th>
+              <th style="padding: 0.5rem; text-align: right;">文件大小</th>
+              <th style="padding: 0.5rem; text-align: center;">操作</th>
+            </tr>
+          </thead>
+          <tbody id="localLogsTableBody">
+            <!-- 动态渲染日志列表 -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 日志预览 -->
+      <div id="logPreviewSection" style="display: none; flex-direction: column; gap: 0.5rem; text-align: left; margin-bottom: 1rem;">
+        <div style="font-weight: bold; font-size: 0.85rem; color: #10b981;">日志内容预览 (<span id="previewLogName"></span>):</div>
+        <div style="background: #0b0f19; border: 1px solid var(--border-color); border-radius: 6px; padding: 0.75rem; max-height: 200px; overflow-y: auto;">
+          <pre id="logPreviewContent" style="font-family: monospace; font-size: 0.75rem; white-space: pre-wrap; word-break: break-all; color: #cbd5e1; margin: 0;"></pre>
+        </div>
+        <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+          <button class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.25rem 0.65rem;" onclick="hideLogPreview()">隐藏预览</button>
+          <button class="btn btn-primary" id="btnUploadLog" style="font-size: 0.75rem; padding: 0.25rem 0.65rem;" onclick="uploadSelectedLog()">📤 上传日志至云端</button>
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:0.5rem;">
+        <button class="btn btn-secondary" onclick="closeLogManagerModal()">关闭</button>
       </div>
     </div>
   </div>

@@ -222,9 +222,35 @@ function getAxelBinaryPath() {
 }
 
 // ==========================================
-// 【本地配置管理】
+// 【本地配置管理与日志系统】
 // ==========================================
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
+const LOG_DIR = path.join(app.getPath('userData'), 'download_logs');
+if (!fs.existsSync(LOG_DIR)) {
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+}
+
+// 自动清理 7 天前的日志文件
+function cleanOldLogs() {
+  try {
+    if (!fs.existsSync(LOG_DIR)) return;
+    const now = Date.now();
+    const files = fs.readdirSync(LOG_DIR);
+    files.forEach(file => {
+      if (!file.endsWith('.log')) return;
+      const filePath = path.join(LOG_DIR, file);
+      const stats = fs.statSync(filePath);
+      const ageInDays = (now - stats.mtimeMs) / (1000 * 60 * 60 * 24);
+      if (ageInDays > 7) {
+        fs.unlinkSync(filePath);
+        console.log(`Auto-cleaned old log file: ${file}`);
+      }
+    });
+  } catch (err) {
+    console.error('Failed to clean old logs:', err);
+  }
+}
+cleanOldLogs();
 
 function getSettings() {
   if (fs.existsSync(SETTINGS_FILE)) {
@@ -837,14 +863,30 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     if (fs.existsSync(savePath)) {
       try {
         const localStats = fs.statSync(savePath);
-        if (file.size && localStats.size === file.size) {
-          console.log(`File ${file.name} already exists and matches expected size. Skipping download.`);
+        const hasStateFile = fs.existsSync(savePath + '.st');
+        let shouldSkip = false;
+        let skipReason = '已校验(跳过)';
+
+        if (file.size && file.size > 0) {
+          if (localStats.size === file.size) {
+            shouldSkip = true;
+          }
+        } else {
+          // 如果远程大小校验失败返回 0 或未定义 (常见于网络拥堵/NCBI FTP 握手失败)，但本地已存在该文件且无 Axel 临时 st 分片文件，则判定为已完整下载
+          if (localStats.size > 0 && !hasStateFile) {
+            shouldSkip = true;
+            skipReason = '已存在(跳过)';
+          }
+        }
+
+        if (shouldSkip) {
+          console.log(`File ${file.name} already exists. Skipping download (${skipReason}).`);
           mainWindow.webContents.send('download-status', {
             index: fileIndex,
             fileName: file.name,
             status: 'completed',
             percentage: 100,
-            speed: '已校验(跳过)',
+            speed: skipReason,
             savePath
           });
           return;
@@ -927,9 +969,34 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       const args = ['-n', threads.toString(), '-k', '-o', savePath, file.url];
       console.log(`Running Axel (Attempt ${attempt}): ${axelBin} ${args.join(' ')}`);
 
+      let logStream = null;
+      const settings = getSettings();
+      if (settings.loggingEnabled) {
+        try {
+          const logFileName = `download_${file.name.replace(/[^a-zA-Z0-9\._-]/g, '_')}_${Date.now()}.log`;
+          const logFilePath = path.join(LOG_DIR, logFileName);
+          logStream = fs.createWriteStream(logFilePath, { flags: 'a', encoding: 'utf8' });
+          logStream.write(`=== 下载任务诊断日志 ===\n`);
+          logStream.write(`时间: ${new Date().toISOString()}\n`);
+          logStream.write(`文件名: ${file.name}\n`);
+          logStream.write(`URL: ${file.url}\n`);
+          logStream.write(`目标保存路径: ${savePath}\n`);
+          logStream.write(`尝试次数: ${attempt}\n`);
+          logStream.write(`线程数: ${threads}\n`);
+          logStream.write(`代理环境: ${JSON.stringify(env)}\n`);
+          logStream.write(`Axel 命令: ${axelBin} ${args.join(' ')}\n\n`);
+        } catch (logErr) {
+          console.error('Failed to create download log stream:', logErr);
+        }
+      }
+
       try {
         await new Promise((resolve, reject) => {
           if (cancelled) {
+            if (logStream) {
+              logStream.write(`\n=== 任务启动前已被取消 ===\n`);
+              logStream.end();
+            }
             return reject(new Error('Cancelled'));
           }
 
@@ -940,17 +1007,28 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
           cancelTokens.set(fileIndex, () => {
             killProcess(proc);
             activeAxelProcesses.delete(fileIndex);
+            if (logStream) {
+              logStream.write(`\n=== 任务被用户手动取消 ===\n`);
+              logStream.end();
+            }
             reject(new Error('Cancelled'));
           });
 
           proc.on('error', (err) => {
             console.error('Axel spawn error:', err);
+            if (logStream) {
+              logStream.write(`\n=== 异常错误 ===\n${err.stack || err.message}\n`);
+              logStream.end();
+            }
             activeAxelProcesses.delete(fileIndex);
             reject(err);
           });
 
           proc.stdout.on('data', (data) => {
             const output = data.toString();
+            if (logStream) {
+              logStream.write(`[STDOUT] ${output}`);
+            }
             const pctMatch = output.match(/\[\s*(\d+)%\]/);
             const speedMatch = output.match(/\[\s*([\d\.]+\s*[KMGT]*B\/s)\]/);
 
@@ -966,8 +1044,19 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
             }
           });
 
+          proc.stderr.on('data', (data) => {
+            const output = data.toString();
+            if (logStream) {
+              logStream.write(`[STDERR] ${output}`);
+            }
+          });
+
           proc.on('close', (code) => {
             activeAxelProcesses.delete(fileIndex);
+            if (logStream) {
+              logStream.write(`\n=== 进程退出 ===\n状态码: ${code}\n`);
+              logStream.end();
+            }
             if (code === 0) {
               resolve();
             } else {
@@ -1092,4 +1181,116 @@ ipcMain.handle('open-downloads-folder', (event, folderPath) => {
     return true;
   }
   return false;
+});
+
+// ==========================================
+// 【诊断测速与日志管理 IPC 接口 (v1.4.5)】
+// ==========================================
+
+// 测试连通性与节点测速
+ipcMain.handle('test-node-connection', async () => {
+  const testUrl = 'https://www.ncbi.nlm.nih.gov/';
+  
+  // 1. 代理诊断
+  let proxyOk = false;
+  let proxyTime = 0;
+  try {
+    const start = Date.now();
+    await axios.get(testUrl, {
+      timeout: 5000,
+      proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 }
+    });
+    proxyTime = Date.now() - start;
+    proxyOk = true;
+  } catch (e) {
+    console.warn('Proxy node diagnostics failed:', e.message);
+  }
+
+  // 2. 直连诊断
+  let directOk = false;
+  let directTime = 0;
+  try {
+    const start = Date.now();
+    await axios.get(testUrl, { timeout: 5000 });
+    directTime = Date.now() - start;
+    directOk = true;
+  } catch (e) {
+    console.warn('Direct connection diagnostics failed:', e.message);
+  }
+
+  return {
+    proxy: { ok: proxyOk, time: proxyTime },
+    direct: { ok: directOk, time: directTime }
+  };
+});
+
+// 获取本地诊断日志列表
+ipcMain.handle('get-logs-list', async () => {
+  try {
+    if (!fs.existsSync(LOG_DIR)) return [];
+    const files = fs.readdirSync(LOG_DIR);
+    const logs = [];
+    files.forEach(file => {
+      if (!file.endsWith('.log')) return;
+      const filePath = path.join(LOG_DIR, file);
+      const stats = fs.statSync(filePath);
+      logs.push({
+        name: file,
+        size: stats.size,
+        time: stats.mtimeMs
+      });
+    });
+    // 按修改时间倒序
+    logs.sort((a, b) => b.time - a.time);
+    return logs;
+  } catch (err) {
+    console.error('Failed to get logs list:', err);
+    return [];
+  }
+});
+
+// 读取特定的日志内容
+ipcMain.handle('read-log-content', async (event, filename) => {
+  try {
+    const safeName = path.basename(filename);
+    const filePath = path.join(LOG_DIR, safeName);
+    if (fs.existsSync(filePath)) {
+      return fs.readFileSync(filePath, 'utf8');
+    }
+    return '';
+  } catch (err) {
+    console.error('Failed to read log content:', err);
+    return '';
+  }
+});
+
+// 删除特定的本地日志
+ipcMain.handle('delete-log', async (event, filename) => {
+  try {
+    const safeName = path.basename(filename);
+    const filePath = path.join(LOG_DIR, safeName);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error('Failed to delete log file:', err);
+    return false;
+  }
+});
+
+// 上传日志到数据库
+ipcMain.handle('upload-log-content', async (event, { token, filename, content }) => {
+  try {
+    const res = await axios.post(`${BACKEND_BASE_URL}/api/user/upload-log`, {
+      token,
+      filename,
+      content
+    }, { timeout: 10000 });
+    return res.data;
+  } catch (err) {
+    console.error('Failed to upload log to server:', err.message);
+    return { success: false, error: err.response?.data?.error || err.message };
+  }
 });

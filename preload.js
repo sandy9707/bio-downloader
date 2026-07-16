@@ -39,6 +39,13 @@ contextBridge.exposeInMainWorld('api', {
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', { url }),
   downloadAppUpdate: (url, fileName) => ipcRenderer.invoke('download-app-update', { url, fileName }),
 
+  // 诊断与诊断日志 (v1.4.5)
+  testNodeConnection: () => ipcRenderer.invoke('test-node-connection'),
+  getLogsList: () => ipcRenderer.invoke('get-logs-list'),
+  readLogContent: (filename) => ipcRenderer.invoke('read-log-content', filename),
+  deleteLog: (filename) => ipcRenderer.invoke('delete-log', filename),
+  uploadLogContent: (token, filename, content) => ipcRenderer.invoke('upload-log-content', { token, filename, content }),
+
   // 事件监听器
   onDownloadStatus: (callback) => {
     ipcRenderer.removeAllListeners('download-status');
