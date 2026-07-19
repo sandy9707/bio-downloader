@@ -547,11 +547,6 @@ ipcMain.handle('api-create-order', async (event, { token, packageId, payType, qu
   return res.data;
 });
 
-ipcMain.handle('api-mock-confirm', async (event, { orderId }) => {
-  const res = await axios.post(`${BACKEND_BASE_URL}/api/pay/mock-confirm`, { orderId });
-  return res.data;
-});
-
 // --- Clash 控制 ---
 ipcMain.handle('clash-start', async (event, { token }) => {
   return await startClash(token);

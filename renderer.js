@@ -886,14 +886,6 @@ async function buyPackage(packageId, payType) {
       // 显示支付模态框
       document.getElementById('checkoutLink').href = res.checkoutUrl;
       document.getElementById('payModal').style.display = 'flex';
-      
-      // 如果链接是模拟链接，显示模拟支付按钮
-      if (res.checkoutUrl.includes('mock-pay.html')) {
-        document.getElementById('mockPayBtn').style.display = 'block';
-        currentOrderId = res.checkoutUrl.substring(res.checkoutUrl.lastIndexOf('=') + 1);
-      } else {
-        document.getElementById('mockPayBtn').style.display = 'none';
-      }
     }
   } catch (err) {
     showToast('创建订单失败: ' + err.message, 'error');
@@ -904,19 +896,6 @@ function closePayModal() {
   document.getElementById('payModal').style.display = 'none';
   // 确认完毕后更新一次数据
   refreshUserInfo();
-}
-
-async function confirmMockPayment() {
-  if (!currentOrderId) return;
-  try {
-    const res = await window.api.mockConfirm(currentOrderId);
-    if (res.success) {
-      showToast('模拟充值到账成功！', 'success');
-      closePayModal();
-    }
-  } catch (e) {
-    showToast('模拟充值失败，请检查订单是否存在', 'error');
-  }
 }
 
 // ==========================================
