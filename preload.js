@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   getBackendUrl: () => ipcRenderer.invoke('get-backend-url'),
 
   // 用户与认证
-  register: (username, password, email) => ipcRenderer.invoke('api-register', { username, password, email }),
+  register: (username, password, email, inviteCode) => ipcRenderer.invoke('api-register', { username, password, email, inviteCode }),
   login: (username, password) => ipcRenderer.invoke('api-login', { username, password }),
   getUserInfo: (token) => ipcRenderer.invoke('api-get-user-info', { token }),
   requestEmailBindCode: (token, email) => ipcRenderer.invoke('api-request-email-bind-code', { token, email }),

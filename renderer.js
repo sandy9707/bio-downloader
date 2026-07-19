@@ -657,6 +657,8 @@ async function handleRegister() {
   const pass = document.getElementById('authPassword').value.trim();
   const emailInput = document.getElementById('authEmail');
   const email = emailInput ? emailInput.value.trim() : '';
+  const inviteCodeInput = document.getElementById('authInviteCode');
+  const inviteCode = inviteCodeInput ? inviteCodeInput.value.trim() : '';
 
   if (!user || !pass) {
     showToast('账号和密码不能为空', 'error');
@@ -664,7 +666,7 @@ async function handleRegister() {
   }
 
   try {
-    const res = await window.api.register(user, pass, email);
+    const res = await window.api.register(user, pass, email, inviteCode);
     if (res.success) {
       showToast('账户秒速注册成功', 'success');
       await window.api.saveSettings({ token: res.token });
@@ -702,6 +704,14 @@ async function verifyToken(token, isAutoLogin = false) {
       
       const profUidEl = document.getElementById('profUid');
       if (profUidEl) profUidEl.innerText = res.uid || '无';
+      
+      // 更新邀请与返利信息
+      const inviteCodeEl = document.getElementById('profInviteCode');
+      if (inviteCodeEl) inviteCodeEl.innerText = res.inviteCode || '无';
+      const inviteUrlEl = document.getElementById('profInviteUrl');
+      if (inviteUrlEl) inviteUrlEl.value = res.inviteCode ? `https://biodown.yeyeziblog.eu.org/?aff=${res.inviteCode}` : '无';
+      const balanceEl = document.getElementById('profBalance');
+      if (balanceEl) balanceEl.innerText = (res.balance || 0).toFixed(2);
       
       document.getElementById('profToken').value = res.token;
       
@@ -839,8 +849,9 @@ async function loadPackages() {
             <span style="font-size:0.85rem; color:var(--text-muted);">选择购买数量:</span>
             <input type="number" id="qty-${pkg.id}" value="1" min="1" max="99" style="width:60px; background:var(--bg-input); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:0.2rem; text-align:center; outline:none; font-weight:bold;">
           </div>
-          <div style="margin-top:0.5rem;">
-            <button class="btn btn-primary" style="width:100%;padding:0.5rem;" onclick="buyPackage('${pkg.id}', 'alipay')">立即购买（支付宝）</button>
+          <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
+            <button class="btn btn-primary" style="flex:1; padding:0.5rem; font-size:0.85rem;" onclick="buyPackage('${pkg.id}', 'alipay')">支付宝</button>
+            <button class="btn btn-success" style="flex:1; padding:0.5rem; font-size:0.85rem; background:#10b981;" onclick="buyPackage('${pkg.id}', 'balance')">余额支付</button>
           </div>
         `;
         container.appendChild(card);
@@ -865,6 +876,11 @@ async function buyPackage(packageId, payType) {
     showToast('正在创建交易订单...');
     const res = await window.api.createOrder(currentUser.token, packageId, payType, quantity);
     if (res.success) {
+      if (res.isBalancePay) {
+        showToast(res.message || '余额支付成功，高速流量已即时到账！', 'success');
+        refreshUserInfo();
+        return;
+      }
       currentOrderId = res.checkoutUrl.match(/orderId=(ORD_\w+)/)?.[1] || 'MOCK';
       
       // 显示支付模态框
@@ -931,6 +947,7 @@ function switchAuthTab(tab) {
   const groupEmail = document.getElementById('group-email');
   const groupCode = document.getElementById('group-code');
   const groupPassword = document.getElementById('group-password');
+  const groupInvite = document.getElementById('group-invite');
   
   const labelEmail = document.getElementById('label-email');
   const labelPassword = document.getElementById('label-password');
@@ -960,6 +977,7 @@ function switchAuthTab(tab) {
     if (groupEmail) groupEmail.style.display = 'none';
     if (groupCode) groupCode.style.display = 'none';
     if (groupPassword) groupPassword.style.display = 'flex';
+    if (groupInvite) groupInvite.style.display = 'none';
     if (labelPassword) labelPassword.innerText = '登录密码';
     
     if (btnLoginSubmit) btnLoginSubmit.style.display = 'block';
@@ -970,6 +988,7 @@ function switchAuthTab(tab) {
     if (groupEmail) groupEmail.style.display = 'flex';
     if (groupCode) groupCode.style.display = 'none';
     if (groupPassword) groupPassword.style.display = 'flex';
+    if (groupInvite) groupInvite.style.display = 'flex';
     if (labelEmail) labelEmail.innerText = '绑定邮箱 (选填，用于密码找回)';
     if (labelPassword) labelPassword.innerText = '设置密码';
     
@@ -981,6 +1000,7 @@ function switchAuthTab(tab) {
     if (groupEmail) groupEmail.style.display = 'flex';
     if (groupCode) groupCode.style.display = 'flex';
     if (groupPassword) groupPassword.style.display = 'flex';
+    if (groupInvite) groupInvite.style.display = 'none';
     if (labelEmail) labelEmail.innerText = '已绑定的电子邮箱';
     if (labelPassword) labelPassword.innerText = '设置新密码 (最少 8 位)';
     
@@ -1741,3 +1761,29 @@ window.viewLocalLogDetail = viewLocalLogDetail;
 window.hideLogPreview = hideLogPreview;
 window.deleteLocalLog = deleteLocalLog;
 window.uploadSelectedLog = uploadSelectedLog;
+
+// 邀请功能复制逻辑
+function copyInviteCode() {
+  const codeEl = document.getElementById('profInviteCode');
+  const code = codeEl ? codeEl.innerText : '';
+  if (code && code !== '-' && code !== '无') {
+    navigator.clipboard.writeText(code);
+    showToast('邀请码已复制！', 'success');
+  } else {
+    showToast('无可用的邀请码进行复制', 'error');
+  }
+}
+
+function copyInviteUrl() {
+  const urlEl = document.getElementById('profInviteUrl');
+  const url = urlEl ? urlEl.value : '';
+  if (url && url !== '-' && url !== '无') {
+    navigator.clipboard.writeText(url);
+    showToast('邀请链接已复制！', 'success');
+  } else {
+    showToast('无可用的邀请链接进行复制', 'error');
+  }
+}
+
+window.copyInviteCode = copyInviteCode;
+window.copyInviteUrl = copyInviteUrl;

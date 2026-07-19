@@ -502,8 +502,8 @@ ipcMain.handle('select-directory', async () => {
 });
 
 // --- 用户与支付 ---
-ipcMain.handle('api-register', async (event, { username, password, email }) => {
-  const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/register`, { username, password, email });
+ipcMain.handle('api-register', async (event, { username, password, email, inviteCode }) => {
+  const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/register`, { username, password, email, inviteCode });
   return res.data;
 });
 
@@ -513,7 +513,7 @@ ipcMain.handle('api-login', async (event, { username, password }) => {
 });
 
 ipcMain.handle('api-get-user-info', async (event, { token }) => {
-  const res = await axios.get(`${BACKEND_BASE_URL}/api/user/info?token=${token}`);
+  const res = await axios.get(`${BACKEND_BASE_URL}/api/user/info?token=${token}&version=${app.getVersion()}`);
   return res.data;
 });
 
