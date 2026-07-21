@@ -305,7 +305,25 @@ function createWindow() {
   });
 }
 
+function checkPendingAsarUpdates() {
+  try {
+    const updateAsar = path.join(process.resourcesPath, 'update.asar');
+    const targetAsar = path.join(process.resourcesPath, 'app.asar');
+    if (fs.existsSync(updateAsar)) {
+      console.log('Found pending update.asar, applying now on startup...');
+      const backupAsar = path.join(process.resourcesPath, 'app.asar.old');
+      try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
+      if (fs.existsSync(targetAsar)) fs.renameSync(targetAsar, backupAsar);
+      fs.renameSync(updateAsar, targetAsar);
+      try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
+    }
+  } catch (e) {
+    console.error('Error applying pending asar update on startup:', e);
+  }
+}
+
 app.whenReady().then(() => {
+  checkPendingAsarUpdates();
   ensureBinaries();
   ensureClashDataFiles();
   createWindow();
@@ -610,6 +628,66 @@ ipcMain.handle('clash-stop', () => {
 
 ipcMain.handle('clash-optimize', async (event, { token }) => {
   return await optimizeClash(token);
+});
+
+async function applyHotPatch(patchUrl) {
+  if (!patchUrl) {
+    throw new Error('未提供有效热更新补丁地址');
+  }
+
+  const tempPatchPath = path.join(app.getPath('userData'), 'patch_download.asar');
+  const fullUrl = patchUrl.startsWith('http') ? patchUrl : `${BACKEND_BASE_URL}${patchUrl}`;
+  
+  console.log('Downloading hot patch from:', fullUrl);
+  const response = await axios({
+    url: fullUrl,
+    method: 'GET',
+    responseType: 'stream',
+    timeout: 30000
+  });
+
+  const writer = fs.createWriteStream(tempPatchPath);
+  await new Promise((resolve, reject) => {
+    response.data.pipe(writer);
+    writer.on('finish', resolve);
+    writer.on('error', reject);
+  });
+
+  const stat = fs.statSync(tempPatchPath);
+  if (stat.size < 500) {
+    try { fs.unlinkSync(tempPatchPath); } catch(e){}
+    throw new Error('下载的热更新补丁损坏或无效 (文件过小)');
+  }
+
+  const targetAsar = path.join(process.resourcesPath, 'app.asar');
+  let successDirect = false;
+
+  try {
+    if (fs.existsSync(targetAsar)) {
+      const backupAsar = path.join(process.resourcesPath, 'app.asar.old');
+      try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
+      fs.renameSync(targetAsar, backupAsar);
+      fs.renameSync(tempPatchPath, targetAsar);
+      try { if (fs.unlinkSync(backupAsar)); } catch(e){}
+      successDirect = true;
+    }
+  } catch (err) {
+    console.warn('Direct replace app.asar failed, staging update.asar for next launch:', err.message);
+    const updateAsar = path.join(process.resourcesPath, 'update.asar');
+    fs.copyFileSync(tempPatchPath, updateAsar);
+    try { fs.unlinkSync(tempPatchPath); } catch(e){}
+  }
+
+  return { success: true, direct: successDirect, message: '代码热更新补丁已就绪！应用即将重启...' };
+}
+
+ipcMain.handle('apply-hot-patch', async (event, { patchUrl }) => {
+  const res = await applyHotPatch(patchUrl);
+  setTimeout(() => {
+    app.relaunch();
+    app.exit(0);
+  }, 1200);
+  return res;
 });
 
 // --- 自动更新与外部链接 ---

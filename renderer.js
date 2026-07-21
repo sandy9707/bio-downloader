@@ -315,6 +315,16 @@ async function triggerCheckForUpdates() {
         updateInfoGlobal = res;
         document.getElementById('updateLatestVersion').innerText = res.latestVersion;
         document.getElementById('updateReleaseNotes').innerText = res.releaseNotes;
+
+        const btnHot = document.getElementById('btnHotPatchUpdate');
+        if (btnHot) {
+          if (res.patchUrl) {
+            btnHot.style.display = 'inline-block';
+          } else {
+            btnHot.style.display = 'none';
+          }
+        }
+
         document.getElementById('updateCard').style.display = 'block';
         showToast('检测到新版本，请及时更新', 'success');
       } else {
@@ -327,6 +337,38 @@ async function triggerCheckForUpdates() {
     showToast('检查更新时出错: ' + err.message, 'error');
   }
 }
+
+async function startHotPatchUpdate() {
+  if (isUpdating) {
+    showToast('正在应用热更新中，请勿重复点击', 'warning');
+    return;
+  }
+  if (!updateInfoGlobal || !updateInfoGlobal.patchUrl) return;
+
+  const btn = document.getElementById('btnHotPatchUpdate');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerText = '⏳ 正在下载应用代码补丁 (3MB)...';
+  }
+  isUpdating = true;
+  showToast('正在高速下载应用代码补丁包 (3MB)...', 'info');
+
+  try {
+    const res = await window.api.applyHotPatch(updateInfoGlobal.patchUrl);
+    if (res.success) {
+      showToast(res.message || '热更新成功！应用即将重启...', 'success');
+    }
+  } catch (err) {
+    showToast('热更新应用失败: ' + err.message, 'error');
+    if (btn) {
+      btn.disabled = false;
+      btn.innerText = '⚡ 极速平滑热更新 (仅 3MB)';
+    }
+    isUpdating = false;
+  }
+}
+
+window.startHotPatchUpdate = startHotPatchUpdate;
 
 function closeUpdateCard() {
   document.getElementById('updateCard').style.display = 'none';

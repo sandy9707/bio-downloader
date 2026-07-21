@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('api', {
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', { url }),
   downloadAppUpdate: (url, fileName) => ipcRenderer.invoke('download-app-update', { url, fileName }),
+  applyHotPatch: (patchUrl) => ipcRenderer.invoke('apply-hot-patch', { patchUrl }),
 
   // 诊断与诊断日志 (v1.4.5)
   testNodeConnection: () => ipcRenderer.invoke('test-node-connection'),
