@@ -288,7 +288,8 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: true
     },
     frame: true,
     show: false,
@@ -417,6 +418,10 @@ async function startClash(token) {
     yamlContent = yamlContent.replace(/^external-controller:\s*.*/gm, '');
     yamlContent = 'external-controller: 127.0.0.1:43299\n' + yamlContent;
 
+    // 强制设置 log-level 为 warning，减少大量管道日志刷屏降低 CPU/发热
+    yamlContent = yamlContent.replace(/^log-level:\s*.*/gm, '');
+    yamlContent = 'log-level: warning\n' + yamlContent;
+
     // 保存 config.yaml 到用户工作空间
     const configPath = path.join(CLASH_WORK_DIR, 'config.yaml');
     fs.writeFileSync(configPath, yamlContent, 'utf8');
@@ -498,6 +503,9 @@ async function optimizeClash(token) {
 
     yamlContent = yamlContent.replace(/^external-controller:\s*.*/gm, '');
     yamlContent = 'external-controller: 127.0.0.1:43299\n' + yamlContent;
+
+    yamlContent = yamlContent.replace(/^log-level:\s*.*/gm, '');
+    yamlContent = 'log-level: warning\n' + yamlContent;
 
     const configPath = path.join(CLASH_WORK_DIR, 'config.yaml');
     fs.writeFileSync(configPath, yamlContent, 'utf8');
@@ -1152,6 +1160,8 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
             reject(err);
           });
 
+          const lastProgressEmitMap = new Map();
+
           proc.stdout.on('data', (data) => {
             const output = data.toString();
             if (logStream) {
@@ -1164,11 +1174,17 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
             let speed = speedMatch ? speedMatch[1] : null;
 
             if (percentage !== null || speed !== null) {
-              mainWindow.webContents.send('download-progress', {
-                index: fileIndex,
-                percentage,
-                speed
-              });
+              const now = Date.now();
+              const lastTime = lastProgressEmitMap.get(fileIndex) || 0;
+              // 节流处理: 限制最多 250ms (4Hz) 向渲染进程推送一次进度，降低 Mac CPU 重绘开销与发热
+              if (percentage === 100 || (now - lastTime >= 250)) {
+                lastProgressEmitMap.set(fileIndex, now);
+                mainWindow.webContents.send('download-progress', {
+                  index: fileIndex,
+                  percentage,
+                  speed
+                });
+              }
             }
           });
 
