@@ -890,8 +890,17 @@
       <div class="nav-item" onclick="switchTab('settings-tab')">设置</div>
     </div>
 
+    <!-- 实时总速度展示面板 -->
+    <div class="global-speed-panel" style="margin-top: auto; margin-bottom: 0.5rem; padding: 0.7rem 1rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; display: flex; align-items: center; justify-content: space-between;">
+      <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.35rem;">
+        <span style="font-size: 0.9rem;">🚀</span>
+        <span>实时总速度</span>
+      </div>
+      <span id="globalTotalSpeed" style="font-size: 0.95rem; font-weight: 800; color: #38bdf8; font-family: monospace;">0 B/s</span>
+    </div>
+
     <!-- 夜间模式切换按钮 -->
-    <button class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleDarkMode()">
+    <button class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleDarkMode()" style="margin-top: 0;">
       <span id="themeIcon">🌙</span>
       <span id="themeLabel">夜间模式</span>
     </button>
@@ -928,7 +937,7 @@
             <span id="headerTrafficText">0 / 0 MB</span>
           </div>
           <div class="progress-bar-bg">
-            <div class="progress-bar-fill" id="headerTrafficProgress"></div>
+            <div class="progress-bar-fill" id="headerTrafficFill" style="width: 0%;"></div>
           </div>
         </div>
       </div>
@@ -983,7 +992,10 @@
           <span id="totalQueueSize" style="font-size: 0.9rem; color: var(--text-muted);">共 0 字节</span>
         </div>
         <div class="queue-list" id="queueList">
-          <!-- 动态加载队列 -->
+          <div class="empty-state" id="emptyQueueState">
+            <div class="empty-icon">📁</div>
+            <p>请输入 SRA/EBI/GEO 编号或链接，点击“检验下载大小”后自动生成下载队列</p>
+          </div>
         </div>
       </div>
     </div>
@@ -995,10 +1007,13 @@
           <div class="transfer-sub-tabs">
             <button class="sub-tab-btn active" id="tabBtnDownloading" onclick="switchTransferSubTab('downloading')">正在下载 (<span id="downloadingCount">0</span>)</button>
             <button class="sub-tab-btn" id="tabBtnCompleted" onclick="switchTransferSubTab('completed')">已完成 (<span id="completedCount">0</span>)</button>
+            <button class="sub-tab-btn" id="tabBtnFailed" onclick="switchTransferSubTab('failed')">下载失败 (<span id="failedCount">0</span>)</button>
           </div>
           <div class="transfer-actions">
             <button class="btn btn-secondary" onclick="window.api.openDownloadsFolder()" style="font-size: 0.85rem; padding: 0.45rem 1rem;">📂 打开下载目录</button>
+            <button class="btn btn-primary" id="btnRetryAllFailed" onclick="retryAllFailedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🔄 一键重试全部</button>
             <button class="btn btn-danger" id="btnClearCompleted" onclick="clearCompletedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空已完成</button>
+            <button class="btn btn-danger" id="btnClearFailed" onclick="clearFailedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空失败记录</button>
           </div>
         </div>
 

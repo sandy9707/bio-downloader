@@ -1136,6 +1136,16 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
             return reject(new Error('Cancelled'));
           }
 
+          // 确保本地目标保存文件夹存在，防止 axel 报 Error opening local file
+          try {
+            const targetDir = path.dirname(savePath);
+            if (!fs.existsSync(targetDir)) {
+              fs.mkdirSync(targetDir, { recursive: true });
+            }
+          } catch (dirErr) {
+            console.error('Failed to create target directory:', dirErr);
+          }
+
           const proc = spawn(axelBin, args, { env });
           activeAxelProcesses.set(fileIndex, proc);
 

@@ -1256,27 +1256,84 @@ async function downloadSingle(index) {
 // 【传输列表与排队管理控制器】
 // ==========================================
 let currentTransferSubTab = 'downloading';
+let failedDownloads = [];
+
+function parseSpeedToBytes(speedStr) {
+  if (!speedStr || typeof speedStr !== 'string') return 0;
+  const match = speedStr.match(/([\d\.]+)\s*([KMGT]?B\/s)/i);
+  if (!match) return 0;
+  const val = parseFloat(match[1]);
+  const unit = match[2].toUpperCase();
+  if (unit.startsWith('K')) return val * 1024;
+  if (unit.startsWith('M')) return val * 1024 * 1024;
+  if (unit.startsWith('G')) return val * 1024 * 1024 * 1024;
+  if (unit.startsWith('T')) return val * 1024 * 1024 * 1024 * 1024;
+  return val;
+}
+
+function formatBytesSpeed(bytesPerSec) {
+  if (bytesPerSec <= 0) return '0 B/s';
+  if (bytesPerSec < 1024) return bytesPerSec.toFixed(0) + ' B/s';
+  if (bytesPerSec < 1024 * 1024) return (bytesPerSec / 1024).toFixed(1) + ' KB/s';
+  if (bytesPerSec < 1024 * 1024 * 1024) return (bytesPerSec / (1024 * 1024)).toFixed(2) + ' MB/s';
+  return (bytesPerSec / (1024 * 1024 * 1024)).toFixed(2) + ' GB/s';
+}
+
+function updateGlobalTotalSpeed() {
+  let totalBytes = 0;
+  activeDownloads.forEach(item => {
+    if (item.speed && item.status !== 'completed' && item.status !== 'failed') {
+      totalBytes += parseSpeedToBytes(item.speed);
+    }
+  });
+  const speedEl = document.getElementById('globalTotalSpeed');
+  if (speedEl) {
+    speedEl.innerText = formatBytesSpeed(totalBytes);
+  }
+}
 
 function switchTransferSubTab(subTab) {
   currentTransferSubTab = subTab;
   const btnDownloading = document.getElementById('tabBtnDownloading');
   const btnCompleted = document.getElementById('tabBtnCompleted');
+  const btnFailed = document.getElementById('tabBtnFailed');
   const listDownloading = document.getElementById('transferDownloadingList');
   const listCompleted = document.getElementById('transferCompletedList');
-  const btnClear = document.getElementById('btnClearCompleted');
+  const listFailed = document.getElementById('transferFailedList');
+  const btnClearCompleted = document.getElementById('btnClearCompleted');
+  const btnClearFailed = document.getElementById('btnClearFailed');
+  const btnRetryAllFailed = document.getElementById('btnRetryAllFailed');
 
   if (subTab === 'downloading') {
     if (btnDownloading) btnDownloading.classList.add('active');
     if (btnCompleted) btnCompleted.classList.remove('active');
+    if (btnFailed) btnFailed.classList.remove('active');
     if (listDownloading) listDownloading.style.display = 'flex';
     if (listCompleted) listCompleted.style.display = 'none';
-    if (btnClear) btnClear.style.display = 'none';
-  } else {
+    if (listFailed) listFailed.style.display = 'none';
+    if (btnClearCompleted) btnClearCompleted.style.display = 'none';
+    if (btnClearFailed) btnClearFailed.style.display = 'none';
+    if (btnRetryAllFailed) btnRetryAllFailed.style.display = 'none';
+  } else if (subTab === 'completed') {
     if (btnDownloading) btnDownloading.classList.remove('active');
     if (btnCompleted) btnCompleted.classList.add('active');
+    if (btnFailed) btnFailed.classList.remove('active');
     if (listDownloading) listDownloading.style.display = 'none';
     if (listCompleted) listCompleted.style.display = 'flex';
-    if (btnClear) btnClear.style.display = 'block';
+    if (listFailed) listFailed.style.display = 'none';
+    if (btnClearCompleted) btnClearCompleted.style.display = 'block';
+    if (btnClearFailed) btnClearFailed.style.display = 'none';
+    if (btnRetryAllFailed) btnRetryAllFailed.style.display = 'none';
+  } else if (subTab === 'failed') {
+    if (btnDownloading) btnDownloading.classList.remove('active');
+    if (btnCompleted) btnCompleted.classList.remove('active');
+    if (btnFailed) btnFailed.classList.add('active');
+    if (listDownloading) listDownloading.style.display = 'none';
+    if (listCompleted) listCompleted.style.display = 'none';
+    if (listFailed) listFailed.style.display = 'flex';
+    if (btnClearCompleted) btnClearCompleted.style.display = 'none';
+    if (btnClearFailed) btnClearFailed.style.display = failedDownloads.length > 0 ? 'block' : 'none';
+    if (btnRetryAllFailed) btnRetryAllFailed.style.display = failedDownloads.length > 0 ? 'block' : 'none';
   }
 }
 
@@ -1284,8 +1341,10 @@ function updateTransferCounts() {
   const downloadingCount = activeDownloads.length;
   const downloadingCountEl = document.getElementById('downloadingCount');
   const completedCountEl = document.getElementById('completedCount');
+  const failedCountEl = document.getElementById('failedCount');
   if (downloadingCountEl) downloadingCountEl.innerText = downloadingCount;
   if (completedCountEl) completedCountEl.innerText = completedDownloads.length;
+  if (failedCountEl) failedCountEl.innerText = failedDownloads.length;
 
   const badge = document.getElementById('activeDownloadsBadge');
   if (badge) {
@@ -1296,6 +1355,15 @@ function updateTransferCounts() {
       badge.style.display = 'none';
     }
   }
+
+  const btnClearFailed = document.getElementById('btnClearFailed');
+  const btnRetryAllFailed = document.getElementById('btnRetryAllFailed');
+  if (currentTransferSubTab === 'failed') {
+    if (btnClearFailed) btnClearFailed.style.display = failedDownloads.length > 0 ? 'block' : 'none';
+    if (btnRetryAllFailed) btnRetryAllFailed.style.display = failedDownloads.length > 0 ? 'block' : 'none';
+  }
+
+  updateGlobalTotalSpeed();
 }
 
 function renderDownloadingList() {
@@ -1384,6 +1452,44 @@ function renderCompletedList() {
   });
 }
 
+function renderFailedList() {
+  const container = document.getElementById('transferFailedList');
+  if (!container) return;
+
+  const emptyState = document.getElementById('emptyFailedState');
+  const cards = container.querySelectorAll('.transfer-item');
+  cards.forEach(c => c.remove());
+
+  if (failedDownloads.length === 0) {
+    if (emptyState) emptyState.style.display = 'flex';
+    return;
+  }
+  if (emptyState) emptyState.style.display = 'none';
+
+  failedDownloads.forEach((item, index) => {
+    const itemEl = document.createElement('div');
+    itemEl.className = 'transfer-item failed';
+    itemEl.innerHTML = `
+      <div class="transfer-item-info">
+        <div class="transfer-item-name-row">
+          <span class="transfer-item-name">${item.name}</span>
+          <span class="transfer-item-badge">${getFileTypeBadge(item.url || '')}</span>
+        </div>
+        <div class="transfer-item-meta">
+          <span class="transfer-item-size">${formatBytes(item.size || 0)}</span>
+          <span class="transfer-item-status failed" style="color: #f87171;">下载失败: ${item.errorMsg || '网络或节点超时'}</span>
+          <span class="transfer-item-time">${item.failedAt}</span>
+        </div>
+      </div>
+      <div class="transfer-item-actions">
+        <button class="action-btn retry-btn" style="background: var(--primary); color: white; border-radius: 6px; padding: 0.35rem 0.8rem;" onclick="retryFailedDownload(${index})">🔄 一键重试</button>
+        <button class="action-btn" onclick="deleteFailedRecord(${index})">✕ 删除记录</button>
+      </div>
+    `;
+    container.appendChild(itemEl);
+  });
+}
+
 function getFileTypeBadge(url) {
   if (url.includes('sra_raw') || url.includes('sra-pub-run-odp')) return 'SRA Raw';
   if (url.includes('ebi.ac.uk')) return 'EBI Raw';
@@ -1406,6 +1512,13 @@ function deleteCompletedRecord(index) {
   updateTransferCounts();
 }
 
+function deleteFailedRecord(index) {
+  failedDownloads.splice(index, 1);
+  localStorage.setItem('failed_downloads', JSON.stringify(failedDownloads));
+  renderFailedList();
+  updateTransferCounts();
+}
+
 function clearCompletedDownloads() {
   completedDownloads = [];
   localStorage.setItem('completed_downloads', JSON.stringify([]));
@@ -1413,18 +1526,90 @@ function clearCompletedDownloads() {
   updateTransferCounts();
 }
 
+function clearFailedDownloads() {
+  failedDownloads = [];
+  localStorage.setItem('failed_downloads', JSON.stringify([]));
+  renderFailedList();
+  updateTransferCounts();
+}
+
+async function retryFailedDownload(index) {
+  const item = failedDownloads[index];
+  if (!item) return;
+
+  failedDownloads.splice(index, 1);
+  localStorage.setItem('failed_downloads', JSON.stringify(failedDownloads));
+  renderFailedList();
+  updateTransferCounts();
+
+  showToast(`正在重新启动任务: ${item.name}...`);
+  const fileObj = item.fileObj || {
+    name: item.name,
+    url: item.url,
+    size: item.size,
+    originalIndex: item.originalIndex || Date.now(),
+    type: item.type || 'direct'
+  };
+
+  activeDownloads.push(fileObj);
+  renderDownloadingList();
+  updateTransferCounts();
+  switchTransferSubTab('downloading');
+
+  const defaultDir = document.getElementById('targetDirInput').value.trim();
+  try {
+    await window.api.startDownload([fileObj], defaultDir, currentUser.token, maxConcurrentDownloadsSetting);
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+async function retryAllFailedDownloads() {
+  if (failedDownloads.length === 0) return;
+  const listToRetry = [...failedDownloads];
+  failedDownloads = [];
+  localStorage.setItem('failed_downloads', JSON.stringify([]));
+  renderFailedList();
+  updateTransferCounts();
+
+  showToast(`正在批量重试 ${listToRetry.length} 个失败任务...`);
+  switchTransferSubTab('downloading');
+
+  const filesToDownload = [];
+  for (const item of listToRetry) {
+    const fileObj = item.fileObj || {
+      name: item.name,
+      url: item.url,
+      size: item.size,
+      originalIndex: item.originalIndex || Date.now(),
+      type: item.type || 'direct'
+    };
+    activeDownloads.push(fileObj);
+    filesToDownload.push(fileObj);
+  }
+  renderDownloadingList();
+  updateTransferCounts();
+
+  const defaultDir = document.getElementById('targetDirInput').value.trim();
+  try {
+    await window.api.startDownload(filesToDownload, defaultDir, currentUser.token, maxConcurrentDownloadsSetting);
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
 async function cancelSingleDownload(fileId) {
   try {
     showToast('正在取消下载任务...');
     const res = await window.api.cancelDownload(fileId);
     if (res) {
-      showToast('任务已取消', 'success');
       activeDownloads = activeDownloads.filter(d => d.originalIndex !== fileId);
       renderDownloadingList();
       updateTransferCounts();
+      showToast('任务已成功取消');
     }
-  } catch (err) {
-    showToast(err.message, 'error');
+  } catch (e) {
+    showToast('取消任务失败: ' + e.message, 'error');
   }
 }
 
@@ -1442,14 +1627,18 @@ async function changeMaxConcurrent(val) {
 
 // 载入已下载历史与并发数
 function initTransfersAndSettings(settings) {
-  // 1. 载入已完成历史
+  // 1. 载入历史记录
   try {
-    const stored = localStorage.getItem('completed_downloads');
-    if (stored) {
-      completedDownloads = JSON.parse(stored);
+    const storedCompleted = localStorage.getItem('completed_downloads');
+    if (storedCompleted) {
+      completedDownloads = JSON.parse(storedCompleted);
+    }
+    const storedFailed = localStorage.getItem('failed_downloads');
+    if (storedFailed) {
+      failedDownloads = JSON.parse(storedFailed);
     }
   } catch (e) {
-    console.error('Failed to load completed history:', e);
+    console.error('Failed to load transfer histories:', e);
   }
 
   // 2. 载入并发数量设置
@@ -1466,6 +1655,7 @@ function initTransfersAndSettings(settings) {
   }
 
   renderCompletedList();
+  renderFailedList();
   renderDownloadingList();
   updateTransferCounts();
 }
@@ -1590,6 +1780,10 @@ window.changeMaxConcurrent = changeMaxConcurrent;
 window.openCompletedFile = openCompletedFile;
 window.deleteCompletedRecord = deleteCompletedRecord;
 window.clearCompletedDownloads = clearCompletedDownloads;
+window.deleteFailedRecord = deleteFailedRecord;
+window.clearFailedDownloads = clearFailedDownloads;
+window.retryFailedDownload = retryFailedDownload;
+window.retryAllFailedDownloads = retryAllFailedDownloads;
 window.cancelSingleDownload = cancelSingleDownload;
 window.initTransfersAndSettings = initTransfersAndSettings;
 
