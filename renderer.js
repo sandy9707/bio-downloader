@@ -1766,3 +1766,34 @@ function copyInviteUrl() {
 
 window.copyInviteCode = copyInviteCode;
 window.copyInviteUrl = copyInviteUrl;
+
+// 优化连接/刷新通道方法
+async function optimizeConnections() {
+  if (!currentUser || !currentUser.token) {
+    showToast('请先登录账户后再执行优化连接', 'error');
+    switchTab('profile-tab');
+    return;
+  }
+
+  const btn = document.getElementById('btnOptimizeConn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span>⏳ 正在优化...</span>';
+  }
+
+  try {
+    const res = await window.api.optimizeClash(currentUser.token);
+    if (res.success) {
+      showToast(res.message || '网络通道优化成功，已重置所有连接！', 'success');
+    }
+  } catch (err) {
+    showToast('连接优化失败: ' + (err.message || '未知错误'), 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<span>⚡ 优化连接</span>';
+    }
+  }
+}
+
+window.optimizeConnections = optimizeConnections;

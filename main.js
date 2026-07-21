@@ -395,6 +395,10 @@ async function startClash(token) {
       yamlContent = 'mixed-port: 43289\n' + yamlContent;
     }
 
+    // 设置外部控制端口 43299 (用于连接优化和清除活跃连接)
+    yamlContent = yamlContent.replace(/^external-controller:\s*.*/gm, '');
+    yamlContent = 'external-controller: 127.0.0.1:43299\n' + yamlContent;
+
     // 保存 config.yaml 到用户工作空间
     const configPath = path.join(CLASH_WORK_DIR, 'config.yaml');
     fs.writeFileSync(configPath, yamlContent, 'utf8');
@@ -452,6 +456,53 @@ function stopClash() {
     console.log('Terminating Clash process...');
     killProcess(clashProcess);
     clashProcess = null;
+  }
+}
+
+async function optimizeClash(token) {
+  if (!token) {
+    throw new Error('未检测到有效账户 Token，请注册登录后再试。');
+  }
+
+  try {
+    console.log('Optimizing Clash connections for token:', token);
+    const subUrl = `${BACKEND_BASE_URL}/speedup?token=${token}`;
+    const response = await axios.get(subUrl, { timeout: 10000 });
+
+    let yamlContent = response.data;
+    yamlContent = yamlContent.replace(/^mixed-port:\s*\d+/gm, 'mixed-port: 43289');
+    yamlContent = yamlContent.replace(/^port:\s*\d+/gm, 'port: 43289');
+    yamlContent = yamlContent.replace(/^socks-port:\s*\d+/gm, 'socks-port: 43290');
+
+    if (!yamlContent.includes('mixed-port: 43289') && !yamlContent.includes('port: 43289')) {
+      yamlContent = 'mixed-port: 43289\n' + yamlContent;
+    }
+
+    yamlContent = yamlContent.replace(/^external-controller:\s*.*/gm, '');
+    yamlContent = 'external-controller: 127.0.0.1:43299\n' + yamlContent;
+
+    const configPath = path.join(CLASH_WORK_DIR, 'config.yaml');
+    fs.writeFileSync(configPath, yamlContent, 'utf8');
+
+    // 如果加速器在运行中，关断所有连接池，强制客户端/Axel重设最佳连接流
+    if (clashProcess) {
+      try {
+        await axios.put('http://127.0.0.1:43299/configs', { path: configPath }, { timeout: 3000 });
+        await axios.delete('http://127.0.0.1:43299/connections', { timeout: 3000 });
+        console.log('Successfully reloaded config and closed all Mihomo connections via REST API.');
+      } catch (restErr) {
+        console.log('Mihomo REST API call failed, gracefully restarting Clash process:', restErr.message);
+        await stopClash();
+        await startClash(token);
+      }
+    } else {
+      await startClash(token);
+    }
+
+    return { success: true, message: '网络通道优化成功，已重新拉取配置并刷新网络通道！' };
+  } catch (err) {
+    console.error('Failed to optimize Clash connection:', err);
+    throw new Error(err.message || '优化连接失败');
   }
 }
 
@@ -555,6 +606,10 @@ ipcMain.handle('clash-start', async (event, { token }) => {
 ipcMain.handle('clash-stop', () => {
   stopClash();
   return true;
+});
+
+ipcMain.handle('clash-optimize', async (event, { token }) => {
+  return await optimizeClash(token);
 });
 
 // --- 自动更新与外部链接 ---
