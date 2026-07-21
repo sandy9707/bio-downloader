@@ -3,3 +3,12 @@ dist/
 .DS_Store
 icons/icon.iconset/
 config.json
+01_backend_server/downloads/*.dmg
+01_backend_server/downloads/*.exe
+01_backend_server/downloads/*.asar
+01_backend_server/downloads/*.zip
+01_backend_server/downloads/patch-*
+.env
+.agents/
+/bin/darwin/
+/bin/win32/
