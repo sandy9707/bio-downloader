@@ -396,7 +396,12 @@ async function downloadUpdate(platform) {
     : `https://github.com/sandy9707/bio-downloader/releases/download/v${updateInfoGlobal.latestVersion}/BioDownloader-${updateInfoGlobal.latestVersion}-arm64.dmg`;
 
   // 检测 Clash 内置加速代理是否启动
-  const clashRunning = await window.api.clashStatus();
+  let clashRunning = false;
+  try {
+    clashRunning = await window.api.getClashStatus();
+  } catch (e) {
+    console.warn('getClashStatus error:', e);
+  }
   let targetUrl = backendUrl;
   let usingGithub = false;
 

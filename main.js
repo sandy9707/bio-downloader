@@ -730,6 +730,7 @@ ipcMain.handle('check-for-updates', async () => {
       currentVersion,
       latestVersion,
       hasUpdate,
+      patchUrl: res.data.patchUrl ? (res.data.patchUrl.startsWith('http') ? res.data.patchUrl : `${BACKEND_BASE_URL}${res.data.patchUrl}`) : null,
       winUrl: `${BACKEND_BASE_URL}${res.data.winUrl}`,
       macUrl: `${BACKEND_BASE_URL}${res.data.macUrl}`,
       releaseNotes: res.data.releaseNotes
