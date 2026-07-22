@@ -422,8 +422,10 @@ async function startClash(token) {
     yamlContent = yamlContent.replace(/^log-level:\s*.*/gm, '');
     yamlContent = 'log-level: warning\n' + yamlContent;
 
-    // 将 load-balance 转换为 url-test 自动选优过滤故障节点，彻底解决 502 报错
-    yamlContent = yamlContent.replace(/type:\s*load-balance/g, 'type: url-test\n    tolerance: 50');
+    // 保持 load-balance 轮询负载均衡模式，发挥多节点多账号多线程并发加速能力
+    // 优化健康检查参数：interval 设为 15s，max-failed-times 设为 1，快速自动剔除不通的故障节点
+    yamlContent = yamlContent.replace(/max-failed-times:\s*\d+/g, 'max-failed-times: 1');
+    yamlContent = yamlContent.replace(/interval:\s*\d+/g, 'interval: 15');
 
     // 保存 config.yaml 到用户工作空间
     const configPath = path.join(CLASH_WORK_DIR, 'config.yaml');
