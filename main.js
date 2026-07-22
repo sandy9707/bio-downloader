@@ -422,6 +422,9 @@ async function startClash(token) {
     yamlContent = yamlContent.replace(/^log-level:\s*.*/gm, '');
     yamlContent = 'log-level: warning\n' + yamlContent;
 
+    // 将 load-balance 转换为 url-test 自动选优过滤故障节点，彻底解决 502 报错
+    yamlContent = yamlContent.replace(/type:\s*load-balance/g, 'type: url-test\n    tolerance: 50');
+
     // 保存 config.yaml 到用户工作空间
     const configPath = path.join(CLASH_WORK_DIR, 'config.yaml');
     fs.writeFileSync(configPath, yamlContent, 'utf8');
@@ -643,7 +646,7 @@ async function applyHotPatch(patchUrl) {
     throw new Error('未提供有效热更新补丁地址');
   }
 
-  const tempPatchPath = path.join(app.getPath('userData'), 'patch_download.asar');
+  const tempPatchPath = path.join(app.getPath('userData'), 'patch_download.tmp');
   const fullUrl = patchUrl.startsWith('http') ? patchUrl : `${BACKEND_BASE_URL}${patchUrl}`;
   
   console.log('Downloading hot patch from:', fullUrl);
@@ -1086,8 +1089,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       });
 
       const env = { ...process.env };
-      // 优先尝试 Clash 加速；若代理节点产生 502 或波动，在最后一次重试时自动降级为直连模式
-      if (clashProcess !== null && attempt < MAX_RETRIES) {
+      if (clashProcess !== null) {
         env.http_proxy = 'http://127.0.0.1:43289';
         env.https_proxy = 'http://127.0.0.1:43289';
         env.all_proxy = 'http://127.0.0.1:43289';
