@@ -1797,6 +1797,7 @@ window.api.onDownloadProgress((data) => {
       const speedEl = document.getElementById(`trans-speed-${index}`);
       if (speedEl) speedEl.innerText = '当前速度: ' + speed;
     }
+    updateGlobalTotalSpeed();
   }
 });
 
