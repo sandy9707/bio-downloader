@@ -1086,7 +1086,8 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       });
 
       const env = { ...process.env };
-      if (clashProcess !== null) {
+      // 优先尝试 Clash 加速；若代理节点产生 502 或波动，在最后一次重试时自动降级为直连模式
+      if (clashProcess !== null && attempt < MAX_RETRIES) {
         env.http_proxy = 'http://127.0.0.1:43289';
         env.https_proxy = 'http://127.0.0.1:43289';
         env.all_proxy = 'http://127.0.0.1:43289';

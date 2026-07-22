@@ -1731,7 +1731,23 @@ window.api.onDownloadStatus((data) => {
       activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
       renderCompletedList();
       renderDownloadingList();
-    } else if (status === 'failed' || status === 'cancelled') {
+    } else if (status === 'failed') {
+      const failedItem = {
+        name: activeItem.name,
+        url: activeItem.url,
+        size: activeItem.size,
+        failedReason: data.speed || '网络连接超时 / 代理节点 502 Bad Gateway 报错',
+        failedAt: new Date().toLocaleString(),
+        originalIndex: activeItem.originalIndex
+      };
+      failedDownloads.unshift(failedItem);
+      localStorage.setItem('failed_downloads', JSON.stringify(failedDownloads));
+      
+      activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
+      renderFailedList();
+      renderDownloadingList();
+      showToast(`文件 ${activeItem.name} 下载失败，已移至【下载失败】选项卡`, 'error');
+    } else if (status === 'cancelled') {
       activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
       renderDownloadingList();
     } else {
