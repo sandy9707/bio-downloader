@@ -823,19 +823,24 @@ async function refreshUserInfo() {
 }
 
 function updateTrafficProgressBar(consumed, limit) {
+  const textEl = document.getElementById('headerTrafficText');
+  const fillEl = document.getElementById('headerTrafficFill') || document.getElementById('headerTrafficProgress');
+
   const isUnlimited = limit >= 100 * 1024 * 1024 * 1024 * 1024 * 0.9; // > 90TB 认为无限
   if (isUnlimited) {
-    document.getElementById('headerTrafficText').innerText = '无限流量 ⭐';
-    document.getElementById('headerTrafficProgress').style.width = '100%';
-    document.getElementById('headerTrafficProgress').style.background = 'var(--success-grad)';
+    if (textEl) textEl.innerText = '无限流量 ⭐';
+    if (fillEl) {
+      fillEl.style.width = '100%';
+      fillEl.style.background = 'var(--success-grad)';
+    }
     return;
   }
   const ratio = limit > 0 ? (consumed / limit) * 100 : 0;
   const remainText = formatBytes(limit - consumed);
   const totalText = formatBytes(limit);
   
-  document.getElementById('headerTrafficText').innerText = `${remainText} / ${totalText}`;
-  document.getElementById('headerTrafficProgress').style.width = Math.min(100, Math.max(0, 100 - ratio)) + '%';
+  if (textEl) textEl.innerText = `${remainText} / ${totalText}`;
+  if (fillEl) fillEl.style.width = Math.min(100, Math.max(0, 100 - ratio)) + '%';
 }
 
 async function handleLogout() {

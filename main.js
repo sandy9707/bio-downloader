@@ -1085,12 +1085,22 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
         speed: '正在高速下载...'
       });
 
-      const env = {
-        ...process.env,
-        http_proxy: 'http://127.0.0.1:43289',
-        https_proxy: 'http://127.0.0.1:43289',
-        all_proxy: 'http://127.0.0.1:43289'
-      };
+      const env = { ...process.env };
+      if (clashProcess !== null) {
+        env.http_proxy = 'http://127.0.0.1:43289';
+        env.https_proxy = 'http://127.0.0.1:43289';
+        env.all_proxy = 'http://127.0.0.1:43289';
+        env.HTTP_PROXY = 'http://127.0.0.1:43289';
+        env.HTTPS_PROXY = 'http://127.0.0.1:43289';
+        env.ALL_PROXY = 'http://127.0.0.1:43289';
+      } else {
+        delete env.http_proxy;
+        delete env.https_proxy;
+        delete env.all_proxy;
+        delete env.HTTP_PROXY;
+        delete env.HTTPS_PROXY;
+        delete env.ALL_PROXY;
+      }
 
       let threads = 16;
       if (file.size) {
