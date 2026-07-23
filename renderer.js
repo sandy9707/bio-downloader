@@ -804,14 +804,16 @@ async function verifyToken(token, isAutoLogin = false) {
       }
     }
   } catch (e) {
-    console.error('Token验证失败', e);
-    // 如果是自动登录尝试，不强制退出登录状态，只静默删除本地 Token
-    if (isAutoLogin) {
-      console.warn('自动登录 Token 失败，将清除并保持退出状态');
+    console.error('Token验证处理过程出现警报/失败:', e);
+    const isUnauthenticated = e.response && e.response.status === 401;
+    if (isAutoLogin || isUnauthenticated) {
+      console.warn('Token 无效或已失效，重置本地状态');
       await window.api.saveSettings({ token: null });
+      if (!isAutoLogin) {
+        await handleLogout();
+      }
     } else {
-      // 手动登录验证失败才退出
-      await handleLogout();
+      console.warn('非致命通信/渲染网络异常，保留当前登录态');
     }
   }
 }
