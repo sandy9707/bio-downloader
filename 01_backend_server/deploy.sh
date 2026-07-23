@@ -48,8 +48,8 @@ echo "=== [3/4] Running npm install on remote server ==="
 ssh "$SERVER" "$NVM_INIT cd $REMOTE_DIR && npm install --production"
 
 VERSION=$(node -e "console.log(require('../package.json').version)")
-echo "=== [3.5/4] Ensuring full release binaries (v${VERSION}) via 16-thread Axel ==="
-ssh "$SERVER" "cd $REMOTE_DIR/downloads && export PATH=\$HOME/bin:\$PATH; (axel -n 16 -o BioDownloader-${VERSION}-arm64.dmg https://gh-proxy.org/https://github.com/sandy9707/bio-downloader/releases/download/v${VERSION}/BioDownloader-${VERSION}-arm64.dmg || wget -c -O BioDownloader-${VERSION}-arm64.dmg https://gh-proxy.org/https://github.com/sandy9707/bio-downloader/releases/download/v${VERSION}/BioDownloader-${VERSION}-arm64.dmg || true) && (axel -n 16 -o BioDownloader-${VERSION}.exe https://gh-proxy.org/https://github.com/sandy9707/bio-downloader/releases/download/v${VERSION}/BioDownloader.${VERSION}.exe || wget -c -O BioDownloader-${VERSION}.exe https://gh-proxy.org/https://github.com/sandy9707/bio-downloader/releases/download/v${VERSION}/BioDownloader.${VERSION}.exe || true)"
+echo "=== [3.5/4] Triggering background binary fetch for v${VERSION} ==="
+ssh "$SERVER" "cd $REMOTE_DIR/downloads && export PATH=\$HOME/bin:\$PATH; nohup bash -c '(axel -n 16 -o BioDownloader-${VERSION}-arm64.dmg https://gh-proxy.org/https://github.com/sandy9707/bio-downloader/releases/download/v${VERSION}/BioDownloader-${VERSION}-arm64.dmg || wget -q -c -O BioDownloader-${VERSION}-arm64.dmg https://gh-proxy.org/https://github.com/sandy9707/bio-downloader/releases/download/v${VERSION}/BioDownloader-${VERSION}-arm64.dmg); (axel -n 16 -o BioDownloader-${VERSION}.exe https://gh-proxy.org/https://github.com/sandy9707/bio-downloader/releases/download/v${VERSION}/BioDownloader.${VERSION}.exe || wget -q -c -O BioDownloader-${VERSION}.exe https://gh-proxy.org/https://github.com/sandy9707/bio-downloader/releases/download/v${VERSION}/BioDownloader.${VERSION}.exe)' > /tmp/binary_fetch.log 2>&1 &"
 
 echo "=== [4/4] Starting/Restarting application with PM2 ==="
 ssh "$SERVER" "$NVM_INIT cd $REMOTE_DIR && (pm2 delete $PM2_NAME || true) && pm2 start server.js --name $PM2_NAME && pm2 save"
