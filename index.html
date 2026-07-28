@@ -918,8 +918,8 @@
     </div>
 
     <!-- 优化连接 / 重置通道按钮 -->
-    <button class="btn btn-secondary" id="btnOptimizeConn" onclick="optimizeConnections()" style="width: 100%; margin-top: 0.5rem; font-size: 0.8rem; padding: 0.4rem; display: flex; align-items: center; justify-content: center; gap: 0.3rem; border-radius: 6px; background: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.3); color: #a5b4fc; cursor: pointer;">
-      <span>⚡ 优化连接</span>
+    <button class="btn btn-secondary" id="btnOptimizeConn" onclick="optimizeConnections()" style="width: 100%; margin-top: 0.5rem; font-size: 0.8rem; padding: 0.45rem 0.6rem; display: flex; align-items: center; justify-content: center; gap: 0.3rem; border-radius: 8px; background: rgba(99, 102, 241, 0.12); border: 1px solid rgba(99, 102, 241, 0.25); color: #818cf8; cursor: pointer; white-space: nowrap; overflow: hidden;">
+      <span id="btnOptimizeConnText">⚡ 优化连接</span>
     </button>
   </div>
 
@@ -945,11 +945,29 @@
 
     <!-- VIEW: 下载中心 -->
     <div class="tab-view active" id="download-hub">
-      <div class="btn-group">
+      <div class="btn-group" style="position: relative;">
         <button class="pill-btn active" onclick="switchDownloadType(this, 'sra_raw')">SRA Raw</button>
         <button class="pill-btn" onclick="switchDownloadType(this, 'ebi_raw')">EBI Raw</button>
         <button class="pill-btn" onclick="switchDownloadType(this, 'geo_suppl')">GEO Suppl</button>
         <button class="pill-btn" onclick="switchDownloadType(this, 'links')">Target Links</button>
+
+        <!-- 更多扩展数据源下拉菜单 -->
+        <div class="more-dropdown-wrapper" style="position: relative; display: inline-block;">
+          <button class="pill-btn" id="moreDropdownBtn" onclick="toggleMoreMenu(event)">
+            <span id="moreDropdownText">更多数据源 ✨</span>
+            <span style="font-size: 0.65rem; margin-left: 3px;">▼</span>
+          </button>
+          <div class="more-dropdown-menu" id="moreDropdownMenu" style="display: none; position: absolute; top: calc(100% + 6px); left: 0; background: var(--modal-bg); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.25); z-index: 100; min-width: 150px; overflow: hidden; padding: 4px 0;">
+            <div class="dropdown-item" onclick="selectMoreType(this, 'zenodo', 'Zenodo')" style="padding: 8px 14px; font-size: 0.85rem; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 8px; transition: background 0.2s;">
+              <span style="font-size: 0.9rem;">📦</span>
+              <span>Zenodo</span>
+            </div>
+            <div class="dropdown-item" onclick="selectMoreType(this, 'huggingface', 'Hugging Face')" style="padding: 8px 14px; font-size: 0.85rem; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 8px; transition: background 0.2s;">
+              <span style="font-size: 0.9rem;">🤗</span>
+              <span>Hugging Face</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="card">
@@ -968,6 +986,14 @@
         <div class="form-group" id="group-links" style="display:none;">
           <label>请输入直接下载链接 (多项使用换行分隔)</label>
           <textarea id="accInput-links" rows="4" placeholder="例如: https://example.com/file.fq.gz">https://ftp.ncbi.nlm.nih.gov/geo/series/GSE153nnn/GSE153781/suppl/GSE153781_Annotated_lncRNA_FPKM.txt.gz</textarea>
+        </div>
+        <div class="form-group" id="group-zenodo" style="display:none;">
+          <label>请输入 Zenodo 记录编号或链接 (将自动解析并提取全量附件数据)</label>
+          <textarea id="accInput-zenodo" rows="4" placeholder="例如: 10808269 或 https://zenodo.org/records/10808269">10808269</textarea>
+        </div>
+        <div class="form-group" id="group-huggingface" style="display:none;">
+          <label>请输入 Hugging Face 数据集/模型 ID 或文件直链 (多项使用换行分隔)</label>
+          <textarea id="accInput-huggingface" rows="4" placeholder="例如: tatsu-lab/alpaca 或 Qwen/Qwen2.5-0.5B">tatsu-lab/alpaca</textarea>
         </div>
 
         <div class="form-group">
@@ -1010,7 +1036,7 @@
             <button class="sub-tab-btn" id="tabBtnFailed" onclick="switchTransferSubTab('failed')">下载失败 (<span id="failedCount">0</span>)</button>
           </div>
           <div class="transfer-actions">
-            <button class="btn btn-secondary" onclick="window.api.openDownloadsFolder()" style="font-size: 0.85rem; padding: 0.45rem 1rem;">📂 打开下载目录</button>
+            <button class="btn btn-secondary" onclick="openDownloadsDirectory()" style="font-size: 0.85rem; padding: 0.45rem 1rem;">📂 打开下载目录</button>
             <button class="btn btn-primary" id="btnRetryAllFailed" onclick="retryAllFailedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🔄 一键重试全部</button>
             <button class="btn btn-danger" id="btnClearCompleted" onclick="clearCompletedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空已完成</button>
             <button class="btn btn-danger" id="btnClearFailed" onclick="clearFailedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空失败记录</button>
@@ -1030,6 +1056,14 @@
           <div class="empty-state" id="emptyCompletedState">
             <div class="empty-icon">✓</div>
             <p>暂无已完成的下载历史</p>
+          </div>
+        </div>
+
+        <!-- 下载失败列表 -->
+        <div class="transfer-list-container" id="transferFailedList" style="display: none;">
+          <div class="empty-state" id="emptyFailedState">
+            <div class="empty-icon">❌</div>
+            <p>暂无下载失败的任务</p>
           </div>
         </div>
       </div>

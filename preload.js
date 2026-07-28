@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('api', {
   stopClash: () => ipcRenderer.invoke('clash-stop'),
   getClashStatus: () => ipcRenderer.invoke('clash-status'),
   optimizeClash: (token) => ipcRenderer.invoke('clash-optimize', { token }),
+  getNodeCount: () => ipcRenderer.invoke('clash-get-node-count'),
 
   // 下载管理
   checkSize: (type, inputVal) => ipcRenderer.invoke('check-download-size', { type, inputVal }),

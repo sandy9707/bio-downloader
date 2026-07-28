@@ -427,6 +427,15 @@ async function startClash(token) {
     yamlContent = yamlContent.replace(/max-failed-times:\s*\d+/g, 'max-failed-times: 1');
     yamlContent = yamlContent.replace(/interval:\s*\d+/g, 'interval: 15');
 
+    // 统计订阅配置中真实的节点数量
+    const proxyMatches = yamlContent.match(/^\s*-\s*(?:\{\s*)?name\s*:/gm);
+    if (proxyMatches && proxyMatches.length > 0) {
+      currentRealNodeCount = proxyMatches.length;
+    } else {
+      currentRealNodeCount = 80;
+    }
+    console.log(`[Clash] 成功解析云端真实节点数量: ${currentRealNodeCount}`);
+
     // 保存 config.yaml 到用户工作空间
     const configPath = path.join(CLASH_WORK_DIR, 'config.yaml');
     fs.writeFileSync(configPath, yamlContent, 'utf8');
@@ -541,28 +550,59 @@ async function optimizeClash(token) {
 // 【大小校验工具模块】
 // ==========================================
 async function headRequestSize(url) {
-  try {
-    // 默认通过 Clash 代理进行 HEAD 检测以确保可达并返回准确体积
-    const response = await axios.head(url, {
-      timeout: 10000,
-      proxy: {
-        protocol: 'http',
-        host: '127.0.0.1',
-        port: 43289
-      }
-    });
-    if (response.headers['content-length']) {
-      return parseInt(response.headers['content-length']);
+  const tryGetSizeFromHeaders = (headers) => {
+    if (!headers) return 0;
+    if (headers['content-length']) {
+      const len = parseInt(headers['content-length'], 10);
+      if (!isNaN(len) && len > 0) return len;
     }
-  } catch (e) {
-    // 如果代理未启动，尝试直连
-    try {
-      const directRes = await axios.head(url, { timeout: 8000 });
-      if (directRes.headers['content-length']) {
-        return parseInt(directRes.headers['content-length']);
+    if (headers['content-range']) {
+      const match = headers['content-range'].match(/\/(\d+)$/);
+      if (match) {
+        const len = parseInt(match[1], 10);
+        if (!isNaN(len) && len > 0) return len;
       }
-    } catch (err) {}
+    }
+    return 0;
+  };
+
+  const requestOptions = {
+    timeout: 10000,
+    maxRedirects: 5,
+    proxy: clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false
+  };
+
+  // 1. 尝试 HEAD 请求
+  try {
+    const response = await axios.head(url, requestOptions);
+    const sz = tryGetSizeFromHeaders(response.headers);
+    if (sz > 0) return sz;
+  } catch (e) {}
+
+  // 2. 尝试轻量 Range: bytes=0-1 GET 请求 (极小开销只取头部，破除 CDN 重定向 / chunked 问题)
+  try {
+    const rangeOptions = {
+      ...requestOptions,
+      headers: { Range: 'bytes=0-1' },
+      timeout: 12000
+    };
+    const res = await axios.get(url, rangeOptions);
+    const sz = tryGetSizeFromHeaders(res.headers);
+    if (sz > 0) return sz;
+  } catch (e) {
+    if (e.response && e.response.headers) {
+      const sz = tryGetSizeFromHeaders(e.response.headers);
+      if (sz > 0) return sz;
+    }
   }
+
+  // 3. 尝试直连备用
+  try {
+    const directRes = await axios.get(url, { headers: { Range: 'bytes=0-1' }, timeout: 8000, maxRedirects: 5 });
+    const sz = tryGetSizeFromHeaders(directRes.headers);
+    if (sz > 0) return sz;
+  } catch (e) {}
+
   return 0;
 }
 
@@ -631,7 +671,8 @@ ipcMain.handle('api-create-order', async (event, { token, packageId, payType, qu
 
 // --- Clash 控制 ---
 ipcMain.handle('clash-start', async (event, { token }) => {
-  return await startClash(token);
+  await startClash(token);
+  return { success: true, nodeCount: currentRealNodeCount };
 });
 
 ipcMain.handle('clash-stop', () => {
@@ -640,7 +681,12 @@ ipcMain.handle('clash-stop', () => {
 });
 
 ipcMain.handle('clash-optimize', async (event, { token }) => {
-  return await optimizeClash(token);
+  const res = await optimizeClash(token);
+  return { ...res, nodeCount: currentRealNodeCount };
+});
+
+ipcMain.handle('clash-get-node-count', () => {
+  return currentRealNodeCount || 80;
 });
 
 async function applyHotPatch(patchUrl) {
@@ -934,6 +980,123 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
         files.push(...resolvedFiles);
       } catch (err) {
         throw new Error(`获取 GEO ${acc} 页面失败: ` + err.message);
+      }
+    }
+  } else if (type === 'zenodo') {
+    for (const rawId of ids) {
+      try {
+        const match = rawId.match(/(?:records?\/|zenodo\.|\b)(\d+)\b/i);
+        if (!match) {
+          throw new Error(`无法识别 Zenodo 记录编号: ${rawId}`);
+        }
+        const recordId = match[1];
+        const apiUrl = `https://zenodo.org/api/records/${recordId}`;
+
+        let res;
+        try {
+          res = await axios.get(apiUrl, {
+            timeout: 15000,
+            proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 }
+          });
+        } catch (proxyErr) {
+          console.warn(`Failed to fetch Zenodo API via proxy: ${proxyErr.message}, falling back to direct connection`);
+          res = await axios.get(apiUrl, { timeout: 12000 });
+        }
+
+        if (!res.data || !Array.isArray(res.data.files) || res.data.files.length === 0) {
+          throw new Error(`[Zenodo ${recordId}] 未找到任何附件数据`);
+        }
+
+        const resolvedFiles = await Promise.all(res.data.files.map(async (fileItem) => {
+          const fileUrl = fileItem.links?.content || fileItem.links?.self || `https://zenodo.org/records/${recordId}/files/${fileItem.key}/content`;
+          const fileName = fileItem.key || fileItem.filename || fileUrl.substring(fileUrl.lastIndexOf('/') + 1);
+          let size = typeof fileItem.size === 'number' ? fileItem.size : 0;
+          if (size === 0) {
+            size = await headRequestSize(fileUrl);
+          }
+          return { name: fileName, url: fileUrl, size, folder: 'zenodo_' + recordId };
+        }));
+
+        files.push(...resolvedFiles);
+      } catch (err) {
+        throw new Error(`获取 Zenodo 记录 [${rawId}] 失败: ` + err.message);
+      }
+    }
+  } else if (type === 'huggingface') {
+    for (const item of ids) {
+      try {
+        if (item.startsWith('http://') || item.startsWith('https://')) {
+          const url = item;
+          const fileName = url.substring(url.lastIndexOf('/') + 1) || 'hf_file_' + Date.now();
+          const size = await headRequestSize(url);
+          files.push({ name: fileName, url, size, folder: 'huggingface' });
+          continue;
+        }
+
+        let repoId = item.trim().replace(/^https?:\/\/huggingface\.co\//i, '').replace(/^(datasets|models)\//i, '');
+        let isDataset = item.toLowerCase().includes('/datasets/') || item.startsWith('datasets/');
+        let finalRepoType = isDataset ? 'datasets' : 'models';
+
+        // 递归请求树节点列表，过滤排除目录 tree 节点，仅保留真实的 file/blob 节点
+        const fetchTreeFiles = async (rId, repoType, subPath = '') => {
+          const treeUrl = subPath
+            ? `https://huggingface.co/api/${repoType}/${rId}/tree/main/${subPath}`
+            : `https://huggingface.co/api/${repoType}/${rId}/tree/main`;
+          
+          let res;
+          try {
+            res = await axios.get(treeUrl, {
+              timeout: 15000,
+              proxy: clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false
+            });
+          } catch (proxyErr) {
+            res = await axios.get(treeUrl, { timeout: 12000 });
+          }
+
+          if (!res.data || !Array.isArray(res.data)) return [];
+
+          const fileList = [];
+          for (const node of res.data) {
+            if (node.type === 'file' || node.type === 'blob') {
+              fileList.push(node);
+            } else if (node.type === 'directory' || node.type === 'tree') {
+              const subFiles = await fetchTreeFiles(rId, repoType, node.path);
+              fileList.push(...subFiles);
+            }
+          }
+          return fileList;
+        };
+
+        let fileNodes = [];
+        try {
+          fileNodes = await fetchTreeFiles(repoId, finalRepoType);
+        } catch (e1) {
+          finalRepoType = finalRepoType === 'datasets' ? 'models' : 'datasets';
+          fileNodes = await fetchTreeFiles(repoId, finalRepoType);
+        }
+
+        if (fileNodes.length === 0) {
+          throw new Error(`[HF ${item}] 未找到任何可下载的数据文件`);
+        }
+
+        const resolvedFiles = await Promise.all(fileNodes.map(async (node) => {
+          const rpath = node.path;
+          const fileName = rpath.substring(rpath.lastIndexOf('/') + 1);
+          const fileUrl = finalRepoType === 'datasets'
+            ? `https://huggingface.co/datasets/${repoId}/resolve/main/${rpath}`
+            : `https://huggingface.co/${repoId}/resolve/main/${rpath}`;
+          
+          let size = typeof node.size === 'number' && node.size > 0 ? node.size : 0;
+          if (size === 0) {
+            size = await headRequestSize(fileUrl);
+          }
+          const folderName = 'hf_' + repoId.replace(/\//g, '_');
+          return { name: fileName, url: fileUrl, size, folder: folderName };
+        }));
+
+        files.push(...resolvedFiles);
+      } catch (err) {
+        throw new Error(`获取 Hugging Face 存储库 [${item}] 失败: ` + err.message);
       }
     }
   } else if (type === 'links') {
@@ -1346,8 +1509,15 @@ ipcMain.handle('cancel-download', (event, fileIndex) => {
 });
 
 ipcMain.handle('open-downloads-folder', (event, folderPath) => {
-  if (folderPath && fs.existsSync(folderPath)) {
-    shell.openPath(folderPath);
+  let target = folderPath;
+  if (!target || typeof target !== 'string' || !fs.existsSync(target)) {
+    target = app.getPath('downloads');
+  }
+  if (!fs.existsSync(target)) {
+    try { fs.mkdirSync(target, { recursive: true }); } catch (e) {}
+  }
+  if (fs.existsSync(target)) {
+    shell.openPath(target);
     return true;
   }
   return false;

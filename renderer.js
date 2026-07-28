@@ -19,6 +19,8 @@ const tabStates = {
   sra_raw: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
   ebi_raw: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
   geo_suppl: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
+  zenodo: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
+  huggingface: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
   links: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' }
 };
 
@@ -173,6 +175,10 @@ async function updateClashUIState() {
       toggle.checked = false;
       document.getElementById('clashConfigInfo').innerText = '尚未启动下载加速器。启动下载时会自动开启。';
     }
+    try {
+      const nodeCount = await window.api.getNodeCount();
+      if (nodeCount) updateNodeCountUI(nodeCount);
+    } catch(e) {}
   } catch (e) {
     console.error('获取加速器状态错误:', e);
   }
@@ -246,6 +252,33 @@ function switchTab(tabId) {
   document.getElementById('tabTitle').innerText = titles[tabId] || '下载中心';
 }
 
+function toggleMoreMenu(e) {
+  if (e) e.stopPropagation();
+  const menu = document.getElementById('moreDropdownMenu');
+  if (menu) {
+    menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+  }
+}
+
+document.addEventListener('click', () => {
+  const menu = document.getElementById('moreDropdownMenu');
+  if (menu) menu.style.display = 'none';
+});
+
+function selectMoreType(el, type, labelName) {
+  const menu = document.getElementById('moreDropdownMenu');
+  if (menu) menu.style.display = 'none';
+
+  const btn = document.getElementById('moreDropdownBtn');
+  const textEl = document.getElementById('moreDropdownText');
+  
+  if (btn && textEl) {
+    textEl.innerText = `${labelName} ✨`;
+  }
+  
+  switchDownloadType(btn, type);
+}
+
 function switchDownloadType(btn, type) {
   if (isDownloading) {
     showToast('下载正在进行中，请先取消当前下载或等待其完成再切换', 'warning');
@@ -256,14 +289,23 @@ function switchDownloadType(btn, type) {
   saveCurrentTabState();
 
   // 2. 切换按钮激活样式
-  const buttons = btn.parentElement.querySelectorAll('.pill-btn');
-  buttons.forEach(b => b.classList.remove('active'));
+  const btnGroup = btn.closest('.btn-group');
+  if (btnGroup) {
+    const buttons = btnGroup.querySelectorAll('.pill-btn');
+    buttons.forEach(b => b.classList.remove('active'));
+  }
   btn.classList.add('active');
+
+  // 如果选的不是更多菜单里的项，恢复更多按钮默认字样
+  if (type !== 'zenodo' && type !== 'huggingface') {
+    const textEl = document.getElementById('moreDropdownText');
+    if (textEl) textEl.innerText = '更多数据源 ✨';
+  }
 
   currentDownloadType = type;
 
   // 3. 切换输入框的可见性
-  const types = ['sra_raw', 'ebi_raw', 'geo_suppl', 'links'];
+  const types = ['sra_raw', 'ebi_raw', 'geo_suppl', 'links', 'zenodo', 'huggingface'];
   types.forEach(t => {
     const el = document.getElementById('group-' + t);
     if (el) el.style.display = t === type ? 'flex' : 'none';
@@ -271,6 +313,11 @@ function switchDownloadType(btn, type) {
   
   // 4. 恢复目标 Tab 状态
   restoreTabState(type);
+}
+
+function openDownloadsDirectory() {
+  const dir = defaultDir || document.getElementById('targetDirInput')?.value || '';
+  window.api.openDownloadsFolder(dir);
 }
 
 // 选择下载文件夹 (下载中心页)
@@ -1489,8 +1536,8 @@ function renderFailedList() {
         </div>
         <div class="transfer-item-meta">
           <span class="transfer-item-size">${formatBytes(item.size || 0)}</span>
-          <span class="transfer-item-status failed" style="color: #f87171;">下载失败: ${item.errorMsg || '网络或节点超时'}</span>
-          <span class="transfer-item-time">${item.failedAt}</span>
+          <span class="transfer-item-status failed" style="color: #f87171;">下载失败: ${item.failedReason || item.errorMsg || '网络或节点超时'}</span>
+          <span class="transfer-item-time">${item.failedAt || new Date().toLocaleString()}</span>
         </div>
       </div>
       <div class="transfer-item-actions">
@@ -1506,6 +1553,8 @@ function getFileTypeBadge(url) {
   if (url.includes('sra_raw') || url.includes('sra-pub-run-odp')) return 'SRA Raw';
   if (url.includes('ebi.ac.uk')) return 'EBI Raw';
   if (url.includes('geo/series')) return 'GEO Suppl';
+  if (url.includes('zenodo.org')) return 'Zenodo';
+  if (url.includes('huggingface.co')) return 'Hugging Face';
   return 'Direct Link';
 }
 
@@ -1804,6 +1853,9 @@ window.api.onDownloadProgress((data) => {
 });
 
 // 绑定到 window 暴露给 HTML 属性
+window.toggleMoreMenu = toggleMoreMenu;
+window.selectMoreType = selectMoreType;
+window.openDownloadsDirectory = openDownloadsDirectory;
 window.switchTransferSubTab = switchTransferSubTab;
 window.changeMaxConcurrent = changeMaxConcurrent;
 window.openCompletedFile = openCompletedFile;
@@ -2032,6 +2084,22 @@ function copyInviteUrl() {
 window.copyInviteCode = copyInviteCode;
 window.copyInviteUrl = copyInviteUrl;
 
+let currentRealNodeCount = 0;
+
+function updateNodeCountUI(count) {
+  if (typeof count === 'number' && count > 0) {
+    currentRealNodeCount = count;
+  }
+  const textEl = document.getElementById('btnOptimizeConnText');
+  if (textEl) {
+    if (currentRealNodeCount > 0) {
+      textEl.innerText = `⚡ 优化连接 (目前节点${currentRealNodeCount})`;
+    } else {
+      textEl.innerText = `⚡ 优化连接`;
+    }
+  }
+}
+
 // 优化连接/刷新通道方法
 async function optimizeConnections() {
   if (!currentUser || !currentUser.token) {
@@ -2041,23 +2109,25 @@ async function optimizeConnections() {
   }
 
   const btn = document.getElementById('btnOptimizeConn');
+  const textEl = document.getElementById('btnOptimizeConnText');
   if (btn) {
     btn.disabled = true;
-    btn.innerHTML = '<span>⏳ 正在优化...</span>';
+    if (textEl) textEl.innerText = '⏳ 正在优化网络通道...';
   }
 
   try {
     const res = await window.api.optimizeClash(currentUser.token);
     if (res.success) {
-      showToast(res.message || '网络通道优化成功，已重置所有连接！', 'success');
+      if (res.nodeCount) updateNodeCountUI(res.nodeCount);
+      showToast(res.message || '网络通道优化成功，已重新拉取配置并刷新网络通道！', 'success');
     }
   } catch (err) {
     showToast('连接优化失败: ' + (err.message || '未知错误'), 'error');
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.innerHTML = '<span>⚡ 优化连接</span>';
     }
+    updateNodeCountUI();
   }
 }
 
