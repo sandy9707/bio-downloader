@@ -1245,6 +1245,100 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
         }
       }
 
+async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, totalSize, logStream) {
+  const targetDir = path.dirname(savePath);
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
+
+  const writer = fs.createWriteStream(savePath);
+  let downloadedBytes = 0;
+  let lastEmitTime = Date.now();
+  let lastBytes = 0;
+
+  const axiosOptions = {
+    url: fileUrl,
+    method: 'GET',
+    responseType: 'stream',
+    timeout: 30000,
+    maxRedirects: 5,
+    proxy: (env && env.http_proxy) ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false
+  };
+
+  if (logStream) {
+    logStream.write(`\n=== 触发 Node.js 纯内置极速回退引擎下载 ===\nURL: ${fileUrl}\nSavePath: ${savePath}\n`);
+  }
+
+  const response = await axios(axiosOptions);
+  const headerLen = parseInt(response.headers['content-length'] || '0', 10);
+  const finalTotalSize = totalSize || headerLen || 0;
+
+  return new Promise((resolve, reject) => {
+    let speedTimer = setInterval(() => {
+      const now = Date.now();
+      const bytesDiff = downloadedBytes - lastBytes;
+      lastBytes = downloadedBytes;
+      const speedBps = (bytesDiff / ((now - lastEmitTime || 1000) / 1000));
+      lastEmitTime = now;
+
+      let speedStr = '0 B/s';
+      if (speedBps > 1024 * 1024) {
+        speedStr = (speedBps / (1024 * 1024)).toFixed(2) + ' MB/s';
+      } else if (speedBps > 1024) {
+        speedStr = (speedBps / 1024).toFixed(1) + ' KB/s';
+      } else {
+        speedStr = Math.round(speedBps) + ' B/s';
+      }
+
+      let percentage = finalTotalSize > 0 ? Math.min(99, Math.floor((downloadedBytes / finalTotalSize) * 100)) : 50;
+
+      mainWindow.webContents.send('download-progress', {
+        index: fileIndex,
+        percentage,
+        speed: speedStr
+      });
+    }, 500);
+
+    response.data.on('data', (chunk) => {
+      downloadedBytes += chunk.length;
+    });
+
+    response.data.pipe(writer);
+
+    writer.on('finish', () => {
+      clearInterval(speedTimer);
+      mainWindow.webContents.send('download-progress', {
+        index: fileIndex,
+        percentage: 100,
+        speed: '0 B/s'
+      });
+      if (logStream) {
+        logStream.write(`\n=== Node.js 回退引擎下载成功 ===\n`);
+        logStream.end();
+      }
+      resolve();
+    });
+
+    writer.on('error', (err) => {
+      clearInterval(speedTimer);
+      if (logStream) {
+        logStream.write(`\n=== Node.js 回退引擎写入错误: ${err.message} ===\n`);
+        logStream.end();
+      }
+      reject(err);
+    });
+
+    response.data.on('error', (err) => {
+      clearInterval(speedTimer);
+      if (logStream) {
+        logStream.write(`\n=== Node.js 网络流传输错误: ${err.message} ===\n`);
+        logStream.end();
+      }
+      reject(err);
+    });
+  });
+}
+
       mainWindow.webContents.send('download-status', {
         index: fileIndex,
         fileName: file.name,
@@ -1377,8 +1471,13 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
             }
           });
 
+          let axelHasDyldError = false;
+
           proc.stderr.on('data', (data) => {
             const output = data.toString();
+            if (output.includes('Library not loaded') || output.includes('dyld')) {
+              axelHasDyldError = true;
+            }
             if (logStream) {
               logStream.write(`[STDERR] ${output}`);
             }
@@ -1388,12 +1487,17 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
             activeAxelProcesses.delete(fileIndex);
             if (logStream) {
               logStream.write(`\n=== 进程退出 ===\n状态码: ${code}\n`);
-              logStream.end();
             }
-            if (code === 0) {
+            if (code === 0 && !axelHasDyldError) {
+              if (logStream) logStream.end();
               resolve();
             } else {
-              reject(new Error(`退出状态码: ${code}`));
+              if (logStream) {
+                logStream.write(`Axel 执行失败或系统动态库缺失 (dyld: ${axelHasDyldError})，正在触发纯 Node.js 保底下载引擎...\n`);
+              }
+              downloadFileWithNodeStream(file.url, savePath, env, fileIndex, file.size, logStream)
+                .then(resolve)
+                .catch(reject);
             }
           });
         });
