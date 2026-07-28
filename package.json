@@ -27,6 +27,15 @@
       "output": "dist"
     },
     "publish": null,
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "index.html",
+      "logo.png",
+      "package.json",
+      "icons/**/*"
+    ],
     "extraResources": [
       {
         "from": "bin/",

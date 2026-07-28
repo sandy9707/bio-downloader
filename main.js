@@ -33,7 +33,7 @@ function loadEnv() {
 }
 
 // 综合加载所有配置
-let BACKEND_BASE_URL = 'http://localhost:13000';
+let BACKEND_BASE_URL = 'https://biodown.ye.aimeals.cn';
 
 function loadConfiguration() {
   loadEnv();
@@ -630,8 +630,15 @@ ipcMain.handle('api-register', async (event, { username, password, email, invite
 });
 
 ipcMain.handle('api-login', async (event, { username, password }) => {
-  const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/login`, { username, password });
-  return res.data;
+  try {
+    const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/login`, { username, password }, { timeout: 10000 });
+    return res.data;
+  } catch (err) {
+    if (err.response && err.response.data) {
+      return err.response.data;
+    }
+    return { error: `连接服务器失败: ${err.message}` };
+  }
 });
 
 ipcMain.handle('api-get-user-info', async (event, { token }) => {
