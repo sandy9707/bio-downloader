@@ -12,3 +12,18 @@ config.json
 .agents/
 /bin/darwin/
 /bin/win32/
+
+# ===== 非公开内容:仅本地保存,禁止上传 GitHub =====
+01_backend_server/
+02_binaries/
+03_desktop_app/
+04_password_reset_email_service/
+05_logo/
+scratch/
+参考/
+需求.md
+test_clash.gz
+.env.example
+build_patch.js
+*.gz
+.claude/
