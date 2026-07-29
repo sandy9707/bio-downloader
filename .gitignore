@@ -27,3 +27,4 @@ test_clash.gz
 build_patch.js
 *.gz
 .claude/
+诊断报告_*.md
