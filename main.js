@@ -5,6 +5,61 @@ const { spawn, exec } = require('child_process');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const os = require('os');
+const crypto = require('crypto');
+
+// ===== 热更新签名验签 =====
+// 内嵌的热更新补丁验签公钥(Ed25519)。私钥离线保管,仅在发布补丁时签名。
+// 任何补丁必须 sha256 匹配、且签名通过该公钥验证,才会被应用;否则中止并保留当前版本。
+const HOT_UPDATE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAdmJCuvTeFDhaU9DPSEP3yfSmf8OCCxnrt206d4L6VWY=
+-----END PUBLIC KEY-----`;
+
+// 计算文件 sha256(hex,小写)
+function fileSha256(filePath) {
+  const buf = fs.readFileSync(filePath);
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+// 校验补丁:sha256 必须匹配,且签名(对 sha256 十六进制串的 Ed25519 签名, base64)必须通过公钥验证
+function verifyPatchFile(filePath, expectedSha256, signatureB64) {
+  if (!expectedSha256 || !signatureB64) return false;
+  const actual = fileSha256(filePath);
+  if (actual !== String(expectedSha256).toLowerCase()) {
+    console.error(`[HotPatch] sha256 不匹配: 期望 ${expectedSha256}, 实际 ${actual}`);
+    return false;
+  }
+  try {
+    const ok = crypto.verify(null, Buffer.from(actual), HOT_UPDATE_PUBLIC_KEY, Buffer.from(signatureB64, 'base64'));
+    if (!ok) console.error('[HotPatch] 签名验证未通过');
+    return ok;
+  } catch (e) {
+    console.error('[HotPatch] 签名验证异常:', e.message);
+    return false;
+  }
+}
+
+// 简易 semver 比较: a>b 返回 1, a<b 返回 -1, 相等 0(按数字段比较,用于防降级)
+function compareVersions(a, b) {
+  const pa = String(a || '0').split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = String(b || '0').split('.').map((x) => parseInt(x, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const da = pa[i] || 0, db = pb[i] || 0;
+    if (da > db) return 1;
+    if (da < db) return -1;
+  }
+  return 0;
+}
+
+// 判断 URL 是否与 BACKEND_BASE_URL 同源(热更新补丁只允许来自官方后端)
+function isSameOrigin(url) {
+  try {
+    return new URL(url).origin === new URL(BACKEND_BASE_URL).origin;
+  } catch (e) {
+    return false;
+  }
+}
+
 // 加载 .env 配置文件 (兼容开发与打包环境)
 function loadEnv() {
   const envPaths = [
@@ -311,12 +366,23 @@ function checkPendingAsarUpdates() {
     const updateAsar = path.join(process.resourcesPath, 'update.asar');
     const targetAsar = path.join(process.resourcesPath, 'app.asar');
     if (fs.existsSync(updateAsar)) {
-      console.log('Found pending update.asar, applying now on startup...');
+      const manifestPath = updateAsar + '.manifest';
+      let manifest = null;
+      try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch(e){}
+      // 安全:无清单或验签不通过的暂存补丁一律丢弃,绝不应用未校验的代码
+      if (!manifest || !verifyPatchFile(updateAsar, manifest.sha256, manifest.signature)) {
+        console.warn('Pending update.asar 未通过签名校验,已丢弃。');
+        try { fs.unlinkSync(updateAsar); } catch(e){}
+        try { fs.unlinkSync(manifestPath); } catch(e){}
+        return;
+      }
+      console.log('Found verified pending update.asar, applying now on startup...');
       const backupAsar = path.join(process.resourcesPath, 'app.asar.old');
       try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
       if (fs.existsSync(targetAsar)) fs.renameSync(targetAsar, backupAsar);
       fs.renameSync(updateAsar, targetAsar);
       try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
+      try { fs.unlinkSync(manifestPath); } catch(e){}
     }
   } catch (e) {
     console.error('Error applying pending asar update on startup:', e);
@@ -701,17 +767,28 @@ async function applyHotPatch(patchUrl) {
     throw new Error('未提供有效热更新补丁地址');
   }
 
-  const tempPatchPath = path.join(app.getPath('userData'), 'patch_download.tmp');
+  // 1) 同源校验:补丁只允许来自官方后端,杜绝被指向任意外部主机
   const fullUrl = patchUrl.startsWith('http') ? patchUrl : `${BACKEND_BASE_URL}${patchUrl}`;
-  
-  console.log('Downloading hot patch from:', fullUrl);
-  const response = await axios({
-    url: fullUrl,
-    method: 'GET',
-    responseType: 'stream',
-    timeout: 30000
-  });
+  if (!isSameOrigin(fullUrl)) {
+    throw new Error('补丁地址不受信任(必须来自官方后端),已拒绝。');
+  }
 
+  // 2) 从官方后端拉取可信清单(sha256 + 签名),不信任渲染进程传入的任何校验值
+  let manifest = null;
+  try {
+    const mres = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, { timeout: 8000 });
+    manifest = mres.data || null;
+  } catch (e) {
+    throw new Error('无法获取更新清单,热更新中止:' + e.message);
+  }
+  if (!manifest || !manifest.sha256 || !manifest.signature) {
+    throw new Error('更新清单缺少签名信息,为安全起见中止热更新。');
+  }
+
+  // 3) 下载补丁
+  const tempPatchPath = path.join(app.getPath('userData'), 'patch_download.tmp');
+  console.log('Downloading hot patch from:', fullUrl);
+  const response = await axios({ url: fullUrl, method: 'GET', responseType: 'stream', timeout: 30000 });
   const writer = fs.createWriteStream(tempPatchPath);
   await new Promise((resolve, reject) => {
     response.data.pipe(writer);
@@ -725,6 +802,14 @@ async function applyHotPatch(patchUrl) {
     throw new Error('下载的热更新补丁损坏或无效 (文件过小)');
   }
 
+  // 4) 验签:sha256 + Ed25519 签名都必须通过,否则中止(保留当前版本)
+  if (!verifyPatchFile(tempPatchPath, manifest.sha256, manifest.signature)) {
+    try { fs.unlinkSync(tempPatchPath); } catch(e){}
+    throw new Error('热更新补丁未通过签名校验,可能已被篡改,已拒绝应用。');
+  }
+  console.log('[HotPatch] 补丁签名校验通过');
+
+  // 5) 替换 app.asar(失败则连清单一起暂存 update.asar,下次启动二次校验后应用)
   const targetAsar = path.join(process.resourcesPath, 'app.asar');
   let successDirect = false;
 
@@ -734,13 +819,16 @@ async function applyHotPatch(patchUrl) {
       try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
       fs.renameSync(targetAsar, backupAsar);
       fs.renameSync(tempPatchPath, targetAsar);
-      try { if (fs.unlinkSync(backupAsar)); } catch(e){}
+      try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
       successDirect = true;
     }
   } catch (err) {
     console.warn('Direct replace app.asar failed, staging update.asar for next launch:', err.message);
     const updateAsar = path.join(process.resourcesPath, 'update.asar');
     fs.copyFileSync(tempPatchPath, updateAsar);
+    try {
+      fs.writeFileSync(updateAsar + '.manifest', JSON.stringify({ sha256: manifest.sha256, signature: manifest.signature }));
+    } catch(e){}
     try { fs.unlinkSync(tempPatchPath); } catch(e){}
   }
 
@@ -779,15 +867,21 @@ ipcMain.handle('check-for-updates', async () => {
     }
     const currentVersion = app.getVersion();
     const latestVersion = res.data.version;
-    
-    // 简易版本对比：比较版本字符串
-    const hasUpdate = latestVersion !== currentVersion;
-    
+
+    // semver 比较:仅当服务端版本严格高于本地时才提示更新(防止被回滚/降级覆盖)
+    const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
+
+    // 最低支持版本开关:用于未来"集中弃用旧版本"(当前设得很低,不强制任何旧版本)
+    const minClientVersion = res.data.minClientVersion || '1.0.0';
+    const forceUpdate = compareVersions(currentVersion, minClientVersion) < 0;
+
     return {
       success: true,
       currentVersion,
       latestVersion,
       hasUpdate,
+      forceUpdate,
+      minClientVersion,
       patchUrl: res.data.patchUrl ? (res.data.patchUrl.startsWith('http') ? res.data.patchUrl : `${BACKEND_BASE_URL}${res.data.patchUrl}`) : null,
       winUrl: `${BACKEND_BASE_URL}${res.data.winUrl}`,
       macUrl: `${BACKEND_BASE_URL}${res.data.macUrl}`,
