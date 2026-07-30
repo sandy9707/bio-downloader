@@ -8,6 +8,12 @@ let currentQueue = [];
 let defaultDir = '';
 let currentOrderId = null;
 let isDownloading = false;
+let editingIndex = -1; // 当前正在行内改名的队列下标(-1 表示无)
+
+// HTML 转义:防止文件名中的特殊字符(如 <img onerror>、引号)破坏队列 DOM 或造成注入
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
 // 传输列表状态
 let activeDownloads = [];
@@ -607,7 +613,9 @@ function renderQueue() {
     itemEl.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <div class="item-meta" style="flex-grow:1;">
-          <span class="item-name" title="${file.name}">${file.name}</span>
+          ${index === editingIndex
+            ? `<input id="rename-input-${index}" class="rename-input" style="font-size:0.95rem;padding:2px 6px;border-radius:4px;border:1px solid var(--primary);background:rgba(255,255,255,0.1);color:inherit;width:100%;" value="${escapeHtml(file.name)}" onkeydown="if(event.key==='Enter'){commitRename(${index});}else if(event.key==='Escape'){cancelRename();}" onblur="commitRename(${index})" />`
+            : `<span class="item-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>`}
           <div class="item-info">
             ${folderStr}
             <span>${sizeStr}</span>
@@ -1224,15 +1232,37 @@ function startCountdown(buttonEl, seconds, onComplete) {
   }, 1000);
 }
 
-// 队列文件重命名
+// 队列文件重命名(行内编辑,替代在 Electron 中不可靠的 window.prompt)
 function renameFile(index) {
-  const file = currentQueue[index];
-  if (!file) return;
-  const newName = prompt('请输入新的文件名：', file.name);
-  if (newName && newName.trim()) {
-    file.name = newName.trim();
-    renderQueue();
+  if (!currentQueue[index]) return;
+  editingIndex = index;
+  renderQueue();
+  const input = document.getElementById(`rename-input-${index}`);
+  if (input) {
+    input.focus();
+    // 默认选中不含扩展名的主名部分,方便直接改写
+    const dot = input.value.lastIndexOf('.');
+    input.setSelectionRange(0, dot > 0 ? dot : input.value.length);
   }
+}
+
+// 确认改名
+function commitRename(index) {
+  if (editingIndex !== index) return; // 防止 blur 与 Enter/Escape 重复触发
+  const input = document.getElementById(`rename-input-${index}`);
+  const file = currentQueue[index];
+  if (input && file) {
+    const newName = input.value.trim().replace(/[\\/:*?"<>|]/g, '_'); // 清洗非法字符
+    if (newName) file.name = newName;
+  }
+  editingIndex = -1;
+  renderQueue();
+}
+
+// 取消改名
+function cancelRename() {
+  editingIndex = -1;
+  renderQueue();
 }
 
 // 单个文件独立加速下载

@@ -615,6 +615,22 @@ async function optimizeClash(token) {
 // ==========================================
 // 【大小校验工具模块】
 // ==========================================
+// 从直链 URL 提取干净的文件名:去掉查询参数(?...)与片段(#...)、URL 解码、清洗非法字符。
+// 修复:此前直链直接用 link.substring(lastIndexOf('/')+1),会把 presigned URL 的 ?X-Amz-Signature=... 一并带入文件名,
+// 在 Windows 上因 '?' 为非法字符导致下载失败,在 macOS 上也是脏文件名。
+function fileNameFromUrl(url) {
+  try {
+    const noQuery = String(url).split('?')[0].split('#')[0];
+    let name = noQuery.substring(noQuery.lastIndexOf('/') + 1);
+    try { name = decodeURIComponent(name); } catch (e) { /* 解码失败则保留原样 */ }
+    // 清洗跨平台非法字符,去掉首尾空白与开头的点
+    name = name.replace(/[\\/:*?"<>|]/g, '_').trim().replace(/^\.+/, '');
+    return name;
+  } catch (e) {
+    return '';
+  }
+}
+
 async function headRequestSize(url) {
   const tryGetSizeFromHeaders = (headers) => {
     if (!headers) return 0;
@@ -1203,7 +1219,7 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
   } else if (type === 'links') {
     const promises = ids.map(async (link) => {
       const size = await headRequestSize(link);
-      const name = link.substring(link.lastIndexOf('/') + 1) || 'file_' + Date.now();
+      const name = fileNameFromUrl(link) || ('file_' + Date.now());
       return { name, url: link, size };
     });
     const results = await Promise.all(promises);
