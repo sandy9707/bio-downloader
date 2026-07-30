@@ -492,6 +492,9 @@ async function startClash(token) {
     // 优化健康检查参数：interval 设为 15s，max-failed-times 设为 1，快速自动剔除不通的故障节点
     yamlContent = yamlContent.replace(/max-failed-times:\s*\d+/g, 'max-failed-times: 1');
     yamlContent = yamlContent.replace(/interval:\s*\d+/g, 'interval: 15');
+    // 健康检查超时 10s→3s + 开启 lazy:死/卡节点秒级懒摘除,不再被轮询喂给 axel(提升多线程下载速度)
+    yamlContent = yamlContent.replace(/timeout:\s*10000/g, 'timeout: 3000');
+    yamlContent = yamlContent.replace(/(type:\s*(?:load-balance|url-test|fallback))/g, '$1\n    lazy: true');
 
     // 统计订阅配置中真实的节点数量
     const proxyMatches = yamlContent.match(/^\s*-\s*(?:\{\s*)?name\s*:/gm);
@@ -586,6 +589,12 @@ async function optimizeClash(token) {
 
     yamlContent = yamlContent.replace(/^log-level:\s*.*/gm, '');
     yamlContent = 'log-level: warning\n' + yamlContent;
+
+    // 与 startClash 保持一致的健康检查调优(否则"优化网络通道"重载配置后会丢失这些加速设置)
+    yamlContent = yamlContent.replace(/max-failed-times:\s*\d+/g, 'max-failed-times: 1');
+    yamlContent = yamlContent.replace(/interval:\s*\d+/g, 'interval: 15');
+    yamlContent = yamlContent.replace(/timeout:\s*10000/g, 'timeout: 3000');
+    yamlContent = yamlContent.replace(/(type:\s*(?:load-balance|url-test|fallback))/g, '$1\n    lazy: true');
 
     const configPath = path.join(CLASH_WORK_DIR, 'config.yaml');
     fs.writeFileSync(configPath, yamlContent, 'utf8');
@@ -949,7 +958,7 @@ ipcMain.handle('download-app-update', async (event, { url, fileName }) => {
     env.all_proxy = 'http://127.0.0.1:43289';
   }
 
-  const args = ['-n', '16', '-k', '-o', savePath, url];
+  const args = ['-n', '16', '-T', '20', '-U', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', '-k', '-o', savePath, url];
   console.log(`Running Axel for Update: ${axelBin} ${args.join(' ')}`);
 
   return new Promise((resolve, reject) => {
@@ -1424,6 +1433,14 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
 
     writer.on('finish', () => {
       clearInterval(speedTimer);
+      // 完整性校验:防止流被中途截断却误报成功(会留下坏文件)
+      if (finalTotalSize > 0 && downloadedBytes !== finalTotalSize) {
+        if (logStream) {
+          logStream.write(`\n=== Node.js 回退引擎下载不完整 (${downloadedBytes}/${finalTotalSize} 字节),判定失败 ===\n`);
+          logStream.end();
+        }
+        return reject(new Error(`下载不完整: ${downloadedBytes}/${finalTotalSize} 字节`));
+      }
       mainWindow.webContents.send('download-progress', {
         index: fileIndex,
         percentage: 100,
@@ -1489,10 +1506,18 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
           threads = 4;
         } else if (file.size < 50 * 1024 * 1024) {
           threads = 8;
+        } else if (file.size < 500 * 1024 * 1024) {
+          threads = 16;
+        } else if (file.size < 2 * 1024 * 1024 * 1024) {
+          threads = 24;
+        } else {
+          threads = 32; // 超大文件用更多连接,尽量跑满多个快节点
         }
       }
+      // 总连接封顶:避免 并发文件数 × 单文件线程数 压垮 mihomo 与节点池
+      threads = Math.max(1, Math.min(threads, Math.floor(64 / Math.max(1, maxConcurrentCount))));
 
-      const args = ['-n', threads.toString(), '-k', '-o', savePath, file.url];
+      const args = ['-n', threads.toString(), '-T', '20', '-U', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', '-k', '-o', savePath, file.url];
       console.log(`Running Axel (Attempt ${attempt}): ${axelBin} ${args.join(' ')}`);
 
       let logStream = null;
@@ -1608,13 +1633,20 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
             if (code === 0 && !axelHasDyldError) {
               if (logStream) logStream.end();
               resolve();
-            } else {
+            } else if (axelHasDyldError) {
+              // axel 二进制/动态库级错误,重试无意义,直接走 Node 保底引擎
               if (logStream) {
-                logStream.write(`Axel 执行失败或系统动态库缺失 (dyld: ${axelHasDyldError})，正在触发纯 Node.js 保底下载引擎...\n`);
+                logStream.write(`Axel 动态库缺失,触发纯 Node.js 保底下载引擎...\n`);
               }
               downloadFileWithNodeStream(file.url, savePath, env, fileIndex, file.size, logStream)
                 .then(resolve)
                 .catch(reject);
+            } else {
+              // 普通失败:交给外层重试循环重新用 axel(可断点续传),不立即降级到单连接 Node 引擎,避免断崖降速
+              if (logStream) {
+                logStream.write(`Axel 本次失败(code=${code}),将重试并保留断点...\n`);
+              }
+              reject(new Error(`Axel exited with code ${code}`));
             }
           });
         });
@@ -1630,6 +1662,18 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
     }
 
     cancelTokens.delete(fileIndex);
+
+    // 所有 axel 重试均失败后,最后用 Node 保底引擎兜底一次(清除 axel 断点状态,从头下载)
+    if (!downloadSuccess && !cancelled) {
+      try {
+        try { fs.unlinkSync(savePath + '.st'); } catch (e) {}
+        console.warn(`All axel retries failed for ${file.name}, final fallback to Node engine.`);
+        await downloadFileWithNodeStream(file.url, savePath, env, fileIndex, file.size, null);
+        downloadSuccess = true;
+      } catch (nodeErr) {
+        lastErrorMsg = nodeErr.message;
+      }
+    }
 
     if (downloadSuccess) {
       if (!file.isUpdate) {

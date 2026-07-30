@@ -15,6 +15,24 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// 队列空态提示文案(随数据源切换,避免 Zenodo/HuggingFace/直链 下仍提示 SRA/EBI/GEO)
+function getQueueEmptyHint() {
+  const hints = {
+    sra_raw: '请输入 SRA 编号(如 SRR1234567),点击"检验下载大小"后自动生成下载队列',
+    ebi_raw: '请输入 EBI / ENA 编号,点击"检验下载大小"后自动生成下载队列',
+    geo_suppl: '请输入 GEO 编号(如 GSE12345),点击"检验下载大小"后自动生成下载队列',
+    links: '请输入直链下载 URL(每行一个),点击"检验下载大小"后自动生成下载队列',
+    zenodo: '请输入 Zenodo 记录号(如 1234567),点击"检验下载大小"后自动生成下载队列',
+    huggingface: '请输入 Hugging Face 仓库(如 组织名/数据集名),点击"检验下载大小"后自动生成下载队列'
+  };
+  return hints[currentDownloadType] || hints.sra_raw;
+}
+
+function updateEmptyQueueHint() {
+  const el = document.querySelector('#emptyQueueState p');
+  if (el) el.innerText = getQueueEmptyHint();
+}
+
 // 传输列表状态
 let activeDownloads = [];
 let completedDownloads = [];
@@ -59,6 +77,7 @@ function restoreTabState(type) {
 // 【辅助与初始化函数】
 // ==========================================
 function formatBytes(bytes, decimals = 2) {
+  bytes = Math.max(0, Number(bytes) || 0); // 防止负数/NaN 使 Math.log 得到 NaN(界面显示 "NaN undefined")
   if (bytes === 0) return '0 Bytes';
   const k = 1024;
   const dm = decimals < 0 ? 0 : decimals;
@@ -67,20 +86,24 @@ function formatBytes(bytes, decimals = 2) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
+let toastTimer = null;
 function showToast(message, type = 'info') {
   const toast = document.getElementById('notificationToast');
   toast.innerText = message;
   toast.style.display = 'block';
-  
+
   if (type === 'success') {
     toast.style.background = 'var(--success-grad)';
   } else if (type === 'error') {
     toast.style.background = 'var(--danger-grad)';
+  } else if (type === 'warning') {
+    toast.style.background = 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)';
   } else {
     toast.style.background = 'var(--primary-grad)';
   }
 
-  setTimeout(() => {
+  if (toastTimer) clearTimeout(toastTimer); // 连续 toast 时复位定时器,避免前一个提前隐藏后一个
+  toastTimer = setTimeout(() => {
     toast.style.display = 'none';
   }, 4000);
 }
@@ -319,6 +342,7 @@ function switchDownloadType(btn, type) {
   
   // 4. 恢复目标 Tab 状态
   restoreTabState(type);
+  updateEmptyQueueHint(); // 队列空态提示文案随数据源切换
 }
 
 function openDownloadsDirectory() {
@@ -925,8 +949,17 @@ async function handleLogout() {
   
   // 确保切回登录 Tab
   switchAuthTab('login');
-  
-  updateClashUIState();
+
+  // 重置加速器 UI(currentUser 已置空,updateClashUIState 会短路返回,需手动复位,否则边栏残留"已开启"绿态)
+  const clashDot = document.getElementById('clashDot');
+  const clashText = document.getElementById('clashStatusText');
+  const clashToggle = document.getElementById('clashToggle');
+  const clashInfo = document.getElementById('clashConfigInfo');
+  if (clashDot) clashDot.className = 'dot';
+  if (clashText) clashText.innerText = '加速器已关闭';
+  if (clashToggle) clashToggle.checked = false;
+  if (clashInfo) clashInfo.innerText = '尚未启动下载加速器。启动下载时会自动开启。';
+
   showToast('账号已安全退出并关闭加速器');
 }
 

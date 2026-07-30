@@ -21,7 +21,16 @@
       --progress-bar-bg: #e2e8f0;
       --package-card-bg: rgba(248, 250, 252, 0.9);
       --modal-bg: #ffffff;
-      
+
+      /* 语义化补充变量(修复多处未定义引用:传输卡片底色/子tab激活态/重试按钮/文本色等) */
+      --card-bg: #ffffff;
+      --card-bg-selected: #eef2ff;
+      --primary-color: #4f46e5;
+      --primary: #4f46e5;
+      --primary-light: #6366f1;
+      --text-color: #334155;
+      --text-primary: #0f172a;
+
       /* 渐变配色 */
       --primary-grad: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
       --accent-grad: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
@@ -45,7 +54,23 @@
       --progress-bar-bg: #1e293b;
       --package-card-bg: rgba(15, 23, 42, 0.6);
       --modal-bg: #1e293b;
+      --card-bg: rgba(30, 41, 59, 0.6);
+      --card-bg-selected: rgba(99, 102, 241, 0.18);
+      --primary-color: #818cf8;
+      --primary: #6366f1;
+      --primary-light: #a5b4fc;
+      --text-color: #cbd5e1;
+      --text-primary: #f8fafc;
     }
+
+    /* 滚动条主题化(细条 + 主题色,统一队列/传输/日志滚动区质感) */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+    /* 下拉菜单项 hover 反馈(此前无 hover 规则,鼠标悬停无变化) */
+    .dropdown-item:hover { background: var(--queue-item-bg); }
 
     * {
       box-sizing: border-box;
@@ -58,6 +83,7 @@
       font-family: var(--font-family);
       background-color: var(--bg-main);
       color: var(--text-main);
+      font-variant-numeric: tabular-nums; /* 数据等宽数字,避免速度/百分比/大小刷新时抖动 */
       height: 100vh;
       overflow: hidden;
       display: flex;
@@ -1020,7 +1046,7 @@
         <div class="queue-list" id="queueList">
           <div class="empty-state" id="emptyQueueState">
             <div class="empty-icon">📁</div>
-            <p>请输入 SRA/EBI/GEO 编号或链接，点击“检验下载大小”后自动生成下载队列</p>
+            <p>请输入 SRA 编号(如 SRR1234567),点击"检验下载大小"后自动生成下载队列</p>
           </div>
         </div>
       </div>
