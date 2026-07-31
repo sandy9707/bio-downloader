@@ -884,7 +884,7 @@ async function startCurlDownload() {
     } else if (d.status === 'completed') {
       if (bar) bar.style.width = '100%';
       const safePath = (d.savePath || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-      if (st) { st.style.color = '#10b981'; st.innerHTML = `✅ 下载完成: ${escapeHtml(d.name || '')}　<a href="#" onclick="window.api.openDownloadsFolder('${safePath}');return false;" style="color:var(--primary-color);">在文件夹中显示</a>`; }
+      if (st) { st.style.color = d.warn ? '#d97706' : '#10b981'; st.innerHTML = `✅ 下载完成: ${escapeHtml(d.name || '')}　<a href="#" onclick="window.api.openDownloadsFolder('${safePath}');return false;" style="color:var(--primary-color);">在文件夹中显示</a>${d.warn ? '<br><span style="color:#d97706;">' + escapeHtml(d.warn) + '</span>' : ''}`; }
       if (parseBtn) parseBtn.disabled = false;
       showToast('cURL 下载完成', 'success');
     } else if (d.status === 'failed') {

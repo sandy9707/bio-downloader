@@ -1955,6 +1955,146 @@ ipcMain.handle('open-downloads-folder', (event, folderPath) => {
 });
 
 // ---------- 粘贴 cURL 下载:解析 + 带会话(Cookie/请求头)流式下载 ----------
+// ---------- NCBI 会话式导出 → efetch 分页下载(把一次性大流拆成可逐页重试的小请求) ----------
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function ncbiReportToRettype(report) {
+  const r = String(report || '').toLowerCase();
+  return ({ genbank: 'gb', gb: 'gb', gbwithparts: 'gbwithparts', gbc: 'gbc', gff: 'gff3', gff3: 'gff3', fasta: 'fasta', fa: 'fasta', docsum: 'docsum', acc: 'acc', accession: 'acc' })[r] || 'gb';
+}
+function ncbiRettypeExt(rettype) {
+  if (rettype === 'fasta') return 'fa';
+  if (rettype === 'docsum') return 'xml';
+  if (rettype === 'gff3') return 'gff3';
+  return 'gb';
+}
+function extractCookieValue(cookie, name) {
+  for (const p of String(cookie || '').split(/;\s*/)) {
+    const eq = p.indexOf('=');
+    if (eq > 0 && p.slice(0, eq).trim() === name) return p.slice(eq + 1).trim();
+  }
+  return '';
+}
+function queryParam(url, name) {
+  try { return new URL(url).searchParams.get(name) || ''; } catch (e) { return ''; }
+}
+function termFromHeaders(headers) {
+  const ref = (headers || []).find((h) => h && h.name && h.name.toLowerCase() === 'referer');
+  if (ref) { const m = String(ref.value).match(/[?&]term=([^&]+)/); if (m) { try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; } } }
+  return '';
+}
+function buildEfetchUrl({ db, queryKey, webEnv, rettype, retstart, retmax }) {
+  return 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?' + [
+    'db=' + encodeURIComponent(db),
+    'query_key=' + encodeURIComponent(queryKey),
+    'WebEnv=' + webEnv, // 保留 cookie 中的编码形式(如 %40),不二次编码
+    'rettype=' + encodeURIComponent(rettype),
+    'retmode=text',
+    'retstart=' + retstart,
+    'retmax=' + retmax
+  ].join('&');
+}
+
+async function downloadNcbiPaginated(parsed, saveDir, send) {
+  const url = parsed.url;
+  const db = queryParam(url, 'db') || 'nuccore';
+  const queryKey = queryParam(url, 'query_key') || queryParam(url, 'QueryKey');
+  const report = queryParam(url, 'report') || 'genbank';
+  const webEnv = extractCookieValue(parsed.cookie, 'WebEnv');
+  if (!queryKey || !webEnv) throw new Error('缺少 query_key 或 WebEnv,无法转换。请确认粘贴的 cURL 含完整 Cookie。');
+  const rettype = ncbiReportToRettype(report);
+  const ext = ncbiRettypeExt(rettype);
+  const isGenbankLike = (rettype === 'gb' || rettype === 'gbwithparts' || rettype === 'gbc' || rettype === 'gff3');
+
+  const reqHeaders = {
+    'User-Agent': ((parsed.headers || []).find((h) => h && h.name && h.name.toLowerCase() === 'user-agent') || {}).value || 'Mozilla/5.0',
+    'Cookie': parsed.cookie || ''
+  };
+  const PAGE = 100;
+
+  // 1) 总数探针:越界 retstart 让 NCBI 自报总数;失败则改用增量分页(进度不显示总数)
+  let total = 0;
+  try {
+    const probe = await axios.get(buildEfetchUrl({ db, queryKey, webEnv, rettype, retstart: 999999999, retmax: 1 }), { headers: reqHeaders, timeout: 60000, validateStatus: () => true, maxRedirects: 5 });
+    const body = typeof probe.data === 'string' ? probe.data : String(probe.data || '');
+    const m = body.match(/History\s+includes\s+([\d,]+)/i) || body.match(/(\d[\d,]*)\s*(?:identifiers?|sequences?|records?|IDs?)/i);
+    if (m) total = parseInt(m[1].replace(/,/g, ''), 10) || 0;
+  } catch (e) {}
+
+  const tmpDir = path.join(saveDir, '.ncbi_chunks_' + Date.now());
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const chunkFiles = [];
+  let cleaned = false;
+  const cleanup = () => { if (cleaned) return; cleaned = true; try { for (const f of chunkFiles) fs.unlinkSync(f); fs.rmdirSync(tmpDir); } catch (e) {} };
+
+  const fetchPage = async (retstart) => {
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        const resp = await axios.get(buildEfetchUrl({ db, queryKey, webEnv, rettype, retstart, retmax: PAGE }), { headers: reqHeaders, timeout: 600000, validateStatus: () => true, maxRedirects: 5 });
+        const text = typeof resp.data === 'string' ? resp.data : String(resp.data || '');
+        if (resp.status >= 400) {
+          if (/error|invalid|out of range|cannot|empty|no items/i.test(text.slice(0, 400))) return null; // 越界/空集 → 正常结束
+          lastErr = new Error('HTTP ' + resp.status); await sleep(3000); continue;
+        }
+        if (!text || text.length < 2) return null;
+        if (/^<\?xml|<!doctype|<html/i.test(text.slice(0, 80)) && !/^LOCUS|^>/.test(text)) { lastErr = new Error('返回非数据(会话可能过期)'); await sleep(3000); continue; }
+        return text;
+      } catch (e) { lastErr = e; await sleep(3000 * attempt); }
+    }
+    throw lastErr || new Error('分页下载失败 retstart=' + retstart);
+  };
+
+  try {
+    let retstart = 0, records = 0, pageIdx = 0;
+    const totalPages = total > 0 ? Math.ceil(total / PAGE) : null;
+    while (true) {
+      const text = await fetchPage(retstart);
+      if (!text) break;
+      const chunkPath = path.join(tmpDir, 'chunk_' + String(retstart).padStart(9, '0') + '.' + ext);
+      fs.writeFileSync(chunkPath, text, 'utf8');
+      chunkFiles.push(chunkPath);
+      const pageRec = isGenbankLike ? (text.match(/^LOCUS/gm) || []).length : (rettype === 'fasta' ? (text.match(/^>/gm) || []).length : 1);
+      records += pageRec;
+      pageIdx++;
+      send({ status: 'progress', percentage: totalPages ? Math.min(99, Math.floor(pageIdx / totalPages * 100)) : null, speed: `第 ${pageIdx}${totalPages ? '/' + totalPages : ''} 页 · 累计 ${records} 条` });
+      if (pageRec < PAGE) break;                 // 本页不满 → 到末尾
+      if (total > 0 && retstart + PAGE >= total) break;
+      retstart += PAGE;
+      await sleep(400);                          // 无 API key 限速约 3 请求/秒
+    }
+    if (chunkFiles.length === 0) throw new Error('未获取到任何记录:会话可能已过期,或 query_key 与 WebEnv 不匹配。请重新 Copy as cURL。');
+
+    const term = termFromHeaders(parsed.headers);
+    const base = sanitizePathSegment(term ? `${term}_qk${queryKey}` : `ncbi_${db}_qk${queryKey}`) || ('ncbi_' + Date.now());
+    const finalName = `${base}.${ext}`;
+    const finalPath = path.join(saveDir, finalName);
+    await new Promise((resolve, reject) => {
+      const ws = fs.createWriteStream(finalPath);
+      ws.on('error', reject);
+      let i = 0;
+      const pipeNext = () => {
+        if (i >= chunkFiles.length) { ws.end(); return; }
+        const rs = fs.createReadStream(chunkFiles[i++]);
+        rs.on('error', reject);
+        rs.pipe(ws, { end: false });
+        rs.on('end', pipeNext);
+      };
+      ws.on('finish', resolve);
+      pipeNext();
+    });
+
+    let warn = '';
+    if (total > 0 && isGenbankLike && records !== total) warn = ` 警告:记录数 ${records} ≠ 官方总数 ${total},请核查。`;
+    cleanup();
+    const size = fs.statSync(finalPath).size;
+    send({ status: 'completed', name: finalName, savePath: finalPath, downloaded: size, warn });
+    return { success: true, savePath: finalPath, name: finalName };
+  } catch (e) {
+    cleanup();
+    throw e;
+  }
+}
+
 ipcMain.handle('parse-curl', (event, { text }) => {
   try {
     const parsed = parseCurlCommand(text);
@@ -1974,6 +2114,11 @@ ipcMain.handle('download-curl', async (event, { parsed, saveDir }) => {
     if (!parsed || !parsed.url) throw new Error('缺少解析结果');
     const dir = saveDir || app.getPath('downloads');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    // NCBI 会话式导出链接:转换为 efetch 分页下载(稳健、可逐页重试),而非直接拉一次性大流
+    if (isSessionBoundNcbiLink(parsed.url) && queryParam(parsed.url, 'query_key') && extractCookieValue(parsed.cookie, 'WebEnv')) {
+      return await downloadNcbiPaginated(parsed, dir, send);
+    }
 
     const headers = {};
     for (const h of (parsed.headers || [])) { if (h && h.name) headers[h.name] = h.value; }
