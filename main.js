@@ -640,6 +640,35 @@ function fileNameFromUrl(url) {
   }
 }
 
+// 清洗路径片段(文件名/目录名):去除各平台非法字符,作为保存路径的纵深防御,杜绝 Windows 下非法名崩溃
+function sanitizePathSegment(seg) {
+  if (seg === undefined || seg === null) return seg;
+  return String(seg)
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/\s+/g, ' ')
+    .replace(/[. ]+$/g, '')
+    .slice(0, 200);
+}
+
+// 检测本地文件是否为误下的 HTML 错误页(前 512 字节含 <!doctype html / <html)
+function looksLikeHtmlError(filePath) {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(512);
+    const n = fs.readSync(fd, buf, 0, 512, 0);
+    fs.closeSync(fd);
+    const head = buf.slice(0, n).toString('utf8').trimStart().toLowerCase();
+    return head.startsWith('<!doctype html') || head.startsWith('<html');
+  } catch (e) {
+    return false;
+  }
+}
+
+// 识别"依赖浏览器会话、独立下载器拿不到"的 NCBI 动态导出链接(如 sviewer/viewer.cgi?...&query_key=)
+function isSessionBoundNcbiLink(url) {
+  return /\/s?viewer\/viewer\.cgi/i.test(String(url)) && /query_key=/i.test(String(url));
+}
+
 async function headRequestSize(url) {
   const tryGetSizeFromHeaders = (headers) => {
     if (!headers) return 0;
@@ -1245,6 +1274,15 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
     }
   } else if (type === 'links') {
     const promises = ids.map(async (link) => {
+      // NCBI 动态导出链接依赖浏览器会话(Cookie),独立下载器拿不到,标记 blocked 交由前端弹窗说明,不入队
+      if (isSessionBoundNcbiLink(link)) {
+        return {
+          name: fileNameFromUrl(link) || 'viewer.cgi',
+          url: link,
+          size: 0,
+          blocked: true
+        };
+      }
       const size = await headRequestSize(link);
       const name = fileNameFromUrl(link) || ('file_' + Date.now());
       return { name, url: link, size };
@@ -1299,14 +1337,17 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     if (file.isUpdate) {
       fileDestFolder = app.getPath('downloads');
     } else {
-      fileDestFolder = file.folder ? path.join(targetDir, file.folder) : targetDir;
-    }
-    
-    if (!fs.existsSync(fileDestFolder)) {
-      fs.mkdirSync(fileDestFolder, { recursive: true });
+      const safeFolder = sanitizePathSegment(file.folder);
+      fileDestFolder = safeFolder ? path.join(targetDir, safeFolder) : targetDir;
     }
 
-    const savePath = path.join(fileDestFolder, file.name);
+    if (!fs.existsSync(fileDestFolder)) {
+      try { fs.mkdirSync(fileDestFolder, { recursive: true }); } catch (e) {}
+    }
+
+    // 纵深防御:保存前再清洗一次文件名,杜绝任何来源的非法字符导致 Windows 建文件崩溃
+    const safeName = sanitizePathSegment(file.name) || (`download_${Date.now()}`);
+    const savePath = path.join(fileDestFolder, safeName);
 
     // 1. 去重与文件完整性大小核验
     if (fs.existsSync(savePath)) {
@@ -1392,13 +1433,15 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
 async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, totalSize, logStream) {
   const targetDir = path.dirname(savePath);
   if (!fs.existsSync(targetDir)) {
-    fs.mkdirSync(targetDir, { recursive: true });
+    try { fs.mkdirSync(targetDir, { recursive: true }); } catch (e) {
+      throw new Error(`无法创建保存目录 ${targetDir}: ${e.message}`);
+    }
   }
 
-  const writer = fs.createWriteStream(savePath);
   let downloadedBytes = 0;
   let lastEmitTime = Date.now();
   let lastBytes = 0;
+  let speedTimer = null;
 
   const axiosOptions = {
     url: fileUrl,
@@ -1406,6 +1449,7 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
     responseType: 'stream',
     timeout: 30000,
     maxRedirects: 5,
+    validateStatus: (s) => (s >= 200 && s < 400), // 4xx/5xx 走 catch,给出明确失败原因
     proxy: (env && env.http_proxy) ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false
   };
 
@@ -1414,11 +1458,30 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
   }
 
   const response = await axios(axiosOptions);
+  // 误下 HTML 错误页检测(如 NCBI 会话型链接无浏览器会话时返回网页而非文件)
+  const ct = String(response.headers['content-type'] || '').toLowerCase();
+  if (ct.includes('text/html') && !/\.(html?|xhtml)$/i.test(path.basename(savePath))) {
+    throw new Error('服务器返回网页(错误页/需登录会话),非可下载文件');
+  }
   const headerLen = parseInt(response.headers['content-length'] || '0', 10);
   const finalTotalSize = totalSize || headerLen || 0;
 
+  // 关键:拿到响应后再创建写流,并在 Promise 执行器内"立即同步"绑定错误处理,
+  // 杜绝此前 createWriteStream 与错误处理之间存在 await 空窗而导致的未捕获异常崩溃。
+  const writer = fs.createWriteStream(savePath);
   return new Promise((resolve, reject) => {
-    let speedTimer = setInterval(() => {
+    const fail = (err) => {
+      if (speedTimer) clearInterval(speedTimer);
+      if (logStream) {
+        logStream.write(`\n=== Node.js 回退引擎错误: ${err.message} ===\n`);
+        logStream.end();
+      }
+      reject(err);
+    };
+    writer.on('error', fail);        // 最先绑定,覆盖任何异步空窗
+    response.data.on('error', fail);
+
+    speedTimer = setInterval(() => {
       const now = Date.now();
       const bytesDiff = downloadedBytes - lastBytes;
       lastBytes = downloadedBytes;
@@ -1450,7 +1513,7 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
     response.data.pipe(writer);
 
     writer.on('finish', () => {
-      clearInterval(speedTimer);
+      if (speedTimer) clearInterval(speedTimer);
       // 完整性校验:防止流被中途截断却误报成功(会留下坏文件)
       if (finalTotalSize > 0 && downloadedBytes !== finalTotalSize) {
         if (logStream) {
@@ -1469,24 +1532,6 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
         logStream.end();
       }
       resolve();
-    });
-
-    writer.on('error', (err) => {
-      clearInterval(speedTimer);
-      if (logStream) {
-        logStream.write(`\n=== Node.js 回退引擎写入错误: ${err.message} ===\n`);
-        logStream.end();
-      }
-      reject(err);
-    });
-
-    response.data.on('error', (err) => {
-      clearInterval(speedTimer);
-      if (logStream) {
-        logStream.write(`\n=== Node.js 网络流传输错误: ${err.message} ===\n`);
-        logStream.end();
-      }
-      reject(err);
     });
   });
 }
@@ -1649,6 +1694,13 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
               logStream.write(`\n=== 进程退出 ===\n状态码: ${code}\n`);
             }
             if (code === 0 && !axelHasDyldError) {
+              // 检测是否误下了 HTML 错误页(如 NCBI 会话型链接无浏览器会话时返回网页),避免把网页当文件"成功"
+              if (looksLikeHtmlError(savePath)) {
+                if (logStream) { logStream.write(`\n=== 检测到下载结果为 HTML 错误页,判定失败 ===\n`); logStream.end(); }
+                try { fs.unlinkSync(savePath); } catch (e) {}
+                try { fs.unlinkSync(savePath + '.st'); } catch (e) {}
+                return reject(new Error('服务器返回网页(错误页/需登录会话),非可下载文件'));
+              }
               if (logStream) logStream.end();
               resolve();
             } else if (axelHasDyldError) {
@@ -1728,12 +1780,26 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
         savePath
       });
     } else {
+      // 智能失败提示:识别 NCBI 会话型链接 / HTML 错误页 / HTTP 4xx,给出可操作说明(而非笼统"下载失败")
+      let failReason = '下载失败';
+      if (lastErrorMsg && lastErrorMsg !== 'Cancelled') {
+        if (isSessionBoundNcbiLink(file.url)) {
+          failReason = '该 NCBI 动态导出链接(viewer.cgi?query_key)依赖浏览器检索会话,独立下载无法获取。建议改用 accession 编号(如 NM_007482.3)经 EFetch 下载,或在浏览器 Network 中 Copy as cURL 提取直链。';
+        } else if (/返回网页|错误页|需登录/i.test(lastErrorMsg)) {
+          failReason = '服务器返回网页而非文件(链接可能需登录/已失效/为动态地址)。';
+        } else if (/status code 4\d\d|Bad Request|Forbidden|Not Found/i.test(lastErrorMsg)) {
+          const code = (lastErrorMsg.match(/status code (\d+)/) || [])[1] || '4xx';
+          failReason = `服务器拒绝该链接(HTTP ${code}):链接可能已失效、需登录或为动态生成地址。`;
+        } else {
+          failReason = lastErrorMsg;
+        }
+      }
       mainWindow.webContents.send('download-status', {
         index: fileIndex,
         fileName: file.name,
         status: lastErrorMsg === 'Cancelled' ? 'cancelled' : 'failed',
         percentage: 0,
-        speed: lastErrorMsg === 'Cancelled' ? '已取消' : '下载失败'
+        speed: lastErrorMsg === 'Cancelled' ? '已取消' : failReason
       });
     }
   }

@@ -115,6 +115,8 @@ document.addEventListener('keydown', (e) => {
   if (payModal && payModal.style.display === 'flex') { closePayModal(); return; }
   const logModal = document.getElementById('logManagerModal');
   if (logModal && logModal.style.display === 'flex') { closeLogManagerModal(); return; }
+  const infoModal = document.getElementById('infoModal');
+  if (infoModal && infoModal.style.display === 'flex') { closeInfoModal(); return; }
   if (typeof editingIndex !== 'undefined' && editingIndex !== -1) { cancelRename(); }
 });
 
@@ -597,21 +599,27 @@ async function checkSizes() {
       }
     }
 
-    currentQueue = await window.api.checkSize(currentDownloadType, inputVal);
+    const allFiles = await window.api.checkSize(currentDownloadType, inputVal);
+    const blockedLinks = allFiles.filter((f) => f.blocked);
+    currentQueue = allFiles.filter((f) => !f.blocked);
     currentQueue.forEach((file, idx) => {
       file.originalIndex = idx;
     });
     renderQueue();
-    
+
     // 计算总大小并更新
     const totalBytes = currentQueue.reduce((acc, f) => acc + (f.size || 0), 0);
-    document.getElementById('totalQueueSize').innerText = '预计共 ' + formatBytes(totalBytes);
-    
+    const totalEl = document.getElementById('totalQueueSize');
+    if (totalEl) totalEl.innerText = currentQueue.length > 0 ? '预计共 ' + formatBytes(totalBytes) : '共 0 字节';
+
     if (currentQueue.length > 0) {
       downloadBtn.disabled = false;
       showToast(`扫描完毕！共发现 ${currentQueue.length} 个可下载任务`, 'success');
-    } else {
+    } else if (blockedLinks.length === 0) {
       showToast('未发现任何对应的数据文件，请核对输入', 'error');
+    }
+    if (blockedLinks.length) {
+      showSessionLinkModal(blockedLinks.map((b) => b.url));
     }
   } catch (err) {
     showToast('校验失败: ' + err.message, 'error');
@@ -659,6 +667,7 @@ function renderQueue() {
             ${folderStr}
             <span>${sizeStr}</span>
             <span class="item-status status-pending" id="status-text-${index}">准备就绪</span>
+            ${file.warning ? `<span style="color:#d97706;font-size:0.7rem;flex-basis:100%;margin-top:2px;">⚠ ${escapeHtml(file.warning)}</span>` : ''}
           </div>
         </div>
         <div style="display:flex; gap:0.5rem; flex-shrink:0; align-items:center;">
@@ -784,6 +793,35 @@ async function cancelDownload() {
 // 登录/注册表单回车提交(可访问性):按当前所处的认证 Tab 调用对应提交
 function submitAuthForm() {
   if (activeAuthTab === 'register') { handleRegister(); } else { handleLogin(); }
+}
+
+// 通用信息弹窗
+function showInfoModal(title, html) {
+  const t = document.getElementById('infoModalTitle');
+  const b = document.getElementById('infoModalBody');
+  if (t) t.innerText = title;
+  if (b) b.innerHTML = html;
+  const m = document.getElementById('infoModal');
+  if (m) m.style.display = 'flex';
+}
+function closeInfoModal() {
+  const m = document.getElementById('infoModal');
+  if (m) m.style.display = 'none';
+}
+// NCBI 会话型动态导出链接无法直接下载:弹窗说明原因 + Copy as cURL / accession 方法
+function showSessionLinkModal(urls) {
+  const list = (urls || []).map((u) => `<li style="margin:3px 0;word-break:break-all;"><code style="font-size:0.72rem;">${escapeHtml(u)}</code></li>`).join('');
+  const html = `
+    <p>以下链接是 <b>NCBI 动态导出链接</b>(<code>sviewer/viewer.cgi?...&query_key=...</code>),它们依赖您当前浏览器中的检索会话(Cookie)。本下载器没有该会话、也无法在本地转换,因此<b>无法直接下载</b>(服务器通常返回 400),故未加入下载队列。</p>
+    <ul style="margin:0.4rem 0 0.4rem 1.2rem;">${list}</ul>
+    <p style="margin-top:0.6rem;"><b>解决方法:</b></p>
+    <ol style="margin:0 0 0 1.2rem; line-height:1.7;">
+      <li><b>推荐(长期可用)</b>:在 NCBI 页面导出 Accession 编号(如 <code>NM_007482.3</code>),粘贴到本下载器下载;或用 EFetch 接口 <code>efetch.fcgi?db=nuccore&id=编号&rettype=gb&retmode=text</code>。</li>
+      <li><b>临时(仅本次文件)</b>:浏览器按 <b>F12</b> → <b>Network</b> → 重新触发一次下载 → 找到 <code>viewer.cgi</code> 请求 → 右键 <b>Copy as cURL</b> → 粘贴到终端(命令行)运行,即可带上 Cookie 下载。</li>
+    </ol>
+    <p style="margin-top:0.5rem; color:var(--text-muted); font-size:0.78rem;">提示:方法二依赖会话有效期,不适合长期或批量任务。</p>
+  `;
+  showInfoModal('该链接无法直接下载', html);
 }
 
 async function handleLogin() {
