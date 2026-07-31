@@ -787,6 +787,36 @@ ipcMain.handle('clash-get-node-count', () => {
   return currentRealNodeCount || 80;
 });
 
+// 判断某 URL 是否应走 clash 代理:境外(如 github.com、国外数据源)→ true;境内/后端主机 → false(直连)。
+// 修复"更新/热更新下载慢":此前对境内后端的请求也绕 clash 代理(甚至可能被路由到境外节点),改为境内直连。
+function shouldUseProxy(urlStr) {
+  try {
+    const host = new URL(urlStr).hostname.toLowerCase();
+    // 后端主机(境内)→ 直连
+    try {
+      if (host === new URL(BACKEND_BASE_URL).hostname.toLowerCase()) return false;
+    } catch (e) {}
+    // 境内域名后缀 → 直连
+    if (/\.(cn|com\.cn|net\.cn|org\.cn|gov\.cn|edu\.cn)$/.test(host)) return false;
+    // 常见境内域名 → 直连
+    const domestic = ['aliyun.com', 'aliyuncs.com', 'qcloud.com', 'myqcloud.com', 'baidu.com', 'bdstatic.com',
+      'qq.com', 'weixin.qq.com', '163.com', '126.com', 'jd.com', 'taobao.com', 'tmall.com', 'bilibili.com',
+      'zhihu.com', 'gitee.com', 'yuque.com', 'meituan.com', 'douban.com', 'weibo.com'];
+    if (domestic.some((d) => host === d || host.endsWith('.' + d))) return false;
+    return true; // 其余(github.com、国外 CDN/数据源等)→ 走代理
+  } catch (e) {
+    return false; // 解析失败保守直连
+  }
+}
+
+// 返回某 URL 对应的 axios 代理配置:走代理则返回代理对象;否则返回 false(强制直连,忽略系统代理)
+function axiosProxyFor(urlStr) {
+  if (clashProcess && shouldUseProxy(urlStr)) {
+    return { protocol: 'http', host: '127.0.0.1', port: 43289 };
+  }
+  return false;
+}
+
 async function applyHotPatch(patchUrl) {
   if (!patchUrl) {
     throw new Error('未提供有效热更新补丁地址');
@@ -801,7 +831,7 @@ async function applyHotPatch(patchUrl) {
   // 2) 从官方后端拉取可信清单(sha256 + 签名),不信任渲染进程传入的任何校验值
   let manifest = null;
   try {
-    const mres = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, { timeout: 8000 });
+    const mres = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, { timeout: 8000, proxy: axiosProxyFor(`${BACKEND_BASE_URL}/api/client/version`) });
     manifest = mres.data || null;
   } catch (e) {
     throw new Error('无法获取更新清单,热更新中止:' + e.message);
@@ -813,7 +843,7 @@ async function applyHotPatch(patchUrl) {
   // 3) 下载补丁
   const tempPatchPath = path.join(app.getPath('userData'), 'patch_download.tmp');
   console.log('Downloading hot patch from:', fullUrl);
-  const response = await axios({ url: fullUrl, method: 'GET', responseType: 'stream', timeout: 30000 });
+  const response = await axios({ url: fullUrl, method: 'GET', responseType: 'stream', timeout: 30000, proxy: axiosProxyFor(fullUrl) });
   const writer = fs.createWriteStream(tempPatchPath);
   await new Promise((resolve, reject) => {
     response.data.pipe(writer);
@@ -872,24 +902,9 @@ ipcMain.handle('apply-hot-patch', async (event, { patchUrl }) => {
 // --- 自动更新与外部链接 ---
 ipcMain.handle('check-for-updates', async () => {
   try {
-    let res;
-    // 优先尝试走 Clash 代理
-    if (clashProcess) {
-      try {
-        console.log('Attempting check-for-updates via Clash proxy...');
-        res = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, {
-          timeout: 3000,
-          proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 }
-        });
-      } catch (proxyErr) {
-        console.warn(`Version check via proxy failed: ${proxyErr.message}, falling back to direct connection`);
-      }
-    }
-    
-    // 代理不通或未开启时，走直连
-    if (!res) {
-      res = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, { timeout: 4000 });
-    }
+    const versionUrl = `${BACKEND_BASE_URL}/api/client/version`;
+    // 后端是境内服务 → 直连(axiosProxyFor 对境内返回 false,强制直连并忽略系统代理),避免绕代理变慢
+    const res = await axios.get(versionUrl, { timeout: 6000, proxy: axiosProxyFor(versionUrl) });
     const currentVersion = app.getVersion();
     const latestVersion = res.data.version;
 
@@ -950,12 +965,15 @@ ipcMain.handle('download-app-update', async (event, { url, fileName }) => {
     axelBin = path.join(BIN_DIR, 'win32', 'axel.exe');
   }
 
-  // 组装 Axel 代理环境变量 (若 Clash 启动则走代理)
+  // 按目标主机决定代理:境内后端 → 直连(清除代理变量);境外(如 github)→ 走 clash 代理
   const env = { ...process.env };
-  if (clashProcess) {
+  if (clashProcess && shouldUseProxy(url)) {
     env.http_proxy = 'http://127.0.0.1:43289';
     env.https_proxy = 'http://127.0.0.1:43289';
     env.all_proxy = 'http://127.0.0.1:43289';
+  } else {
+    delete env.http_proxy; delete env.https_proxy; delete env.all_proxy;
+    delete env.HTTP_PROXY; delete env.HTTPS_PROXY; delete env.ALL_PROXY;
   }
 
   const args = ['-n', '16', '-T', '20', '-U', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', '-k', '-o', savePath, url];
@@ -1678,10 +1696,17 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
     if (downloadSuccess) {
       if (!file.isUpdate) {
         try {
-          console.log(`Download success. Reporting consumed bytes: ${file.size}`);
+          // 上报【实际下载字节数】(落盘文件大小)而非预估 file.size——直链未知大小时 file.size=0 会漏计;
+          // 更新包(isUpdate)与"检验下载大小"均不走此处,故只有真实数据下载计费,与服务端 /speedup 闸门统一。
+          let consumedBytes = file.size || 0;
+          try {
+            const st = fs.statSync(savePath);
+            if (st && st.size > 0) consumedBytes = st.size;
+          } catch (e) {}
+          console.log(`Download success. Reporting consumed bytes: ${consumedBytes} (预估 file.size=${file.size})`);
           await axios.post(`${BACKEND_BASE_URL}/api/user/consume`, {
             token,
-            bytes: file.size
+            bytes: consumedBytes
           });
         } catch (e) {
           console.error('Failed to report traffic consume:', e.message);
@@ -1782,7 +1807,16 @@ ipcMain.handle('open-downloads-folder', (event, folderPath) => {
     try { fs.mkdirSync(target, { recursive: true }); } catch (e) {}
   }
   if (fs.existsSync(target)) {
-    shell.openPath(target);
+    // 文件 → 在文件夹中定位(避免用默认程序打开几十GB的数据文件);目录 → 直接打开
+    try {
+      if (fs.statSync(target).isFile()) {
+        shell.showItemInFolder(target);
+      } else {
+        shell.openPath(target);
+      }
+    } catch (e) {
+      shell.openPath(target);
+    }
     return true;
   }
   return false;

@@ -108,6 +108,16 @@ function showToast(message, type = 'info') {
   }, 4000);
 }
 
+// ESC 关闭弹窗 / 退出改名态(可访问性)
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const payModal = document.getElementById('payModal');
+  if (payModal && payModal.style.display === 'flex') { closePayModal(); return; }
+  const logModal = document.getElementById('logManagerModal');
+  if (logModal && logModal.style.display === 'flex') { closeLogManagerModal(); return; }
+  if (typeof editingIndex !== 'undefined' && editingIndex !== -1) { cancelRename(); }
+});
+
 // 初始化加载 settings 和验证登录
 window.addEventListener('DOMContentLoaded', async () => {
   // 初始化登录/注册表单显示状态
@@ -615,13 +625,18 @@ function renderQueue() {
   const listEl = document.getElementById('queueList');
   listEl.innerHTML = '';
 
+  if (currentQueue.length === 0) {
+    listEl.innerHTML = `<div class="empty-state" id="emptyQueueState"><div class="empty-icon">📁</div><p>${escapeHtml(getQueueEmptyHint())}</p></div>`;
+    return;
+  }
+
   currentQueue.forEach((file, index) => {
     const itemEl = document.createElement('div');
     itemEl.className = 'queue-item';
     itemEl.id = `queue-item-${index}`;
     
     const sizeStr = file.size > 0 ? formatBytes(file.size) : '未知大小';
-    const folderStr = file.folder ? `<span style="background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:4px;font-size:0.75rem;">目录: ${file.folder}</span>` : '';
+    const folderStr = file.folder ? `<span style="background:var(--surface-subtle);padding:2px 6px;border-radius:4px;font-size:0.75rem;">目录: ${file.folder}</span>` : '';
 
     let threads = 16;
     if (file.size) {
@@ -648,6 +663,7 @@ function renderQueue() {
         </div>
         <div style="display:flex; gap:0.5rem; flex-shrink:0; align-items:center;">
           <button class="btn btn-secondary" style="font-size:0.75rem; padding: 2px 6px;" onclick="renameFile(${index})">改名</button>
+          <button class="btn btn-secondary" style="font-size:0.75rem; padding: 2px 6px;" onclick="removeFromQueue(${index})">移除</button>
           <button class="btn btn-primary" id="btn-single-dl-${index}" style="font-size:0.75rem; padding: 2px 6px;" onclick="downloadSingle(${index})">单项下载</button>
         </div>
       </div>
@@ -725,13 +741,21 @@ async function startDownload() {
   switchTab('transfers-tab');
   switchTransferSubTab('downloading');
 
+  const beforeCompleted = completedDownloads.length;
+  const beforeFailed = failedDownloads.length;
   try {
     showToast('已加入传输中心，开始并行下载生信数据包...', 'info');
     await window.api.startDownload(currentQueue, defaultDir, currentUser.token, maxConcurrentDownloadsSetting);
-    showToast('生信数据包下载任务运行结束', 'info');
   } catch (e) {
     showToast(e.message, 'error');
   } finally {
+    // 本批结果汇总(成功/跳过/失败)
+    const addedCompleted = Math.max(0, completedDownloads.length - beforeCompleted);
+    const addedFailed = Math.max(0, failedDownloads.length - beforeFailed);
+    const skippedCount = completedDownloads.slice(0, addedCompleted).filter((c) => c.skip).length;
+    const successCount = addedCompleted - skippedCount;
+    showToast(`本批下载结束:成功 ${successCount} · 跳过 ${skippedCount} · 失败 ${addedFailed}`, addedFailed > 0 ? 'warning' : 'success');
+
     isDownloading = false;
     // 清空下载中的残留
     activeDownloads = [];
@@ -757,6 +781,11 @@ async function cancelDownload() {
 // ==========================================
 // 【用户认证交互逻辑】
 // ==========================================
+// 登录/注册表单回车提交(可访问性):按当前所处的认证 Tab 调用对应提交
+function submitAuthForm() {
+  if (activeAuthTab === 'register') { handleRegister(); } else { handleLogin(); }
+}
+
 async function handleLogin() {
   const user = document.getElementById('authUsername').value.trim();
   const pass = document.getElementById('authPassword').value.trim();
@@ -1024,10 +1053,11 @@ async function buyPackage(packageId, payType) {
         return;
       }
       currentOrderId = res.checkoutUrl.match(/orderId=(ORD_\w+)/)?.[1] || 'MOCK';
-      
+
       // 显示支付模态框
       document.getElementById('checkoutLink').href = res.checkoutUrl;
       document.getElementById('payModal').style.display = 'flex';
+      startPayArrivalPoll();
     }
   } catch (err) {
     showToast('创建订单失败: ' + err.message, 'error');
@@ -1036,8 +1066,37 @@ async function buyPackage(packageId, payType) {
 
 function closePayModal() {
   document.getElementById('payModal').style.display = 'none';
+  stopPayArrivalPoll();
   // 确认完毕后更新一次数据
   refreshUserInfo();
+}
+
+// 支付到账核对:打开支付框后每 5 秒刷新一次额度,检测到到账即提示;亦可手动点"我已付款,刷新到账状态"
+let payPollTimer = null;
+let payBaselineLimit = 0;
+function startPayArrivalPoll() {
+  payBaselineLimit = currentUser ? (currentUser.trafficLimit || 0) : 0;
+  stopPayArrivalPoll();
+  payPollTimer = setInterval(async () => {
+    await refreshUserInfo();
+    if (currentUser && (currentUser.trafficLimit || 0) > payBaselineLimit) {
+      stopPayArrivalPoll();
+      showToast('已检测到流量到账!', 'success');
+    }
+  }, 5000);
+}
+function stopPayArrivalPoll() {
+  if (payPollTimer) { clearInterval(payPollTimer); payPollTimer = null; }
+}
+async function checkPayArrival() {
+  showToast('正在刷新到账状态...');
+  await refreshUserInfo();
+  if (currentUser && (currentUser.trafficLimit || 0) > payBaselineLimit) {
+    stopPayArrivalPoll();
+    showToast('已检测到流量到账!', 'success');
+  } else {
+    showToast('暂未检测到到账,若已付款请稍候再点刷新', 'warning');
+  }
 }
 
 // ==========================================
@@ -1296,6 +1355,18 @@ function commitRename(index) {
 function cancelRename() {
   editingIndex = -1;
   renderQueue();
+}
+
+// 从队列移除单项
+function removeFromQueue(index) {
+  if (index < 0 || index >= currentQueue.length) return;
+  const removed = currentQueue.splice(index, 1)[0];
+  // 同步总大小
+  const totalBytes = currentQueue.reduce((acc, f) => acc + (f.size || 0), 0);
+  const totalEl = document.getElementById('totalQueueSize');
+  if (totalEl) totalEl.innerText = currentQueue.length > 0 ? '预计共 ' + formatBytes(totalBytes) : '共 0 字节';
+  renderQueue();
+  if (removed) showToast(`已从队列移除: ${removed.name}`, 'info');
 }
 
 // 单个文件独立加速下载
@@ -1566,7 +1637,7 @@ function renderCompletedList() {
         </div>
       </div>
       <div class="transfer-item-actions">
-        <button class="action-btn open-file-btn" onclick="openCompletedFile('${item.savePath || ''}')">📂 打开文件</button>
+        <button class="action-btn open-file-btn" onclick="openCompletedFile('${item.savePath || ''}')">📂 定位文件</button>
         <button class="action-btn" onclick="deleteCompletedRecord(${index})">✕ 删除记录</button>
       </div>
     `;
@@ -1671,8 +1742,9 @@ async function retryFailedDownload(index) {
     name: item.name,
     url: item.url,
     size: item.size,
-    originalIndex: item.originalIndex || Date.now(),
-    type: item.type || 'direct'
+    folder: item.folder,
+    type: item.type || 'direct',
+    originalIndex: item.originalIndex || Date.now()
   };
 
   activeDownloads.push(fileObj);
@@ -1705,8 +1777,9 @@ async function retryAllFailedDownloads() {
       name: item.name,
       url: item.url,
       size: item.size,
-      originalIndex: item.originalIndex || Date.now(),
-      type: item.type || 'direct'
+      folder: item.folder,
+      type: item.type || 'direct',
+      originalIndex: item.originalIndex || Date.now()
     };
     activeDownloads.push(fileObj);
     filesToDownload.push(fileObj);
@@ -1837,7 +1910,10 @@ window.api.onDownloadStatus((data) => {
         size: activeItem.size,
         savePath: savePath || '',
         completedAt: new Date().toLocaleString(),
-        skip: (data.speed && data.speed.includes('跳过'))
+        skip: (data.speed && data.speed.includes('跳过')),
+        folder: activeItem.folder,
+        type: activeItem.type,
+        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex }
       };
       completedDownloads.unshift(completedItem);
       localStorage.setItem('completed_downloads', JSON.stringify(completedDownloads));
@@ -1852,7 +1928,10 @@ window.api.onDownloadStatus((data) => {
         size: activeItem.size,
         failedReason: data.speed || '网络连接超时 / 代理节点 502 Bad Gateway 报错',
         failedAt: new Date().toLocaleString(),
-        originalIndex: activeItem.originalIndex
+        originalIndex: activeItem.originalIndex,
+        folder: activeItem.folder,
+        type: activeItem.type,
+        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex }
       };
       failedDownloads.unshift(failedItem);
       localStorage.setItem('failed_downloads', JSON.stringify(failedDownloads));

@@ -31,6 +31,16 @@
       --text-color: #334155;
       --text-primary: #0f172a;
 
+      /* 组件级语义变量(亮色为主,修复亮色下写死的深色值) */
+      --btn-secondary-bg: rgba(99, 102, 241, 0.08);
+      --btn-secondary-bg-hover: rgba(99, 102, 241, 0.16);
+      --btn-disabled-bg: #e2e8f0;
+      --btn-disabled-text: #94a3b8;
+      --switch-track: #cbd5e1;
+      --surface-subtle: rgba(15, 23, 42, 0.035);
+      --code-bg: #f1f5f9;
+      --code-text: #334155;
+
       /* 渐变配色 */
       --primary-grad: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
       --accent-grad: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
@@ -61,6 +71,14 @@
       --primary-light: #a5b4fc;
       --text-color: #cbd5e1;
       --text-primary: #f8fafc;
+      --btn-secondary-bg: rgba(51, 65, 85, 0.5);
+      --btn-secondary-bg-hover: rgba(51, 65, 85, 0.7);
+      --btn-disabled-bg: #1e293b;
+      --btn-disabled-text: #64748b;
+      --switch-track: #374151;
+      --surface-subtle: rgba(255, 255, 255, 0.04);
+      --code-bg: #0b0f19;
+      --code-text: #cbd5e1;
     }
 
     /* 滚动条主题化(细条 + 主题色,统一队列/传输/日志滚动区质感) */
@@ -227,7 +245,7 @@
       position: absolute;
       cursor: pointer;
       top: 0; left: 0; right: 0; bottom: 0;
-      background-color: #cbd5e1;
+      background-color: var(--switch-track);
       transition: .3s;
       border-radius: 20px;
     }
@@ -438,8 +456,8 @@
 
     .btn-primary { background: var(--primary-grad); }
     .btn-primary:hover { opacity: 0.95; transform: translateY(-1px); }
-    .btn-secondary { background: rgba(51, 65, 85, 0.5); border: 1px solid var(--border-color); }
-    .btn-secondary:hover { background: rgba(51, 65, 85, 0.7); }
+    .btn-secondary { background: var(--btn-secondary-bg); border: 1px solid var(--border-color); color: var(--text-main); }
+    .btn-secondary:hover { background: var(--btn-secondary-bg-hover); }
     .btn-accent { background: var(--accent-grad); }
     .btn-accent:hover { opacity: 0.95; transform: translateY(-1px); }
     .btn-success { background: var(--success-grad); }
@@ -448,8 +466,8 @@
     .btn-danger:hover { opacity: 0.95; transform: translateY(-1px); }
 
     .btn:disabled {
-      background: #1e293b !important;
-      color: #64748b !important;
+      background: var(--btn-disabled-bg) !important;
+      color: var(--btn-disabled-text) !important;
       cursor: not-allowed;
       transform: none !important;
       box-shadow: none !important;
@@ -605,14 +623,26 @@
       border: 1px solid var(--border-color);
       border-radius: 12px;
       width: 450px;
+      max-width: 92vw;
+      max-height: 86vh;
+      overflow-y: auto;
       padding: 2rem;
       box-shadow: 0 10px 25px rgba(0,0,0,0.25);
       text-align: center;
       transition: background 0.3s;
+      animation: modalIn 0.22s ease-out;
+    }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(14px) scale(0.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
     }
 
+    /* 可访问性:键盘焦点可见;输入框与 .selectable 文本允许选中复制(放宽全局 user-select:none) */
+    :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+    input, textarea, .selectable { user-select: text; }
+
     .modal h3 {
-      color: #38bdf8;
+      color: var(--primary-color);
       margin-bottom: 1rem;
     }
 
@@ -680,7 +710,7 @@
     .transfer-sub-tabs {
       display: flex;
       gap: 0.5rem;
-      background: rgba(255, 255, 255, 0.03);
+      background: var(--surface-subtle);
       padding: 0.25rem;
       border-radius: 8px;
       border: 1px solid var(--border-color);
@@ -785,7 +815,7 @@
 
     .transfer-progress-bar {
       height: 6px;
-      background: rgba(255, 255, 255, 0.05);
+      background: var(--surface-subtle);
       border-radius: 99px;
       overflow: hidden;
       position: relative;
@@ -819,7 +849,7 @@
     }
 
     .action-btn:hover {
-      background: rgba(255,255,255,0.05);
+      background: var(--surface-subtle);
       border-color: var(--text-muted);
     }
 
@@ -883,7 +913,7 @@
     }
     .switch-slider {
       position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-      background-color: #374151; transition: .3s; border-radius: 24px;
+      background-color: var(--switch-track); transition: .3s; border-radius: 24px;
     }
     .switch-slider:before {
       position: absolute; content: ""; height: 16px; width: 16px; left: 4px; bottom: 4px;
@@ -1108,14 +1138,14 @@
         <h3 style="color:#10b981; margin-bottom: 1.5rem; text-align: center;">节点与网络诊断</h3>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
           <!-- Speed Test Card -->
-          <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; align-items: center; text-align: center;">
+          <div style="background: var(--surface-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; align-items: center; text-align: center;">
             <div style="font-size: 1.75rem;">🚀</div>
             <h4 style="font-weight: bold; font-size: 0.95rem;">中科院网页测速</h4>
             <p style="font-size: 0.8rem; color: var(--text-muted);">核验您的本地最大下行带宽与网络吞吐能力。</p>
             <button class="btn btn-secondary" style="width: 100%; margin-top: auto; padding: 0.5rem;" onclick="runUstcSpeedTest()">立即检测 (网页测速)</button>
           </div>
           <!-- Connection Status Card -->
-          <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; align-items: center; text-align: center;">
+          <div style="background: var(--surface-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; align-items: center; text-align: center;">
             <div style="font-size: 1.75rem;" id="diagIcon">🌐</div>
             <h4 style="font-weight: bold; font-size: 0.95rem;">海外学术加速核验</h4>
             <p style="font-size: 0.8rem; color: var(--text-muted);" id="diagDesc">核验内置加速器是否能正常连通海外学术数据库节点（SRA/EBI/NCBI）。</p>
@@ -1138,7 +1168,7 @@
         
         <div class="form-group" id="group-username">
           <label>账号/用户名</label>
-          <input type="text" id="authUsername" placeholder="请输入用户名...">
+          <input type="text" id="authUsername" placeholder="请输入用户名..." onkeydown="if(event.key==='Enter')submitAuthForm()">
         </div>
         
         <div class="form-group" id="group-email" style="display:none;">
@@ -1156,7 +1186,7 @@
 
         <div class="form-group" id="group-password">
           <label id="label-password">登录密码</label>
-          <input type="password" id="authPassword" placeholder="请输入密码...">
+          <input type="password" id="authPassword" placeholder="请输入密码..." onkeydown="if(event.key==='Enter')submitAuthForm()">
         </div>
 
         <button class="btn btn-primary" id="btn-login-submit" style="width:100%; margin-top:1rem;" onclick="handleLogin()">账户登录</button>
@@ -1257,7 +1287,7 @@
             </div>
             <div style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.75rem;">
               <strong>更新日志：</strong>
-              <pre id="updateReleaseNotes" style="font-family:inherit; white-space:pre-wrap; margin-top:0.25rem; background:rgba(0,0,0,0.2); padding:0.5rem; border-radius:4px; font-size:0.8rem; line-height:1.4; color:#cbd5e1;"></pre>
+              <pre id="updateReleaseNotes" style="font-family:inherit; white-space:pre-wrap; margin-top:0.25rem; background:var(--code-bg); padding:0.5rem; border-radius:4px; font-size:0.8rem; line-height:1.4; color:var(--code-text);"></pre>
             </div>
             <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
               <button id="btnHotPatchUpdate" class="btn btn-primary" style="font-size:0.8rem; padding:0.4rem 0.85rem; background: linear-gradient(135deg, #10b981, #059669); border:none; display:none;" onclick="startHotPatchUpdate()">⚡ 极速平滑热更新 (仅 3MB)</button>
@@ -1276,7 +1306,7 @@
               <span style="color:var(--text-muted);">官方高速主页:</span>
               <a href="#" style="color:#38bdf8; text-decoration:none; font-weight:600;" onclick="window.api.openExternalUrl('https://biodown.ye.aimeals.cn/'); return false;">https://biodown.ye.aimeals.cn/</a>
             </div>
-            <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.9rem; flex-wrap:wrap; gap:0.5rem; border-top:1px solid rgba(255,255,255,0.05); padding-top:0.5rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.9rem; flex-wrap:wrap; gap:0.5rem; border-top:1px solid var(--border-color); padding-top:0.5rem;">
               <span style="color:var(--text-muted);">GitHub Releases 开源托管:</span>
               <a href="#" style="color:#38bdf8; text-decoration:none; font-weight:600;" onclick="window.api.openExternalUrl('https://github.com/sandy9707/bio-downloader/releases'); return false;">GitHub Releases 🚀</a>
             </div>
@@ -1339,7 +1369,7 @@
                 <span class="switch-slider"></span>
               </label>
             </div>
-            <div style="font-size:0.8rem; color:var(--text-muted); border-top:1px solid rgba(255,255,255,0.05); padding-top:0.5rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+            <div style="font-size:0.8rem; color:var(--text-muted); border-top:1px solid var(--border-color); padding-top:0.5rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
               <span>如果下载经常报错失败，请开启日志并在复现报错后在此处管理并上传日志。</span>
               <button class="btn btn-primary" style="font-size: 0.75rem; padding: 0.25rem 0.65rem;" onclick="openLogManagerModal()">管理与上传错误日志</button>
             </div>
@@ -1366,7 +1396,8 @@
       <p style="color:var(--text-muted);font-size:0.9rem;">请点击下方的付款链接进行付款，付款成功后额度会自动累加至您的账户。</p>
       <a href="#" class="modal-checkout-link" id="checkoutLink" target="_blank">点击前往付款页面 (易支付)</a>
       <div style="display:flex; flex-direction:column; gap:0.5rem; margin-top:1rem;">
-        <button class="btn btn-secondary" onclick="closePayModal()">我已完成付款并关闭</button>
+        <button class="btn btn-primary" onclick="checkPayArrival()">我已付款,刷新到账状态</button>
+        <button class="btn btn-secondary" onclick="closePayModal()">关闭</button>
       </div>
     </div>
   </div>
