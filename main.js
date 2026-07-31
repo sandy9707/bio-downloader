@@ -669,6 +669,72 @@ function isSessionBoundNcbiLink(url) {
   return /\/s?viewer\/viewer\.cgi/i.test(String(url)) && /query_key=/i.test(String(url));
 }
 
+// 字节格式化(main 进程侧,用于 cURL 下载进度)
+function fmtBytes(bytes) {
+  bytes = bytes || 0;
+  if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + ' GB';
+  if (bytes >= 1048576) return (bytes / 1048576).toFixed(2) + ' MB';
+  if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return bytes + ' B';
+}
+
+// ---------- 解析浏览器 "Copy as cURL" 命令(支持 bash 单引号 / cmd 双引号) ----------
+function tokenizeCurl(s) {
+  const tokens = [];
+  let cur = '', quote = null, i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (quote === "'") {
+      if (c === "'") {
+        if (s[i + 1] === '\\' && s[i + 2] === "'" && s[i + 3] === "'") { cur += "'"; i += 4; continue; } // bash 内嵌单引号 '\''
+        quote = null; i++; continue;
+      }
+      cur += c; i++; continue; // 单引号内其余皆字面(含反斜杠)
+    }
+    if (quote === '"') {
+      if (c === '\\') { const n = s[i + 1]; if (n === undefined) { cur += c; i++; continue; } cur += n; i += 2; continue; }
+      if (c === '"') { quote = null; i++; continue; }
+      cur += c; i++; continue;
+    }
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { if (cur) { tokens.push(cur); cur = ''; } i++; continue; }
+    if (c === "'" || c === '"') { quote = c; i++; continue; }
+    if (c === '\\') { const n = s[i + 1]; if (n !== undefined) { cur += n; i += 2; continue; } }
+    cur += c; i++;
+  }
+  if (cur) tokens.push(cur);
+  return tokens;
+}
+
+function parseCurlCommand(text) {
+  const tokens = tokenizeCurl(String(text || '').trim());
+  if (!tokens.length || !/curl(\.exe)?$/i.test(tokens[0])) {
+    throw new Error('不是有效的 curl 命令(应以 curl 开头)');
+  }
+  let url = null, method = null, cookie = null, data = null;
+  const headers = [];
+  const addHeader = (h) => { const idx = h.indexOf(':'); if (idx > 0) headers.push({ name: h.slice(0, idx).trim(), value: h.slice(idx + 1).trim() }); };
+  let i = 1;
+  while (i < tokens.length) {
+    const t = tokens[i];
+    const next = () => tokens[++i];
+    if (t === '-H' || t === '--header') { addHeader(next() || ''); }
+    else if (t === '-b' || t === '--cookie') { const v = next() || ''; cookie = cookie ? cookie + '; ' + v : v; }
+    else if (t === '-X' || t === '--request') { method = (next() || '').toUpperCase(); }
+    else if (t === '-d' || t === '--data' || t === '--data-raw' || t === '--data-binary' || t === '--data-urlencode') { const v = next() || ''; data = data ? data + '&' + v : v; if (!method) method = 'POST'; }
+    else if (t === '-A' || t === '--user-agent') { headers.push({ name: 'User-Agent', value: next() || '' }); }
+    else if (t === '-e' || t === '--referer') { headers.push({ name: 'Referer', value: next() || '' }); }
+    else if (t === '-L' || t === '--location') { /* 跟随重定向(下载时默认开启) */ }
+    else if (t === '-o' || t === '--output') { next(); /* 输出名由本工具决定 */ }
+    else if (t === '--compressed' || t === '-s' || t === '-S' || t === '-k' || t === '--insecure' || t === '-f' || t === '--fail' || t === '-#' || t === '--progress-bar' || t === '-O' || t === '--remote-name' || t === '-sS') { /* 忽略 */ }
+    else if (typeof t === 'string' && t.startsWith('--') && t.includes('=')) { /* --key=val 忽略 */ }
+    else if (typeof t === 'string' && !t.startsWith('-') && url === null) { url = t; }
+    i++;
+  }
+  if (!url) throw new Error('未解析到下载 URL');
+  try { new URL(url); } catch (e) { throw new Error('URL 格式无效: ' + url); }
+  return { url, method: method || 'GET', headers, cookie: cookie || '', data: data || null };
+}
+
 async function headRequestSize(url) {
   const tryGetSizeFromHeaders = (headers) => {
     if (!headers) return 0;
@@ -1886,6 +1952,103 @@ ipcMain.handle('open-downloads-folder', (event, folderPath) => {
     return true;
   }
   return false;
+});
+
+// ---------- 粘贴 cURL 下载:解析 + 带会话(Cookie/请求头)流式下载 ----------
+ipcMain.handle('parse-curl', (event, { text }) => {
+  try {
+    const parsed = parseCurlCommand(text);
+    return {
+      success: true,
+      parsed,
+      preview: { url: parsed.url, method: parsed.method, headerCount: parsed.headers.length, hasCookie: !!parsed.cookie, hasData: !!parsed.data }
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('download-curl', async (event, { parsed, saveDir }) => {
+  const send = (d) => { try { mainWindow.webContents.send('curl-download-progress', d); } catch (e) {} };
+  try {
+    if (!parsed || !parsed.url) throw new Error('缺少解析结果');
+    const dir = saveDir || app.getPath('downloads');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    const headers = {};
+    for (const h of (parsed.headers || [])) { if (h && h.name) headers[h.name] = h.value; }
+    if (parsed.cookie) headers['Cookie'] = parsed.cookie;
+
+    const axiosOptions = {
+      url: parsed.url,
+      method: (parsed.method || 'GET').toUpperCase(),
+      headers,
+      responseType: 'stream',
+      maxRedirects: 8,
+      timeout: 30 * 60 * 1000,
+      validateStatus: () => true,
+      data: parsed.data || undefined
+    };
+
+    send({ status: 'progress', percentage: 0, speed: '连接中…' });
+    const response = await axios(axiosOptions);
+    if (response.status >= 400) throw new Error(`服务器返回 HTTP ${response.status}(会话可能已失效或链接无效)`);
+
+    // 文件名:优先 Content-Disposition,否则从 URL 取,最后清洗非法字符
+    let name = '';
+    const cd = String(response.headers['content-disposition'] || '');
+    const mcd = cd.match(/filename\*?=(?:UTF-8''|")?([^";]+)"?/i) || cd.match(/filename="?([^";]+)"?/i);
+    if (mcd) { try { name = decodeURIComponent(mcd[1].trim()); } catch (e) { name = mcd[1].trim(); } }
+    if (!name) name = fileNameFromUrl(parsed.url);
+    name = sanitizePathSegment(name) || ('download_' + Date.now());
+    const savePath = path.join(dir, name);
+
+    const total = parseInt(response.headers['content-length'] || '0', 10) || 0;
+    const writer = fs.createWriteStream(savePath);
+    return await new Promise((resolve, reject) => {
+      let downloaded = 0, lastB = 0, timer = null, firstChunk = true, done = false;
+      const finish = (err) => {
+        if (done) return; done = true;
+        if (timer) clearInterval(timer);
+        try { writer.destroy(); } catch (e) {}
+        if (err) {
+          try { fs.unlinkSync(savePath); } catch (e) {}
+          send({ status: 'failed', message: err.message });
+          reject(err);
+        } else {
+          send({ status: 'completed', name, savePath, downloaded });
+          resolve({ success: true, savePath, name });
+        }
+      };
+      writer.on('error', (e) => finish(e));
+      response.data.on('error', (e) => finish(e));
+      timer = setInterval(() => {
+        const diff = downloaded - lastB; lastB = downloaded;
+        const bps = diff / 0.5;
+        const speedStr = bps > 1048576 ? (bps / 1048576).toFixed(2) + ' MB/s' : bps > 1024 ? (bps / 1024).toFixed(1) + ' KB/s' : Math.round(bps) + ' B/s';
+        const pct = total > 0 ? Math.min(99, Math.floor(downloaded / total * 100)) : null;
+        send({ status: 'progress', percentage: pct, speed: speedStr + '  ' + fmtBytes(downloaded) + (total > 0 ? '/' + fmtBytes(total) : '') });
+      }, 500);
+      response.data.on('data', (chunk) => {
+        downloaded += chunk.length;
+        if (firstChunk) {
+          firstChunk = false;
+          const head = chunk.slice(0, 1024).toString('utf8').trimStart().toLowerCase();
+          if ((head.startsWith('<!doctype html') || head.startsWith('<html')) && !/\.(html?|xhtml)$/i.test(name)) {
+            return finish(new Error('服务器返回网页(错误页/会话失效),非可下载文件。请重新 Copy as cURL(会话可能已过期)。'));
+          }
+        }
+      });
+      response.data.pipe(writer);
+      writer.on('finish', () => {
+        if (total > 0 && downloaded !== total) return finish(new Error(`下载不完整 ${downloaded}/${total} 字节`));
+        finish(null);
+      });
+    });
+  } catch (e) {
+    send({ status: 'failed', message: e.message });
+    throw e;
+  }
 });
 
 // ==========================================

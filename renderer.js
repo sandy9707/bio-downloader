@@ -117,6 +117,8 @@ document.addEventListener('keydown', (e) => {
   if (logModal && logModal.style.display === 'flex') { closeLogManagerModal(); return; }
   const infoModal = document.getElementById('infoModal');
   if (infoModal && infoModal.style.display === 'flex') { closeInfoModal(); return; }
+  const curlModal = document.getElementById('curlModal');
+  if (curlModal && curlModal.style.display === 'flex') { closeCurlModal(); return; }
   if (typeof editingIndex !== 'undefined' && editingIndex !== -1) { cancelRename(); }
 });
 
@@ -822,6 +824,84 @@ function showSessionLinkModal(urls) {
     <p style="margin-top:0.5rem; color:var(--text-muted); font-size:0.78rem;">提示:方法二依赖会话有效期,不适合长期或批量任务。</p>
   `;
   showInfoModal('该链接无法直接下载', html);
+}
+
+// ---------- 粘贴 cURL 下载 ----------
+let curlParsed = null;
+let curlSaveDir = '';
+
+function openCurlModal() {
+  curlParsed = null;
+  const ta = document.getElementById('curlInput'); if (ta) ta.value = '';
+  const pv = document.getElementById('curlPreview'); if (pv) { pv.style.display = 'none'; pv.innerHTML = ''; }
+  const st = document.getElementById('curlStatus'); if (st) { st.innerText = ''; st.style.color = 'var(--text-muted)'; }
+  const pw = document.getElementById('curlProgressWrap'); if (pw) pw.style.display = 'none';
+  const bar = document.getElementById('curlProgressBar'); if (bar) bar.style.width = '0%';
+  const startBtn = document.getElementById('curlStartBtn'); if (startBtn) { startBtn.style.display = 'none'; startBtn.disabled = false; }
+  const parseBtn = document.getElementById('curlParseBtn'); if (parseBtn) { parseBtn.style.display = ''; parseBtn.disabled = false; }
+  curlSaveDir = defaultDir || '';
+  const sd = document.getElementById('curlSaveDir'); if (sd) sd.value = curlSaveDir || '(未选择保存目录)';
+  const m = document.getElementById('curlModal'); if (m) m.style.display = 'flex';
+}
+function closeCurlModal() {
+  const m = document.getElementById('curlModal'); if (m) m.style.display = 'none';
+}
+async function chooseCurlSaveDir() {
+  const dir = await window.api.selectDirectory();
+  if (dir) { curlSaveDir = dir; const sd = document.getElementById('curlSaveDir'); if (sd) sd.value = dir; }
+}
+async function parseCurlInput() {
+  const ta = document.getElementById('curlInput');
+  const text = (ta && ta.value || '').trim();
+  if (!text) { showToast('请先粘贴 cURL 命令', 'warning'); return; }
+  const parseBtn = document.getElementById('curlParseBtn'); if (parseBtn) parseBtn.disabled = true;
+  const res = await window.api.parseCurl(text);
+  if (parseBtn) parseBtn.disabled = false;
+  if (!res || !res.success) { showToast('解析失败: ' + (res && res.error || '格式不正确'), 'error'); return; }
+  curlParsed = res.parsed;
+  const pv = document.getElementById('curlPreview');
+  if (pv) {
+    pv.style.display = 'block';
+    pv.innerHTML = `<b>${escapeHtml(res.preview.method)}</b> ${escapeHtml(res.preview.url)}<br>`
+      + `请求头 ${res.preview.headerCount} 个 · Cookie ${res.preview.hasCookie ? '✅ 已包含(带会话)' : '❌ 无(可能下载失败)'}`
+      + (res.preview.hasData ? ' · 含请求体' : '');
+  }
+  const startBtn = document.getElementById('curlStartBtn'); if (startBtn) startBtn.style.display = '';
+}
+async function startCurlDownload() {
+  if (!curlParsed) { showToast('请先解析 cURL', 'warning'); return; }
+  if (!curlSaveDir) { showToast('请选择保存目录', 'warning'); return; }
+  const startBtn = document.getElementById('curlStartBtn'); if (startBtn) startBtn.disabled = true;
+  const parseBtn = document.getElementById('curlParseBtn'); if (parseBtn) parseBtn.disabled = true;
+  const pw = document.getElementById('curlProgressWrap'); if (pw) pw.style.display = 'block';
+  const bar = document.getElementById('curlProgressBar'); if (bar) bar.style.width = '0%';
+  const st = document.getElementById('curlStatus'); if (st) { st.innerText = '正在连接…'; st.style.color = 'var(--text-muted)'; }
+
+  window.api.onCurlProgress((d) => {
+    if (d.status === 'progress') {
+      if (bar) bar.style.width = (d.percentage != null ? d.percentage : 0) + '%';
+      if (st) st.innerText = (d.speed || '');
+    } else if (d.status === 'completed') {
+      if (bar) bar.style.width = '100%';
+      const safePath = (d.savePath || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+      if (st) { st.style.color = '#10b981'; st.innerHTML = `✅ 下载完成: ${escapeHtml(d.name || '')}　<a href="#" onclick="window.api.openDownloadsFolder('${safePath}');return false;" style="color:var(--primary-color);">在文件夹中显示</a>`; }
+      if (parseBtn) parseBtn.disabled = false;
+      showToast('cURL 下载完成', 'success');
+    } else if (d.status === 'failed') {
+      if (st) { st.style.color = '#ef4444'; st.innerText = '❌ ' + (d.message || '下载失败'); }
+      if (startBtn) startBtn.disabled = false;
+      if (parseBtn) parseBtn.disabled = false;
+      showToast('cURL 下载失败: ' + (d.message || ''), 'error');
+    }
+  });
+
+  try {
+    await window.api.downloadCurl({ parsed: curlParsed, saveDir: curlSaveDir });
+  } catch (e) {
+    if (st) { st.style.color = '#ef4444'; st.innerText = '❌ ' + e.message; }
+    if (startBtn) startBtn.disabled = false;
+    if (parseBtn) parseBtn.disabled = false;
+  }
 }
 
 async function handleLogin() {

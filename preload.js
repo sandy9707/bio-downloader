@@ -35,6 +35,10 @@ contextBridge.exposeInMainWorld('api', {
   openDownloadsFolder: (folderPath) => ipcRenderer.invoke('open-downloads-folder', folderPath),
   cancelAllDownloadsSignal: () => ipcRenderer.send('cancel-all-downloads-signal'),
 
+  // 粘贴 cURL 下载(解析 + 带会话下载)
+  parseCurl: (text) => ipcRenderer.invoke('parse-curl', { text }),
+  downloadCurl: (payload) => ipcRenderer.invoke('download-curl', payload),
+
   // 自动更新与发布页
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', { url }),
@@ -64,5 +68,9 @@ contextBridge.exposeInMainWorld('api', {
   onUpdateStatus: (callback) => {
     ipcRenderer.removeAllListeners('update-status');
     ipcRenderer.on('update-status', (event, data) => callback(data));
+  },
+  onCurlProgress: (callback) => {
+    ipcRenderer.removeAllListeners('curl-download-progress');
+    ipcRenderer.on('curl-download-progress', (event, data) => callback(data));
   }
 });

@@ -1022,6 +1022,11 @@
               <span style="font-size: 0.9rem;">🤗</span>
               <span>Hugging Face</span>
             </div>
+            <div style="height:1px; background:var(--border-color); margin:4px 0;"></div>
+            <div class="dropdown-item" onclick="openCurlModal()" style="padding: 8px 14px; font-size: 0.85rem; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 8px; transition: background 0.2s;">
+              <span style="font-size: 0.9rem;">📋</span>
+              <span>粘贴 cURL 下载</span>
+            </div>
           </div>
         </div>
       </div>
@@ -1409,6 +1414,32 @@
       <div id="infoModalBody" style="font-size: 0.88rem; line-height: 1.65; color: var(--text-main);"></div>
       <div style="display:flex; justify-content:center; margin-top:1.25rem;">
         <button class="btn btn-primary" onclick="closeInfoModal()">我知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 粘贴 cURL 下载弹窗 -->
+  <div class="modal-overlay" id="curlModal">
+    <div class="modal" style="max-width: 660px; width: 94%; text-align: left;">
+      <h3 style="text-align:center;">📋 粘贴 cURL 下载</h3>
+      <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.6rem;">用于下载需要浏览器会话(Cookie)的链接,例如 NCBI 的 Copy as cURL。把浏览器复制的<b>整段 cURL 命令</b>粘贴到下方,本工具会解析其中的网址、请求头与 Cookie,并带上会话下载。</p>
+      <textarea id="curlInput" rows="7" placeholder="curl 'https://...' -H 'accept: ...' -b 'ncbi_sid=...; WebEnv=...' ..." style="width:100%; font-family:monospace; font-size:0.74rem; resize:vertical; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-color); border-radius:8px; padding:0.6rem; line-height:1.5;"></textarea>
+      <div id="curlPreview" style="display:none; margin-top:0.6rem; padding:0.6rem; background:var(--surface-subtle); border:1px solid var(--border-color); border-radius:8px; font-size:0.78rem; word-break:break-all; line-height:1.5;"></div>
+      <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.6rem; font-size:0.8rem;">
+        <span style="color:var(--text-muted); white-space:nowrap;">保存到:</span>
+        <input id="curlSaveDir" type="text" readonly style="flex:1; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-color); border-radius:6px; padding:0.35rem 0.5rem; font-size:0.78rem;">
+        <button class="btn btn-secondary" style="padding:0.35rem 0.7rem; font-size:0.78rem;" onclick="chooseCurlSaveDir()">更换</button>
+      </div>
+      <div style="margin-top:0.7rem;">
+        <div class="item-progress-bar" id="curlProgressWrap" style="display:none; height:8px; background:var(--progress-bar-bg); border-radius:4px; overflow:hidden;">
+          <div id="curlProgressBar" style="height:100%; width:0%; background:var(--primary-grad); transition:width 0.2s;"></div>
+        </div>
+        <div id="curlStatus" style="font-size:0.78rem; color:var(--text-muted); margin-top:0.4rem; min-height:1.1em; word-break:break-all;"></div>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem;">
+        <button class="btn btn-secondary" id="curlCloseBtn" onclick="closeCurlModal()">关闭</button>
+        <button class="btn btn-primary" id="curlParseBtn" onclick="parseCurlInput()">解析</button>
+        <button class="btn btn-primary" id="curlStartBtn" onclick="startCurlDownload()" style="display:none;">开始下载</button>
       </div>
     </div>
   </div>
