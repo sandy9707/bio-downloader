@@ -1402,6 +1402,17 @@
     </div>
   </div>
 
+  <!-- 通用信息弹窗(如:NCBI 会话型链接无法直接下载说明) -->
+  <div class="modal-overlay" id="infoModal">
+    <div class="modal" style="max-width: 560px; width: 92%; text-align: left;">
+      <h3 id="infoModalTitle" style="text-align: center;">提示</h3>
+      <div id="infoModalBody" style="font-size: 0.88rem; line-height: 1.65; color: var(--text-main);"></div>
+      <div style="display:flex; justify-content:center; margin-top:1.25rem;">
+        <button class="btn btn-primary" onclick="closeInfoModal()">我知道了</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 日志管理模态框 -->
   <div class="modal-overlay" id="logManagerModal">
     <div class="modal" style="max-width: 750px; width: 90%;">
