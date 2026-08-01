@@ -926,7 +926,10 @@ async function applyHotPatch(patchUrl) {
   // 2) 从官方后端拉取可信清单(sha256 + 签名),不信任渲染进程传入的任何校验值
   let manifest = null;
   try {
-    const mres = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, { timeout: 8000, proxy: axiosProxyFor(`${BACKEND_BASE_URL}/api/client/version`) });
+    // 通道隔离:2.x 补丁(patch-2.x.asar)取 2.x 清单校验,否则取 1.x,确保拿到对应的 sha256/signature
+    const pm = String(patchUrl).match(/patch-(\d+)\./);
+    const verifyChannel = pm && parseInt(pm[1], 10) >= 2 ? 2 : 1;
+    const mres = await axios.get(`${BACKEND_BASE_URL}/api/client/version?channel=${verifyChannel}`, { timeout: 8000, proxy: axiosProxyFor(`${BACKEND_BASE_URL}/api/client/version`) });
     manifest = mres.data || null;
   } catch (e) {
     throw new Error('无法获取更新清单,热更新中止:' + e.message);
@@ -997,11 +1000,14 @@ ipcMain.handle('apply-hot-patch', async (event, { patchUrl }) => {
 // --- 自动更新与外部链接 ---
 ipcMain.handle('check-for-updates', async () => {
   try {
-    const versionUrl = `${BACKEND_BASE_URL}/api/client/version`;
+    const currentVersion = app.getVersion();
+    // 【2.0.0 通道隔离】按主版本号请求各自通道:1.x → channel=1(只见 1.x 线),2.x → channel=2。
+    // 线上旧客户端(≤1.7.6)不带该参数,服务端默认返回 1.x 清单 → 完全不受影响、绝不会被升到 2.x。
+    const major = parseInt(String(currentVersion).split('.')[0], 10) || 1;
+    const versionUrl = `${BACKEND_BASE_URL}/api/client/version?channel=${major}`;
     // 后端是境内服务 → 直连(axiosProxyFor 对境内返回 false,强制直连并忽略系统代理),避免绕代理变慢
     const res = await axios.get(versionUrl, { timeout: 6000, proxy: axiosProxyFor(versionUrl) });
-    const currentVersion = app.getVersion();
-    const latestVersion = res.data.version;
+    const latestVersion = res.data.version || currentVersion;
 
     // semver 比较:仅当服务端版本严格高于本地时才提示更新(防止被回滚/降级覆盖)
     const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
@@ -1009,6 +1015,17 @@ ipcMain.handle('check-for-updates', async () => {
     // 最低支持版本开关:用于未来"集中弃用旧版本"(当前设得很低,不强制任何旧版本)
     const minClientVersion = res.data.minClientVersion || '1.0.0';
     const forceUpdate = compareVersions(currentVersion, minClientVersion) < 0;
+
+    // 2.x 升级桥接(可选):1.x 清单若含 upgrade2x 且可热更新,则在常规更新之后额外展示"升级到 2.x"卡片
+    let upgrade2x = null;
+    const u = res.data.upgrade2x;
+    if (major === 1 && u && u.version && u.patchUrl && u.hotUpdatable !== false) {
+      upgrade2x = {
+        version: u.version,
+        releaseNotes: u.releaseNotes || '',
+        patchUrl: String(u.patchUrl).startsWith('http') ? u.patchUrl : `${BACKEND_BASE_URL}${u.patchUrl}`
+      };
+    }
 
     return {
       success: true,
@@ -1018,9 +1035,10 @@ ipcMain.handle('check-for-updates', async () => {
       forceUpdate,
       minClientVersion,
       patchUrl: res.data.patchUrl ? (res.data.patchUrl.startsWith('http') ? res.data.patchUrl : `${BACKEND_BASE_URL}${res.data.patchUrl}`) : null,
-      winUrl: `${BACKEND_BASE_URL}${res.data.winUrl}`,
-      macUrl: `${BACKEND_BASE_URL}${res.data.macUrl}`,
-      releaseNotes: res.data.releaseNotes
+      winUrl: res.data.winUrl ? `${BACKEND_BASE_URL}${res.data.winUrl}` : null,
+      macUrl: res.data.macUrl ? `${BACKEND_BASE_URL}${res.data.macUrl}` : null,
+      releaseNotes: res.data.releaseNotes,
+      upgrade2x
     };
   } catch (err) {
     console.error('Check for updates failed:', err.message);

@@ -396,6 +396,7 @@ async function chooseDefaultDir() {
 // 【软件自动更新与版本控制】
 // ==========================================
 let updateInfoGlobal = null;
+let upgrade2xInfoGlobal = null; // 2.x 升级桥接信息(来自 1.x 清单的 upgrade2x 块)
 
 async function triggerCheckForUpdates() {
   showToast('正在检查服务器最新版本...', 'info');
@@ -420,6 +421,19 @@ async function triggerCheckForUpdates() {
         showToast('检测到新版本，请及时更新', 'success');
       } else {
         showToast(`当前已是最新版本 (v${res.currentVersion})`, 'success');
+      }
+
+      // 2.x 升级桥接:清单声明 2.x 可热更新时,在常规更新之后额外显示升级卡片(1.x 绝不强制)
+      const card2x = document.getElementById('updateCard2x');
+      if (card2x) {
+        if (res.upgrade2x && res.upgrade2x.patchUrl) {
+          document.getElementById('update2xVersion').innerText = res.upgrade2x.version;
+          document.getElementById('update2xReleaseNotes').innerText = res.upgrade2x.releaseNotes || '';
+          upgrade2xInfoGlobal = res.upgrade2x;
+          card2x.style.display = 'block';
+        } else {
+          card2x.style.display = 'none';
+        }
       }
     } else {
       showToast('无法连接到版本更新服务器: ' + (res.message || '未知错误'), 'error');
@@ -460,6 +474,28 @@ async function startHotPatchUpdate() {
 }
 
 window.startHotPatchUpdate = startHotPatchUpdate;
+
+// 2.x 升级桥接:用 upgrade2x.patchUrl 走同一套签名热更新(applyHotPatch 会按补丁版本取对应通道清单校验)
+async function startUpgrade2x() {
+  if (isUpdating) {
+    showToast('正在更新中，请勿重复点击', 'warning');
+    return;
+  }
+  if (!upgrade2xInfoGlobal || !upgrade2xInfoGlobal.patchUrl) return;
+  const btn = document.getElementById('btnUpgrade2x');
+  if (btn) { btn.disabled = true; btn.innerText = '⏳ 正在升级到 2.x...'; }
+  isUpdating = true;
+  showToast('正在下载 2.x 热更新包...', 'info');
+  try {
+    const res = await window.api.applyHotPatch(upgrade2xInfoGlobal.patchUrl);
+    if (res.success) showToast(res.message || '升级成功！应用即将重启...', 'success');
+  } catch (err) {
+    showToast('升级到 2.x 失败: ' + err.message, 'error');
+    if (btn) { btn.disabled = false; btn.innerText = '⚡ 热更新升级到 2.x'; }
+    isUpdating = false;
+  }
+}
+window.startUpgrade2x = startUpgrade2x;
 
 function closeUpdateCard() {
   document.getElementById('updateCard').style.display = 'none';
