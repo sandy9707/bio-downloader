@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
@@ -344,7 +344,9 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      backgroundThrottling: true
+      backgroundThrottling: true,
+      // 2.0.0 引导式提取:允许渲染进程内嵌 <webview> 内置浏览器(独立分区会话)
+      webviewTag: true
     },
     frame: true,
     show: false,
@@ -394,6 +396,7 @@ app.whenReady().then(() => {
   ensureBinaries();
   ensureClashDataFiles();
   createWindow();
+  setupExtractionBrowser(); // 2.0.0 引导式提取:初始化内置浏览器分区会话/下载拦截/资源嗅探
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -926,7 +929,10 @@ async function applyHotPatch(patchUrl) {
   // 2) 从官方后端拉取可信清单(sha256 + 签名),不信任渲染进程传入的任何校验值
   let manifest = null;
   try {
-    const mres = await axios.get(`${BACKEND_BASE_URL}/api/client/version`, { timeout: 8000, proxy: axiosProxyFor(`${BACKEND_BASE_URL}/api/client/version`) });
+    // 通道隔离:2.x 补丁(patch-2.x.asar)取 2.x 清单校验,否则取 1.x,确保拿到对应的 sha256/signature
+    const pm = String(patchUrl).match(/patch-(\d+)\./);
+    const verifyChannel = pm && parseInt(pm[1], 10) >= 2 ? 2 : 1;
+    const mres = await axios.get(`${BACKEND_BASE_URL}/api/client/version?channel=${verifyChannel}`, { timeout: 8000, proxy: axiosProxyFor(`${BACKEND_BASE_URL}/api/client/version`) });
     manifest = mres.data || null;
   } catch (e) {
     throw new Error('无法获取更新清单,热更新中止:' + e.message);
@@ -997,11 +1003,14 @@ ipcMain.handle('apply-hot-patch', async (event, { patchUrl }) => {
 // --- 自动更新与外部链接 ---
 ipcMain.handle('check-for-updates', async () => {
   try {
-    const versionUrl = `${BACKEND_BASE_URL}/api/client/version`;
+    const currentVersion = app.getVersion();
+    // 【2.0.0 通道隔离】按主版本号请求各自通道:1.x → channel=1(只见 1.x 线),2.x → channel=2。
+    // 线上旧客户端(≤1.7.6)不带该参数,服务端默认返回 1.x 清单 → 完全不受影响、绝不会被升到 2.x。
+    const major = parseInt(String(currentVersion).split('.')[0], 10) || 1;
+    const versionUrl = `${BACKEND_BASE_URL}/api/client/version?channel=${major}`;
     // 后端是境内服务 → 直连(axiosProxyFor 对境内返回 false,强制直连并忽略系统代理),避免绕代理变慢
     const res = await axios.get(versionUrl, { timeout: 6000, proxy: axiosProxyFor(versionUrl) });
-    const currentVersion = app.getVersion();
-    const latestVersion = res.data.version;
+    const latestVersion = res.data.version || currentVersion;
 
     // semver 比较:仅当服务端版本严格高于本地时才提示更新(防止被回滚/降级覆盖)
     const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
@@ -1009,6 +1018,17 @@ ipcMain.handle('check-for-updates', async () => {
     // 最低支持版本开关:用于未来"集中弃用旧版本"(当前设得很低,不强制任何旧版本)
     const minClientVersion = res.data.minClientVersion || '1.0.0';
     const forceUpdate = compareVersions(currentVersion, minClientVersion) < 0;
+
+    // 2.x 升级桥接(可选):1.x 清单若含 upgrade2x 且可热更新,则在常规更新之后额外展示"升级到 2.x"卡片
+    let upgrade2x = null;
+    const u = res.data.upgrade2x;
+    if (major === 1 && u && u.version && u.patchUrl && u.hotUpdatable !== false) {
+      upgrade2x = {
+        version: u.version,
+        releaseNotes: u.releaseNotes || '',
+        patchUrl: String(u.patchUrl).startsWith('http') ? u.patchUrl : `${BACKEND_BASE_URL}${u.patchUrl}`
+      };
+    }
 
     return {
       success: true,
@@ -1018,9 +1038,10 @@ ipcMain.handle('check-for-updates', async () => {
       forceUpdate,
       minClientVersion,
       patchUrl: res.data.patchUrl ? (res.data.patchUrl.startsWith('http') ? res.data.patchUrl : `${BACKEND_BASE_URL}${res.data.patchUrl}`) : null,
-      winUrl: `${BACKEND_BASE_URL}${res.data.winUrl}`,
-      macUrl: `${BACKEND_BASE_URL}${res.data.macUrl}`,
-      releaseNotes: res.data.releaseNotes
+      winUrl: res.data.winUrl ? `${BACKEND_BASE_URL}${res.data.winUrl}` : null,
+      macUrl: res.data.macUrl ? `${BACKEND_BASE_URL}${res.data.macUrl}` : null,
+      releaseNotes: res.data.releaseNotes,
+      upgrade2x
     };
   } catch (err) {
     console.error('Check for updates failed:', err.message);
@@ -2194,6 +2215,252 @@ ipcMain.handle('download-curl', async (event, { parsed, saveDir }) => {
     send({ status: 'failed', message: e.message });
     throw e;
   }
+});
+
+// ============================================================================
+// 【2.0.0 引导式提取 (User-Guided Extraction)】
+// 内置浏览器(webview 独立分区会话) + 下载拦截 + 资源嗅探 + 代码框。
+// 拦截/嗅探到的真实下载统一交给本程序下载引擎(带 Cookie、断点续传),
+// 并通过 'extraction-event' 回传到渲染进程的「传输列表」与侧边栏。
+// ============================================================================
+const BROWSER_PARTITION = 'persist:biodl-browser';
+let browserSessionReady = false;
+let extractionJobSeq = 1;
+
+function getBrowserSession() {
+  return session.fromPartition(BROWSER_PARTITION);
+}
+
+// 站点适配器:把某类 URL 判定为「重要资源」(侧边栏加粗红色置顶)
+function classifyResource(url) {
+  const u = String(url || '');
+  if (/ncbi\.nlm\.nih\.gov/i.test(u)) {
+    if (/efetch\.fcgi|viewer\.cgi|\/sendto|query_key=/i.test(u)) return { site: 'ncbi', important: true, label: 'NCBI 批量导出' };
+    return { site: 'ncbi', important: false, label: 'NCBI' };
+  }
+  if (/singlecell\.broadinstitute\.org/i.test(u)) {
+    if (/bulk_download|generate_curl_config|\/download/i.test(u)) return { site: 'broad', important: true, label: 'Broad 单细胞批量下载' };
+    return { site: 'broad', important: false, label: 'Broad Single Cell' };
+  }
+  return { site: 'generic', important: false, label: '' };
+}
+
+function sendExtraction(payload) {
+  try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('extraction-event', payload); } catch (e) {}
+}
+
+// 取内置浏览器分区会话里某 URL 的 Cookie 串
+async function cookiesForUrl(url) {
+  try {
+    const list = await getBrowserSession().cookies.get({ url });
+    return (list || []).map((c) => `${c.name}=${c.value}`).join('; ');
+  } catch (e) { return ''; }
+}
+
+// 通用流式下载(带 Cookie/请求头 + 断点续传),进度经 extraction-event 回传
+async function streamDownloadToDisk({ id, url, name, headers, cookie, saveDir, sizeHint }) {
+  const dir = saveDir || app.getPath('downloads');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const reqHeaders = Object.assign({}, headers || {});
+  if (cookie) reqHeaders['Cookie'] = cookie;
+  if (!reqHeaders['User-Agent']) reqHeaders['User-Agent'] = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+
+  let finalName = sanitizePathSegment(name || fileNameFromUrl(url)) || ('download_' + Date.now());
+  let savePath = path.join(dir, finalName);
+  // 断点续传:已有部分文件则从断点续传
+  let start = 0;
+  try { const st = fs.statSync(savePath); if (st && st.size > 0) start = st.size; } catch (e) {}
+  if (start > 0) reqHeaders['Range'] = 'bytes=' + start + '-';
+
+  sendExtraction({ type: 'download', id, status: 'progress', percentage: 0, speed: '连接中…' });
+  const response = await axios({ url, method: 'GET', headers: reqHeaders, responseType: 'stream', maxRedirects: 8, timeout: 30 * 60 * 1000, validateStatus: () => true });
+  if (response.status >= 400) throw new Error(`服务器返回 HTTP ${response.status}(链接无效或会话已失效)`);
+
+  const resumed = (start > 0 && response.status === 206); // 服务器支持断点
+  if (!resumed) start = 0;                                // 否则从头覆盖
+
+  // 文件名:Content-Disposition 优先(仅当调用方未显式命名)
+  if (!name) {
+    const cd = String(response.headers['content-disposition'] || '');
+    const mcd = cd.match(/filename\*?=(?:UTF-8''|")?([^";]+)"?/i) || cd.match(/filename="?([^";]+)"?/i);
+    if (mcd) { try { finalName = sanitizePathSegment(decodeURIComponent(mcd[1].trim())) || finalName; } catch (e) {} savePath = path.join(dir, finalName); }
+  }
+
+  const contentRange = String(response.headers['content-range'] || '');
+  const crTotal = contentRange.match(/\/(\d+)\s*$/);
+  const total = (crTotal ? parseInt(crTotal[1], 10) : (parseInt(response.headers['content-length'] || '0', 10) + start)) || (sizeHint || 0);
+
+  const writer = fs.createWriteStream(savePath, { flags: resumed ? 'a' : 'w' });
+  return await new Promise((resolve, reject) => {
+    let downloaded = start, lastB = start, timer = null, firstChunk = true, done = false;
+    const finish = (err) => {
+      if (done) return; done = true;
+      if (timer) clearInterval(timer);
+      try { writer.destroy(); } catch (e) {}
+      if (err) {
+        sendExtraction({ type: 'download', id, status: 'failed', message: err.message });
+        reject(err);
+      } else {
+        sendExtraction({ type: 'download', id, status: 'completed', name: finalName, savePath, size: downloaded });
+        resolve({ success: true, savePath, name: finalName, size: downloaded });
+      }
+    };
+    writer.on('error', finish);
+    response.data.on('error', finish);
+    timer = setInterval(() => {
+      const diff = downloaded - lastB; lastB = downloaded;
+      const bps = diff / 0.5;
+      const speedStr = bps > 1048576 ? (bps / 1048576).toFixed(2) + ' MB/s' : bps > 1024 ? (bps / 1024).toFixed(1) + ' KB/s' : Math.round(bps) + ' B/s';
+      const pct = total > 0 ? Math.min(99, Math.floor(downloaded / total * 100)) : null;
+      sendExtraction({ type: 'download', id, status: 'progress', percentage: pct, speed: speedStr + '  ' + fmtBytes(downloaded) + (total > 0 ? '/' + fmtBytes(total) : '') });
+    }, 500);
+    response.data.on('data', (chunk) => {
+      downloaded += chunk.length;
+      if (firstChunk) {
+        firstChunk = false;
+        const head = chunk.slice(0, 1024).toString('utf8').trimStart().toLowerCase();
+        if ((head.startsWith('<!doctype html') || head.startsWith('<html')) && !/\.(html?|xhtml)$/i.test(finalName)) {
+          return finish(new Error('服务器返回网页(错误页/会话失效),非可下载文件。请刷新页面或重新获取链接。'));
+        }
+      }
+    });
+    response.data.pipe(writer);
+    writer.on('finish', () => {
+      if (total > 0 && downloaded < total) return finish(new Error(`下载不完整 ${downloaded}/${total} 字节,请重试(支持断点续传)`));
+      finish(null);
+    });
+  });
+}
+
+// 统一入口:把一个资源(拦截/嗅探点击/代码框解析)交给下载引擎,并回传传输列表
+async function runExtractionDownload({ url, name, headers, cookie, saveDir, size }, jobTitle) {
+  const id = 'ex' + (extractionJobSeq++);
+  const dir = saveDir || app.getPath('downloads');
+  const cookieStr = cookie || (await cookiesForUrl(url));
+  sendExtraction({ type: 'download', id, status: 'started', url, name: name || fileNameFromUrl(url), size: size || 0, title: jobTitle || '' });
+  try {
+    // NCBI 会话式链接 → efetch 分页下载(逐页重试 + 记录数完整性校验)
+    if (isSessionBoundNcbiLink(url) && queryParam(url, 'query_key') && extractCookieValue(cookieStr, 'WebEnv')) {
+      const parsed = { url, method: 'GET', headers: headers || [], cookie: cookieStr, data: null };
+      const send2 = (d) => sendExtraction(Object.assign({ type: 'download', id }, d));
+      return await downloadNcbiPaginated(parsed, dir, send2);
+    }
+    return await streamDownloadToDisk({ id, url, name, headers: headers || {}, cookie: cookieStr, saveDir: dir, sizeHint: size || 0 });
+  } catch (e) {
+    sendExtraction({ type: 'download', id, status: 'failed', message: e.message });
+    return { success: false, error: e.message };
+  }
+}
+
+// Broad singlecell「curl -K 配置」批量下载(含断点续传)
+async function downloadBroadConfig(code, saveDir) {
+  const dir = saveDir || app.getPath('downloads');
+  // 1) 取出 generate_curl_config 链接
+  const m = String(code).match(/https?:\/\/[^\s"']+generate_curl_config[^\s"']*/i);
+  if (!m) throw new Error('未识别到 generate_curl_config 链接,请粘贴完整的 Broad 下载代码。');
+  const configUrl = m[0].replace(/["']+$/, '');
+  const cookie = await cookiesForUrl(configUrl);
+  sendExtraction({ type: 'log', message: '正在获取 Broad 下载配置…' });
+  const cfgResp = await axios.get(configUrl, { headers: cookie ? { Cookie: cookie } : {}, timeout: 60000, validateStatus: () => true, maxRedirects: 5 });
+  if (cfgResp.status === 401 || cfgResp.status === 403) throw new Error('auth_code 已过期或无效:请回到网页重新点 Download,重新复制代码。');
+  if (cfgResp.status >= 400) throw new Error('获取配置失败 HTTP ' + cfgResp.status);
+  const cfgText = typeof cfgResp.data === 'string' ? cfgResp.data : String(cfgResp.data || '');
+  // 2) 解析 curl -K 配置:成对的 url="..." 与 output/-o "..."
+  const lines = cfgText.split(/\r?\n/);
+  const jobs = [];
+  let cur = null;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const mu = line.match(/^(?:-{1,2}url|url)\s*=?\s*"?([^"\s]+)"?/i) || (/^https?:\/\//i.test(line) ? [null, line.replace(/^"?|"?$/g, '')] : null);
+    if (mu) { if (cur) jobs.push(cur); cur = { url: mu[1].trim(), name: '' }; continue; }
+    const mo = line.match(/^(?:-{1,2}output|output|-o)\s*=?\s*"?([^"\s]+)"?/i);
+    if (mo && cur) cur.name = mo[1].trim();
+  }
+  if (cur) jobs.push(cur);
+  if (!jobs.length) throw new Error('配置里未解析到任何下载条目。');
+  sendExtraction({ type: 'log', message: `Broad 配置解析到 ${jobs.length} 个文件,开始下载…` });
+  // 3) 逐个下载(各自断点续传);单个失败不中断整批,auth 过期则提前终止
+  const results = [];
+  for (let i = 0; i < jobs.length; i++) {
+    const j = jobs[i];
+    const id = 'ex' + (extractionJobSeq++);
+    const nm = j.name || fileNameFromUrl(j.url);
+    sendExtraction({ type: 'download', id, status: 'started', url: j.url, name: nm, size: 0, title: `Broad ${i + 1}/${jobs.length}` });
+    try {
+      results.push(await streamDownloadToDisk({ id, url: j.url, name: nm, headers: {}, cookie, saveDir: dir, sizeHint: 0 }));
+    } catch (e) {
+      results.push({ success: false, name: nm, error: e.message });
+      if (/HTTP (401|403)/.test(e.message)) throw new Error('auth_code 已过期:请回到网页重新点 Download 并重新复制代码。');
+    }
+  }
+  return { success: true, count: results.filter((r) => r && r.success).length, total: jobs.length, results };
+}
+
+// 初始化:分区会话 + 下载拦截 + 资源嗅探
+function setupExtractionBrowser() {
+  if (browserSessionReady) return;
+  browserSessionReady = true;
+  const bs = getBrowserSession();
+
+  bs.setPermissionRequestHandler((wc, permission, callback) => callback(true));
+
+  // 下载拦截:取消 Electron 原生保存,改用本程序下载引擎(多线程/断点/进传输列表)
+  bs.on('will-download', (event, item) => {
+    const url = item.getURL();
+    const name = item.getFilename() || fileNameFromUrl(url);
+    const size = (item.getTotalBytes && item.getTotalBytes()) || 0;
+    event.preventDefault(); // 取消原生下载
+    runExtractionDownload({ url, name, size, headers: {} }, '网页拦截');
+  });
+
+  // 资源嗅探:按类型/站点分类后回传侧边栏(重要资源加粗红字置顶)
+  const seen = new Set();
+  bs.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
+    try {
+      const rt = details.resourceType;
+      const url = details.url;
+      if (rt !== 'mainFrame' && rt !== 'subFrame') {
+        const cls = classifyResource(url);
+        const isMedia = (rt === 'image' || rt === 'media');
+        const looksFile = /\.(gz|zip|tar|fastq|fq|fasta|fa|gb|gff|csv|tsv|txt|h5|h5ad|loom|bam|cram|sra|pdf|mp4|png|jpe?g)(\?|$)/i.test(url);
+        if (isMedia || cls.important || looksFile) {
+          const key = url.slice(0, 300);
+          if (!seen.has(key) && seen.size < 2000) {
+            seen.add(key);
+            sendExtraction({ type: 'resource', url, resourceType: rt, important: cls.important, site: cls.site, label: cls.label, name: fileNameFromUrl(url) });
+          }
+        }
+      }
+    } catch (e) {}
+    callback({});
+  });
+}
+
+// ---- 引导式提取 IPC ----
+ipcMain.handle('extraction-download', async (event, { url, name, headers, cookie, saveDir, size }) => {
+  return await runExtractionDownload({ url, name, headers: headers || {}, cookie, saveDir, size }, '嗅探下载');
+});
+ipcMain.handle('extraction-run-code', async (event, { code, saveDir }) => {
+  const dir = saveDir || app.getPath('downloads');
+  try {
+    if (/generate_curl_config|bulk_download/i.test(code)) {
+      const r = await downloadBroadConfig(code, dir);
+      sendExtraction({ type: 'log', message: `Broad 批量下载完成 ${r.count}/${r.total}` });
+      return { success: true, mode: 'broad', count: r.count, total: r.total };
+    }
+    // 否则按 cURL 解析(自动识别 NCBI 会话链接 → efetch 分页)
+    const parsed = parseCurlCommand(code);
+    const r = await runExtractionDownload({ url: parsed.url, headers: parsed.headers, cookie: parsed.cookie, saveDir: dir }, '代码框');
+    return { success: !!(r && r.success), mode: 'curl' };
+  } catch (e) {
+    sendExtraction({ type: 'log', message: '代码框执行失败:' + e.message });
+    return { success: false, error: e.message };
+  }
+});
+ipcMain.handle('extraction-cookies-for', async (event, { url }) => ({ cookie: await cookiesForUrl(url) }));
+ipcMain.handle('extraction-clear-session', async () => {
+  try { await getBrowserSession().clearStorageData(); return { success: true }; } catch (e) { return { success: false, error: e.message }; }
 });
 
 // ==========================================

@@ -139,6 +139,13 @@ jobs:
       - name: 查看产物
         run: ls -lh ./release-files/
 
+      - name: 生成 latest 别名资产(供官网 gh-proxy 镜像 releases/latest/download 永不过期)
+        run: |
+          cd ./release-files
+          for f in BioDownloader-*-arm64.dmg; do [ -f "$f" ] && cp "$f" BioDownloader-latest-arm64.dmg && echo "alias: BioDownloader-latest-arm64.dmg <- $f"; done
+          for f in BioDownloader.*.exe; do [ -f "$f" ] && cp "$f" BioDownloader-latest.exe && echo "alias: BioDownloader-latest.exe <- $f"; done
+          ls -lh
+
       - name: 发布 Release
         uses: softprops/action-gh-release@v2
         with:

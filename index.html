@@ -925,6 +925,67 @@
     input:checked + .switch-slider:before {
       transform: translateX(20px);
     }
+
+    /* ===== 引导式提取 User-Guided Extraction (2.0.0) ===== */
+    .extraction-module-card { display:flex; align-items:center; gap:1rem; padding:1.1rem 1.3rem; border-radius:14px; cursor:pointer;
+      background:linear-gradient(135deg, rgba(99,102,241,0.14), rgba(6,182,212,0.12)); border:1px solid rgba(99,102,241,0.35);
+      box-shadow:0 6px 20px rgba(79,70,229,0.12); transition:transform .15s, box-shadow .15s; }
+    .extraction-module-card:hover { transform:translateY(-2px); box-shadow:0 10px 26px rgba(79,70,229,0.22); }
+    .emc-icon { font-size:2rem; }
+    .emc-body { flex:1; min-width:0; }
+    .emc-title { font-size:1.05rem; font-weight:800; color:var(--text-primary); display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
+    .emc-en { font-size:.68rem; font-weight:600; color:var(--text-muted); }
+    .emc-badge { font-size:.6rem; font-weight:800; color:#fff; background:var(--danger-grad); padding:.1rem .45rem; border-radius:6px; letter-spacing:.5px; }
+    .emc-desc { font-size:.82rem; color:var(--text-muted); margin-top:.3rem; line-height:1.55; }
+    .emc-action { font-size:.85rem; font-weight:700; color:var(--primary-color); white-space:nowrap; }
+
+    #extraction-tab { gap:0.8rem; }
+    .extraction-toolbar { display:flex; align-items:center; gap:.4rem; padding:.5rem .6rem; background:var(--bg-card);
+      border:1px solid var(--border-color); border-radius:12px; }
+    .ex-btn { width:34px; height:34px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-input);
+      color:var(--text-main); cursor:pointer; font-size:1rem; flex:0 0 auto; line-height:1; }
+    .ex-btn:hover { background:var(--btn-secondary-bg-hover); }
+    .extraction-url { flex:1; min-width:120px; height:34px; padding:0 .8rem; border-radius:8px; border:1px solid var(--border-color);
+      background:var(--bg-input); color:var(--text-main); font-size:.85rem; }
+    .ex-go { height:34px; padding:0 1rem; }
+    .extraction-body { display:flex; gap:.8rem; flex:1; min-height:520px; }
+    .extraction-main { flex:1; position:relative; background:#ffffff; border:1px solid var(--border-color); border-radius:12px; overflow:hidden; }
+    body.dark-mode .extraction-main { background:#0b0f19; }
+    .extraction-webview { width:100%; height:100%; border:0; display:block; }
+    .extraction-startpage { padding:2rem; overflow:auto; height:100%; box-sizing:border-box; }
+    .extraction-startpage h2 { color:var(--primary-color); margin-bottom:.4rem; }
+    .ex-sub { color:var(--text-muted); font-size:.9rem; margin-bottom:1.4rem; line-height:1.6; }
+    .ex-sites { display:grid; grid-template-columns:repeat(auto-fill, minmax(215px,1fr)); gap:.8rem; margin-bottom:1.4rem; }
+    .ex-site-card { padding:1rem; border-radius:12px; border:1px solid var(--border-color); background:var(--card-bg); cursor:pointer; transition:transform .12s,border-color .12s; }
+    .ex-site-card:hover { transform:translateY(-2px); border-color:var(--primary-color); }
+    .ex-site-name { font-weight:800; color:var(--text-primary); display:flex; align-items:center; gap:.4rem; }
+    .ex-site-open { margin-left:auto; font-size:.7rem; font-weight:700; color:var(--primary-color); }
+    .ex-site-desc { font-size:.78rem; color:var(--text-muted); margin-top:.4rem; line-height:1.55; }
+    .ex-site-example { display:none; margin-top:.6rem; padding:.6rem .7rem; background:var(--code-bg); color:var(--code-text); border-radius:8px; font-size:.72rem; line-height:1.7; white-space:pre-wrap; word-break:break-all; }
+    .ex-site-card.open .ex-site-example { display:block; }
+    .ex-tips { display:flex; flex-direction:column; gap:.5rem; }
+    .ex-tip { font-size:.82rem; color:var(--text-color); padding:.6rem .8rem; background:var(--surface-subtle); border-radius:8px; line-height:1.55; }
+    .extraction-sidebar { width:300px; flex:0 0 300px; display:flex; flex-direction:column; gap:.6rem; }
+    .ex-side-head { font-size:.8rem; font-weight:800; color:var(--text-primary); padding:.1rem .2rem; }
+    .ex-code-hint { font-weight:400; color:var(--text-muted); font-size:.66rem; }
+    .ex-resources { flex:1; overflow:auto; background:var(--bg-card); border:1px solid var(--border-color); border-radius:12px; padding:.5rem; }
+    .ex-empty { font-size:.78rem; color:var(--text-muted); text-align:center; padding:1.4rem .5rem; line-height:1.8; }
+    .ex-res-item { padding:.5rem .55rem; border-radius:8px; cursor:pointer; margin-bottom:.3rem; border:1px solid transparent; }
+    .ex-res-item:hover { background:var(--surface-subtle); border-color:var(--border-color); }
+    .ex-res-name { font-size:.78rem; color:var(--text-color); word-break:break-all; display:block; line-height:1.4; }
+    .ex-res-meta { font-size:.66rem; color:var(--text-muted); margin-top:.2rem; }
+    .ex-res-item.important { background:rgba(244,63,94,0.10); border-color:rgba(244,63,94,0.4); }
+    .ex-res-item.important .ex-res-name { color:#ef4444; font-weight:800; }
+    .ex-codebox { background:var(--bg-card); border:1px solid var(--border-color); border-radius:12px; padding:.5rem; }
+    .ex-codebox textarea { width:100%; box-sizing:border-box; resize:vertical; border:1px solid var(--border-color); border-radius:8px;
+      background:var(--code-bg); color:var(--code-text); font-family:monospace; font-size:.72rem; padding:.5rem; line-height:1.5; }
+    .ex-run { width:100%; margin-top:.4rem; height:32px; font-size:.8rem; }
+    /* 传输列表中的提取任务卡片 */
+    .transfer-item-ex { border-left:3px solid var(--primary-color); }
+    @media (max-width: 900px) {
+      .extraction-body { flex-direction:column; }
+      .extraction-sidebar { width:100%; flex:0 0 auto; }
+    }
   </style>
 </head>
 <body>
@@ -940,6 +1001,7 @@
     </div>
     <div class="nav-menu">
       <div class="nav-item active" onclick="switchTab('download-hub')">下载中心</div>
+      <div class="nav-item" onclick="switchTab('extraction-tab')" id="navExtraction">引导式提取</div>
       <div class="nav-item" onclick="switchTab('transfers-tab')" id="navTransfers">传输列表<span class="badge" id="activeDownloadsBadge" style="display: none;">0</span></div>
       <div class="nav-item" onclick="switchTab('store-tab')">流量商店</div>
       <div class="nav-item" onclick="switchTab('profile-tab')">我的</div>
@@ -1029,6 +1091,16 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- 2.0.0 引导式提取:独立模块(突出重要度,点击进入内置浏览器) -->
+      <div class="extraction-module-card" onclick="switchTab('extraction-tab')">
+        <div class="emc-icon">🧭</div>
+        <div class="emc-body">
+          <div class="emc-title">引导式提取 <span class="emc-en">User-Guided Extraction</span><span class="emc-badge">NEW</span></div>
+          <div class="emc-desc">打开内置浏览器，正常浏览/登录网站，自动拦截网页下载并嗅探数据资源，把真实文件送进本下载器（多线程 + 断点续传 + 完整性校验）。已适配 NCBI、Broad Single Cell，其它网站通用处理。</div>
+        </div>
+        <div class="emc-action">打开内置浏览器 →</div>
       </div>
 
       <div class="card">
@@ -1301,6 +1373,18 @@
               <button class="btn btn-secondary" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="openReleasePage()">发布页</button>
             </div>
           </div>
+          <!-- 2.x 升级桥接卡片(仅当 1.x 清单含 upgrade2x 且可热更新时显示) -->
+          <div id="updateCard2x" style="display:none; margin-top:0.75rem; padding:1rem; background:rgba(244,63,94,0.06); border:1px solid rgba(244,63,94,0.3); border-radius:8px;">
+            <div style="font-weight:700; color:#f43f5e; font-size:0.95rem; margin-bottom:0.35rem;">🚀 重大更新 v<span id="update2xVersion">2.x</span> 可用（引导式提取 · 内置浏览器嗅探下载）</div>
+            <div style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.75rem;">
+              <strong>更新日志：</strong>
+              <pre id="update2xReleaseNotes" style="font-family:inherit; white-space:pre-wrap; margin-top:0.25rem; background:var(--code-bg); padding:0.5rem; border-radius:4px; font-size:0.8rem; line-height:1.4; color:var(--code-text);"></pre>
+            </div>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+              <button id="btnUpgrade2x" class="btn btn-primary" style="font-size:0.8rem; padding:0.4rem 0.85rem; background:linear-gradient(135deg,#f43f5e,#e11d48); border:none;" onclick="startUpgrade2x()">⚡ 热更新升级到 2.x</button>
+              <button class="btn btn-secondary" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="document.getElementById('updateCard2x').style.display='none'">暂不升级</button>
+            </div>
+          </div>
         </div>
 
         <!-- 官方发布渠道 -->
@@ -1389,6 +1473,50 @@
           </div>
           <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">这将清除本地缓存的登录 Token 和所有偏好设置，应用会在操作后退出。</div>
         </div>
+      </div>
+    </div>
+
+    <!-- 引导式提取 (2.0.0 内置浏览器 + 下载拦截 + 资源嗅探) -->
+    <div class="tab-view" id="extraction-tab">
+      <div class="extraction-toolbar">
+        <button class="ex-btn" onclick="extractionBack()" title="后退">←</button>
+        <button class="ex-btn" onclick="extractionForward()" title="前进">→</button>
+        <button class="ex-btn" onclick="extractionReload()" title="刷新">⟳</button>
+        <button class="ex-btn" onclick="extractionHome()" title="返回起始页">🏠</button>
+        <input type="text" id="extractionUrlInput" class="extraction-url" placeholder="输入网址，例如 https://www.ncbi.nlm.nih.gov" onkeydown="if(event.key==='Enter')extractionGo()">
+        <button class="btn btn-primary ex-go" onclick="extractionGo()">前往</button>
+        <button class="ex-btn" onclick="extractionClearCookies()" title="清除内置浏览器会话(用于刷新 Token)">🧹</button>
+      </div>
+
+      <div class="extraction-body">
+        <div class="extraction-main">
+          <!-- 起始页:教程 + 支持的网站(点开看使用示例) -->
+          <div class="extraction-startpage" id="extractionStartpage">
+            <h2>🧭 引导式提取</h2>
+            <p class="ex-sub">在下面的网站里像平常一样操作（登录、点 Send to / Download）。本工具会自动<b>拦截下载</b>、<b>嗅探数据资源</b>，并把真实文件送进「传输列表」。<br>也可以直接在右侧<b>代码框</b>粘贴网站给出的下载代码（cURL / Broad curl 配置）执行。</p>
+            <div class="ex-sites" id="extractionSites"></div>
+            <div class="ex-tips">
+              <div class="ex-tip">🌐 <b>通用</b>：任意网站触发的真实下载会被自动拦截并转入下载器，右侧同时列出嗅探到的媒体/数据文件。</div>
+              <div class="ex-tip">🧬 <b>NCBI</b>：点 Send to 后自动转 efetch 分页下载并校验完整性；会话(Token)过期会提示你刷新，支持断点续传。</div>
+              <div class="ex-tip">🔬 <b>Broad Single Cell</b>：把网页 Download 给出的 <code>curl …generate_curl_config…</code> 代码粘到右侧代码框执行，逐文件下载、断点续传。</div>
+              <div class="ex-tip">⚠️ 许多生物数据网站对 Cookie 有<b>使用次数限制</b>，请勿短时间内高频重复请求，以免会话被封。</div>
+            </div>
+          </div>
+          <!-- 内置浏览器(独立分区会话) -->
+          <webview id="extractionWebview" class="extraction-webview" partition="persist:biodl-browser" allowpopups style="display:none;"></webview>
+        </div>
+
+        <aside class="extraction-sidebar">
+          <div class="ex-side-head">🔎 资源嗅探</div>
+          <div class="ex-resources" id="extractionResources">
+            <div class="ex-empty">浏览网页后，这里会列出可下载资源。<br>重要资源会<b style="color:#ef4444">加粗红字</b>置顶，点击即可下载。</div>
+          </div>
+          <div class="ex-codebox">
+            <div class="ex-side-head">⌨️ 代码框 <span class="ex-code-hint">粘贴 cURL / Broad 下载代码</span></div>
+            <textarea id="extractionCodeInput" rows="3" placeholder='curl "https://singlecell.broadinstitute.org/.../generate_curl_config?accessions=SCP259&auth_code=..." -o cfg.txt; curl -K cfg.txt'></textarea>
+            <button class="btn btn-primary ex-run" onclick="extractionRunCode()">执行下载</button>
+          </div>
+        </aside>
       </div>
     </div>
 

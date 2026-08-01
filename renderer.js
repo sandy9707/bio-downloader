@@ -127,6 +127,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   // 初始化登录/注册表单显示状态
   switchAuthTab('login');
 
+  // 初始化引导式提取(内置浏览器)模块
+  initExtraction();
+
   // 加载并渲染版本号
   try {
     const version = await window.api.getAppVersion();
@@ -287,6 +290,7 @@ function switchTab(tabId) {
   currentTab = tabId;
   const titles = {
     'download-hub': '下载中心',
+    'extraction-tab': '引导式提取',
     'transfers-tab': '传输列表',
     'store-tab': '流量商店',
     'profile-tab': '个人中心',
@@ -396,6 +400,7 @@ async function chooseDefaultDir() {
 // 【软件自动更新与版本控制】
 // ==========================================
 let updateInfoGlobal = null;
+let upgrade2xInfoGlobal = null; // 2.x 升级桥接信息(来自 1.x 清单的 upgrade2x 块)
 
 async function triggerCheckForUpdates() {
   showToast('正在检查服务器最新版本...', 'info');
@@ -420,6 +425,19 @@ async function triggerCheckForUpdates() {
         showToast('检测到新版本，请及时更新', 'success');
       } else {
         showToast(`当前已是最新版本 (v${res.currentVersion})`, 'success');
+      }
+
+      // 2.x 升级桥接:清单声明 2.x 可热更新时,在常规更新之后额外显示升级卡片(1.x 绝不强制)
+      const card2x = document.getElementById('updateCard2x');
+      if (card2x) {
+        if (res.upgrade2x && res.upgrade2x.patchUrl) {
+          document.getElementById('update2xVersion').innerText = res.upgrade2x.version;
+          document.getElementById('update2xReleaseNotes').innerText = res.upgrade2x.releaseNotes || '';
+          upgrade2xInfoGlobal = res.upgrade2x;
+          card2x.style.display = 'block';
+        } else {
+          card2x.style.display = 'none';
+        }
       }
     } else {
       showToast('无法连接到版本更新服务器: ' + (res.message || '未知错误'), 'error');
@@ -460,6 +478,28 @@ async function startHotPatchUpdate() {
 }
 
 window.startHotPatchUpdate = startHotPatchUpdate;
+
+// 2.x 升级桥接:用 upgrade2x.patchUrl 走同一套签名热更新(applyHotPatch 会按补丁版本取对应通道清单校验)
+async function startUpgrade2x() {
+  if (isUpdating) {
+    showToast('正在更新中，请勿重复点击', 'warning');
+    return;
+  }
+  if (!upgrade2xInfoGlobal || !upgrade2xInfoGlobal.patchUrl) return;
+  const btn = document.getElementById('btnUpgrade2x');
+  if (btn) { btn.disabled = true; btn.innerText = '⏳ 正在升级到 2.x...'; }
+  isUpdating = true;
+  showToast('正在下载 2.x 热更新包...', 'info');
+  try {
+    const res = await window.api.applyHotPatch(upgrade2xInfoGlobal.patchUrl);
+    if (res.success) showToast(res.message || '升级成功！应用即将重启...', 'success');
+  } catch (err) {
+    showToast('升级到 2.x 失败: ' + err.message, 'error');
+    if (btn) { btn.disabled = false; btn.innerText = '⚡ 热更新升级到 2.x'; }
+    isUpdating = false;
+  }
+}
+window.startUpgrade2x = startUpgrade2x;
 
 function closeUpdateCard() {
   document.getElementById('updateCard').style.display = 'none';
@@ -1649,7 +1689,7 @@ function switchTransferSubTab(subTab) {
 }
 
 function updateTransferCounts() {
-  const downloadingCount = activeDownloads.length;
+  const downloadingCount = activeDownloads.length + Object.keys(extractionJobs).length;
   const downloadingCountEl = document.getElementById('downloadingCount');
   const completedCountEl = document.getElementById('completedCount');
   const failedCountEl = document.getElementById('failedCount');
@@ -1682,11 +1722,11 @@ function renderDownloadingList() {
   if (!container) return;
 
   const emptyState = document.getElementById('emptyDownloadingState');
-  const cards = container.querySelectorAll('.transfer-item');
+  const cards = container.querySelectorAll('.transfer-item:not(.transfer-item-ex)');
   cards.forEach(c => c.remove());
 
   if (activeDownloads.length === 0) {
-    if (emptyState) emptyState.style.display = 'flex';
+    if (emptyState && Object.keys(extractionJobs).length === 0) emptyState.style.display = 'flex';
     return;
   }
   if (emptyState) emptyState.style.display = 'none';
@@ -1807,6 +1847,8 @@ function getFileTypeBadge(url) {
   if (url.includes('geo/series')) return 'GEO Suppl';
   if (url.includes('zenodo.org')) return 'Zenodo';
   if (url.includes('huggingface.co')) return 'Hugging Face';
+  if (url.includes('ncbi.nlm.nih.gov')) return 'NCBI';
+  if (url.includes('singlecell.broadinstitute.org')) return 'Broad';
   return 'Direct Link';
 }
 
@@ -2392,3 +2434,215 @@ async function optimizeConnections() {
 }
 
 window.optimizeConnections = optimizeConnections;
+
+// ============================================================================
+// 【2.0.0 引导式提取 (User-Guided Extraction)】
+// 内置浏览器导航 + 资源嗅探侧边栏 + 代码框 + 拦截下载并入传输列表
+// ============================================================================
+const EXTRACTION_SITES = [
+  {
+    icon: '🧬', name: 'NCBI', url: 'https://www.ncbi.nlm.nih.gov',
+    desc: '检索序列后点 Send to / 下载，自动转 efetch 分页下载并校验完整性，会话过期有提示。',
+    example: '1. 打开 ncbi.nlm.nih.gov，搜索基因/序列（如 NDM-1）\n2. 勾选结果 → Send to → File → 选格式(GenBank/FASTA) → Create File\n3. 本工具自动拦截并转为 efetch 分页下载（可断点续传、核对记录数）\n4. 若提示会话过期：点右上角🧹清除会话，重新登录后再操作'
+  },
+  {
+    icon: '🔬', name: 'Broad Single Cell', url: 'https://singlecell.broadinstitute.org',
+    desc: '单细胞研究批量下载：把网页 Download 给出的 curl 配置代码粘到右侧代码框执行。',
+    example: '1. 打开研究页，例如 SCP259\n2. 点 Download，会得到形如：\n   curl "https://singlecell.broadinstitute.org/single_cell/api/v1/bulk_download/generate_curl_config?accessions=SCP259&auth_code=xxxx&directory=all&context=study" -o cfg.txt; curl -K cfg.txt && rm cfg.txt\n3. 复制整段 → 右侧代码框 → 执行下载（逐文件、断点续传）\n4. auth_code 过期时按提示回网页重新 Download 复制'
+  },
+  {
+    icon: '🌐', name: '通用网站', url: 'https://example.com',
+    desc: '任意网站：真实下载自动拦截转入下载器；右侧列出嗅探到的媒体/数据资源，点击即下。',
+    example: '在内置浏览器打开任意网站并正常操作：\n• 触发的下载会被自动拦截 → 传输列表（多线程+断点续传）\n• 右侧「资源嗅探」列出 png/mp4 及数据文件(gz/csv/h5ad…)\n• 重要资源加粗红字置顶，点击即可下载\n• 注意：有 Cookie 次数限制的网站勿高频重复请求'
+  }
+];
+let extractionResources = [];
+let extractionJobs = {};
+let extractionInited = false;
+
+function getExtractionWebview() { return document.getElementById('extractionWebview'); }
+
+function initExtraction() {
+  if (extractionInited) return;
+  extractionInited = true;
+  renderExtractionSites();
+  window.api.onExtractionEvent(handleExtractionEvent);
+  const wv = getExtractionWebview();
+  if (wv) {
+    wv.addEventListener('did-navigate', (e) => { const inp = document.getElementById('extractionUrlInput'); if (inp) inp.value = e.url; });
+    wv.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) { const inp = document.getElementById('extractionUrlInput'); if (inp) inp.value = e.url; } });
+    wv.addEventListener('did-fail-load', (e) => { if (e.errorCode && e.errorCode !== -3) showToast('页面加载失败: ' + (e.errorDescription || e.errorCode), 'error'); });
+  }
+}
+
+function renderExtractionSites() {
+  const box = document.getElementById('extractionSites');
+  if (!box) return;
+  box.innerHTML = EXTRACTION_SITES.map((s, i) => `
+    <div class="ex-site-card" data-i="${i}">
+      <div class="ex-site-name"><span>${s.icon}</span><span>${escapeHtml(s.name)}</span><span class="ex-site-open">打开 ›</span></div>
+      <div class="ex-site-desc">${escapeHtml(s.desc)}</div>
+      <div class="ex-site-example">${escapeHtml(s.example)}</div>
+    </div>`).join('');
+  box.querySelectorAll('.ex-site-card').forEach((el) => {
+    const s = EXTRACTION_SITES[parseInt(el.dataset.i, 10)];
+    el.querySelector('.ex-site-open').onclick = (e) => { e.stopPropagation(); document.getElementById('extractionUrlInput').value = s.url; extractionGo(); };
+    el.onclick = () => el.classList.toggle('open');
+  });
+}
+
+function extractionGo() {
+  const inp = document.getElementById('extractionUrlInput');
+  let url = (inp.value || '').trim();
+  if (!url) { showToast('请输入网址', 'error'); return; }
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  inp.value = url;
+  const wv = getExtractionWebview();
+  document.getElementById('extractionStartpage').style.display = 'none';
+  wv.style.display = 'block';
+  wv.loadURL(url);
+}
+function extractionHome() {
+  const wv = getExtractionWebview();
+  wv.style.display = 'none';
+  document.getElementById('extractionStartpage').style.display = 'block';
+  const inp = document.getElementById('extractionUrlInput'); if (inp) inp.value = '';
+  try { wv.stop(); } catch (e) {}
+}
+function extractionBack() { try { const wv = getExtractionWebview(); if (wv.canGoBack()) wv.goBack(); } catch (e) {} }
+function extractionForward() { try { const wv = getExtractionWebview(); if (wv.canGoForward()) wv.goForward(); } catch (e) {} }
+function extractionReload() { try { getExtractionWebview().reload(); } catch (e) {} }
+async function extractionClearCookies() {
+  const r = await window.api.extractionClearSession();
+  showToast(r && r.success ? '已清除内置浏览器会话，请重新登录以刷新 Token' : '清除失败', 'success');
+}
+
+// ---- 资源嗅探侧边栏 ----
+function addExtractionResource(r) {
+  if (!r || !r.url) return;
+  if (extractionResources.some((x) => x.url === r.url)) return;
+  extractionResources.push({ url: r.url, name: r.name || r.url, important: !!r.important, site: r.site || 'generic', label: r.label || '', resourceType: r.resourceType || '' });
+  if (extractionResources.length > 300) extractionResources.shift();
+  renderExtractionResources();
+}
+function renderExtractionResources() {
+  const box = document.getElementById('extractionResources');
+  if (!box) return;
+  const sorted = [...extractionResources].sort((a, b) => (b.important ? 1 : 0) - (a.important ? 1 : 0));
+  if (!sorted.length) {
+    box.innerHTML = '<div class="ex-empty">浏览网页后，这里会列出可下载资源。<br>重要资源会<b style="color:#ef4444">加粗红字</b>置顶，点击即可下载。</div>';
+    return;
+  }
+  box.innerHTML = sorted.map((r, i) => `
+    <div class="ex-res-item ${r.important ? 'important' : ''}" data-i="${i}">
+      <span class="ex-res-name">${escapeHtml(r.name)}</span>
+      <span class="ex-res-meta">${r.important ? '★ ' : ''}${escapeHtml(r.label || r.site)} · ${escapeHtml(r.resourceType)}</span>
+    </div>`).join('');
+  box.querySelectorAll('.ex-res-item').forEach((el) => {
+    const r = sorted[parseInt(el.dataset.i, 10)];
+    el.onclick = () => extractionDownloadResource(r.url, r.name);
+  });
+}
+async function extractionDownloadResource(url, name) {
+  showToast('已加入下载：' + (name || url), 'info');
+  try { await window.api.extractionDownload({ url, name, saveDir: defaultDir }); } catch (e) { showToast('启动下载失败: ' + e.message, 'error'); }
+}
+
+// ---- 代码框 ----
+async function extractionRunCode() {
+  const ta = document.getElementById('extractionCodeInput');
+  const code = (ta.value || '').trim();
+  if (!code) { showToast('请粘贴下载代码（cURL 或 Broad 配置）', 'error'); return; }
+  showToast('正在解析并启动下载…', 'info');
+  try {
+    const res = await window.api.extractionRunCode(code, defaultDir);
+    if (res && res.success) showToast(res.mode === 'broad' ? `Broad 批量下载完成 ${res.count}/${res.total}，见传输列表` : '下载任务已启动，见传输列表', 'success');
+    else showToast((res && res.error) || '执行失败', 'error');
+  } catch (e) { showToast('执行失败: ' + e.message, 'error'); }
+}
+
+// ---- 拦截/嗅探下载事件 → 传输列表 ----
+function handleExtractionEvent(d) {
+  if (!d) return;
+  if (d.type === 'resource') return addExtractionResource(d);
+  if (d.type === 'log') return showToast(d.message, 'info');
+  if (d.type === 'download') return handleExtractionDownload(d);
+}
+function handleExtractionDownload(d) {
+  const id = d.id;
+  if (d.status === 'started') {
+    extractionJobs[id] = { id, name: d.name || '下载', url: d.url || '', size: d.size || 0, percentage: 0, speed: '连接中…', title: d.title || '' };
+    renderExtractionTransferCards();
+    updateTransferCounts();
+    return;
+  }
+  const j = extractionJobs[id];
+  if (d.status === 'progress') {
+    if (!j) return;
+    if (d.percentage != null) j.percentage = d.percentage;
+    if (d.speed) j.speed = d.speed;
+    if (d.name) j.name = d.name;
+    const fill = document.getElementById('ex-fill-' + id); if (fill) fill.style.width = (j.percentage || 0) + '%';
+    const sp = document.getElementById('ex-speed-' + id); if (sp) sp.innerText = j.speed;
+    const st = document.getElementById('ex-status-' + id); if (st && d.speed) st.innerText = '引导式提取 · ' + d.speed;
+    return;
+  }
+  if (d.status === 'completed') {
+    const rec = { name: d.name || (j && j.name) || '下载', url: (j && j.url) || '', size: d.size || (j && j.size) || 0, savePath: d.savePath || '', completedAt: new Date().toLocaleString(), skip: false, folder: '', type: 'extraction', fileObj: {} };
+    completedDownloads.unshift(rec);
+    localStorage.setItem('completed_downloads', JSON.stringify(completedDownloads));
+    delete extractionJobs[id];
+    const card = document.getElementById('ex-card-' + id); if (card) card.remove();
+    renderCompletedList(); renderExtractionTransferCards(); updateTransferCounts();
+    showToast('下载完成: ' + rec.name, 'success');
+    if (d.warn) showToast(d.warn.trim(), 'error');
+    return;
+  }
+  if (d.status === 'failed') {
+    const rec = { name: (j && j.name) || '下载', url: (j && j.url) || '', size: (j && j.size) || 0, failedReason: d.message || '下载失败', failedAt: new Date().toLocaleString(), folder: '', type: 'extraction', fileObj: {} };
+    failedDownloads.unshift(rec);
+    localStorage.setItem('failed_downloads', JSON.stringify(failedDownloads));
+    delete extractionJobs[id];
+    const card = document.getElementById('ex-card-' + id); if (card) card.remove();
+    renderFailedList(); renderExtractionTransferCards(); updateTransferCounts();
+    showToast(d.message || '下载失败', 'error');
+  }
+}
+function renderExtractionTransferCards() {
+  const container = document.getElementById('transferDownloadingList');
+  if (!container) return;
+  container.querySelectorAll('.transfer-item-ex').forEach((c) => c.remove());
+  const emptyState = document.getElementById('emptyDownloadingState');
+  const ids = Object.keys(extractionJobs);
+  if (ids.length && emptyState) emptyState.style.display = 'none';
+  if (!ids.length && emptyState && activeDownloads.length === 0) emptyState.style.display = 'flex';
+  ids.forEach((id) => {
+    const j = extractionJobs[id];
+    const el = document.createElement('div');
+    el.className = 'transfer-item transfer-item-ex';
+    el.id = 'ex-card-' + id;
+    el.innerHTML = `
+      <div class="transfer-item-info">
+        <div class="transfer-item-name-row">
+          <span class="transfer-item-name">${escapeHtml(j.name)}</span>
+          <span class="transfer-item-badge">${j.title ? escapeHtml(j.title) : getFileTypeBadge(j.url)}</span>
+        </div>
+        <div class="transfer-item-meta">
+          <span class="transfer-item-size" id="ex-size-${id}">${j.size ? formatBytes(j.size) : ''}</span>
+          <span class="transfer-item-speed" id="ex-speed-${id}">${escapeHtml(j.speed)}</span>
+          <span class="transfer-item-status" id="ex-status-${id}">引导式提取 · 下载中</span>
+        </div>
+      </div>
+      <div class="transfer-progress-bar"><div class="transfer-progress-fill" id="ex-fill-${id}" style="width: ${j.percentage || 0}%"></div></div>`;
+    container.appendChild(el);
+  });
+}
+
+window.extractionGo = extractionGo;
+window.extractionHome = extractionHome;
+window.extractionBack = extractionBack;
+window.extractionForward = extractionForward;
+window.extractionReload = extractionReload;
+window.extractionClearCookies = extractionClearCookies;
+window.extractionRunCode = extractionRunCode;
+window.extractionDownloadResource = extractionDownloadResource;
