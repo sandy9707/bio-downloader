@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
@@ -120,6 +120,7 @@ function loadConfiguration() {
 loadConfiguration();
 
 let mainWindow;
+let extractionWindow = null; // 引导式提取独立弹出窗口
 let clashProcess = null;
 let currentAxelProcess = null;
 const activeAxelProcesses = new Map();
@@ -397,6 +398,7 @@ app.whenReady().then(() => {
   ensureClashDataFiles();
   createWindow();
   setupExtractionBrowser(); // 2.0.0 引导式提取:初始化内置浏览器分区会话/下载拦截/资源嗅探
+  buildAppMenu();           // 应用菜单:File 含「添加链接 / 打开引导式提取」
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -868,11 +870,13 @@ ipcMain.handle('api-create-order', async (event, { token, packageId, payType, qu
 // --- Clash 控制 ---
 ipcMain.handle('clash-start', async (event, { token }) => {
   await startClash(token);
+  setExtractionProxy();
   return { success: true, nodeCount: currentRealNodeCount };
 });
 
 ipcMain.handle('clash-stop', () => {
   stopClash();
+  setExtractionProxy();
   return true;
 });
 
@@ -2246,7 +2250,48 @@ function classifyResource(url) {
 }
 
 function sendExtraction(payload) {
-  try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('extraction-event', payload); } catch (e) {}
+  const send = (w) => { try { if (w && !w.isDestroyed()) w.webContents.send('extraction-event', payload); } catch (e) {} };
+  send(mainWindow);       // 传输列表(下载事件)
+  send(extractionWindow); // 嗅探侧边栏/拦截提示(资源/日志事件)
+}
+
+// 内置浏览器代理:加速器开启时走 mihomo,否则直连。Chromium 不读 http_proxy 环境变量,必须对分区会话显式 setProxy,否则境外站点(如 NCBI/Broad)全部打不开
+function setExtractionProxy() {
+  try {
+    const rules = (clashProcess !== null) ? 'http=127.0.0.1:43289;https=127.0.0.1:43289' : 'direct://';
+    getBrowserSession().setProxy({ proxyRules: rules }).catch(() => {});
+  } catch (e) {}
+}
+
+// 打开引导式提取独立弹出窗口(不占用主程序页面)
+function openExtractionWindow() {
+  if (extractionWindow && !extractionWindow.isDestroyed()) { extractionWindow.focus(); return; }
+  extractionWindow = new BrowserWindow({
+    width: 1180, height: 800, minWidth: 920, minHeight: 620,
+    title: '引导式提取 · User-Guided Extraction',
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, webviewTag: true },
+    backgroundColor: '#f0f4f8'
+  });
+  extractionWindow.loadFile('extraction.html');
+  extractionWindow.on('closed', () => { extractionWindow = null; });
+}
+
+// 应用菜单:File 提供「添加链接 / 打开引导式提取」;保留标准 Edit(否则输入框 Cmd+C/V 失效)
+function buildAppMenu() {
+  const tpl = [
+    { label: app.name, submenu: [ { role: 'about' }, { type: 'separator' }, { role: 'services' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' } ] },
+    { label: 'File', submenu: [
+      { label: '添加链接…', accelerator: 'CmdOrCtrl+N', click: () => { if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); mainWindow.webContents.send('menu-add-link'); } } },
+      { label: '打开引导式提取', accelerator: 'CmdOrCtrl+E', click: () => openExtractionWindow() },
+      { type: 'separator' },
+      { role: 'close' }
+    ] },
+    { label: 'Edit', submenu: [ { role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' } ] },
+    { label: 'View', submenu: [ { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' } ] },
+    { label: 'Window', submenu: [ { role: 'minimize' }, { role: 'zoom' }, { type: 'separator' }, { role: 'front' } ] },
+    { label: 'Help', submenu: [ { label: '官方网站', click: () => shell.openExternal('https://biodown.ye.aimeals.cn/') } ] }
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(tpl));
 }
 
 // 取内置浏览器分区会话里某 URL 的 Cookie 串
@@ -2405,6 +2450,9 @@ function setupExtractionBrowser() {
 
   bs.setPermissionRequestHandler((wc, permission, callback) => callback(true));
 
+  // 初始化内置浏览器代理(随加速器状态在 clash-start/stop 中刷新)
+  setExtractionProxy();
+
   // 下载拦截:取消 Electron 原生保存,改用本程序下载引擎(多线程/断点/进传输列表)
   bs.on('will-download', (event, item) => {
     const url = item.getURL();
@@ -2438,6 +2486,8 @@ function setupExtractionBrowser() {
 }
 
 // ---- 引导式提取 IPC ----
+ipcMain.handle('open-extraction', () => { openExtractionWindow(); return true; });
+ipcMain.handle('extraction-sync-proxy', () => { setExtractionProxy(); return true; });
 ipcMain.handle('extraction-download', async (event, { url, name, headers, cookie, saveDir, size }) => {
   return await runExtractionDownload({ url, name, headers: headers || {}, cookie, saveDir, size }, '嗅探下载');
 });

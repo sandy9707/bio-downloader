@@ -402,6 +402,19 @@
       box-shadow: 0 2px 8px rgba(99, 102, 241, 0.2);
     }
 
+    /* 下载中心顶行:数据源框 与 引导式提取框 同级并列(各自独立成框) */
+    .hub-top-row { display: flex; gap: 0.75rem; align-items: stretch; }
+    .hub-top-row .btn-group { flex: 1 1 auto; align-self: stretch; margin-bottom: 0; align-items: center; }
+    .extraction-entry {
+      flex: 0 0 auto; display: flex; align-items: center; gap: 0.5rem; white-space: nowrap;
+      background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px;
+      padding: 0 1.2rem; cursor: pointer; color: var(--primary-color); font-weight: 700; font-size: 0.88rem;
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      transition: border-color .2s, background .2s, transform .12s, box-shadow .12s;
+    }
+    .extraction-entry:hover { border-color: var(--primary-color); background: var(--btn-secondary-bg-hover); transform: translateY(-1px); box-shadow: 0 6px 18px rgba(79,70,229,0.18); }
+    .extraction-entry .ex-ico { font-size: 1.05rem; }
+
     .form-group {
       display: flex;
       flex-direction: column;
@@ -1001,7 +1014,6 @@
     </div>
     <div class="nav-menu">
       <div class="nav-item active" onclick="switchTab('download-hub')">下载中心</div>
-      <div class="nav-item" onclick="switchTab('extraction-tab')" id="navExtraction">引导式提取</div>
       <div class="nav-item" onclick="switchTab('transfers-tab')" id="navTransfers">传输列表<span class="badge" id="activeDownloadsBadge" style="display: none;">0</span></div>
       <div class="nav-item" onclick="switchTab('store-tab')">流量商店</div>
       <div class="nav-item" onclick="switchTab('profile-tab')">我的</div>
@@ -1063,6 +1075,7 @@
 
     <!-- VIEW: 下载中心 -->
     <div class="tab-view active" id="download-hub">
+      <div class="hub-top-row">
       <div class="btn-group" style="position: relative;">
         <button class="pill-btn active" onclick="switchDownloadType(this, 'sra_raw')">SRA Raw</button>
         <button class="pill-btn" onclick="switchDownloadType(this, 'ebi_raw')">EBI Raw</button>
@@ -1092,15 +1105,7 @@
           </div>
         </div>
       </div>
-
-      <!-- 2.0.0 引导式提取:独立模块(突出重要度,点击进入内置浏览器) -->
-      <div class="extraction-module-card" onclick="switchTab('extraction-tab')">
-        <div class="emc-icon">🧭</div>
-        <div class="emc-body">
-          <div class="emc-title">引导式提取 <span class="emc-en">User-Guided Extraction</span><span class="emc-badge">NEW</span></div>
-          <div class="emc-desc">打开内置浏览器，正常浏览/登录网站，自动拦截网页下载并嗅探数据资源，把真实文件送进本下载器（多线程 + 断点续传 + 完整性校验）。已适配 NCBI、Broad Single Cell，其它网站通用处理。</div>
-        </div>
-        <div class="emc-action">打开内置浏览器 →</div>
+      <div class="extraction-entry" onclick="openExtraction()" title="打开内置浏览器：拦截下载 / 嗅探资源 / 代码框"><span class="ex-ico">🧭</span><span>引导式提取</span></div>
       </div>
 
       <div class="card">
@@ -1473,50 +1478,6 @@
           </div>
           <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">这将清除本地缓存的登录 Token 和所有偏好设置，应用会在操作后退出。</div>
         </div>
-      </div>
-    </div>
-
-    <!-- 引导式提取 (2.0.0 内置浏览器 + 下载拦截 + 资源嗅探) -->
-    <div class="tab-view" id="extraction-tab">
-      <div class="extraction-toolbar">
-        <button class="ex-btn" onclick="extractionBack()" title="后退">←</button>
-        <button class="ex-btn" onclick="extractionForward()" title="前进">→</button>
-        <button class="ex-btn" onclick="extractionReload()" title="刷新">⟳</button>
-        <button class="ex-btn" onclick="extractionHome()" title="返回起始页">🏠</button>
-        <input type="text" id="extractionUrlInput" class="extraction-url" placeholder="输入网址，例如 https://www.ncbi.nlm.nih.gov" onkeydown="if(event.key==='Enter')extractionGo()">
-        <button class="btn btn-primary ex-go" onclick="extractionGo()">前往</button>
-        <button class="ex-btn" onclick="extractionClearCookies()" title="清除内置浏览器会话(用于刷新 Token)">🧹</button>
-      </div>
-
-      <div class="extraction-body">
-        <div class="extraction-main">
-          <!-- 起始页:教程 + 支持的网站(点开看使用示例) -->
-          <div class="extraction-startpage" id="extractionStartpage">
-            <h2>🧭 引导式提取</h2>
-            <p class="ex-sub">在下面的网站里像平常一样操作（登录、点 Send to / Download）。本工具会自动<b>拦截下载</b>、<b>嗅探数据资源</b>，并把真实文件送进「传输列表」。<br>也可以直接在右侧<b>代码框</b>粘贴网站给出的下载代码（cURL / Broad curl 配置）执行。</p>
-            <div class="ex-sites" id="extractionSites"></div>
-            <div class="ex-tips">
-              <div class="ex-tip">🌐 <b>通用</b>：任意网站触发的真实下载会被自动拦截并转入下载器，右侧同时列出嗅探到的媒体/数据文件。</div>
-              <div class="ex-tip">🧬 <b>NCBI</b>：点 Send to 后自动转 efetch 分页下载并校验完整性；会话(Token)过期会提示你刷新，支持断点续传。</div>
-              <div class="ex-tip">🔬 <b>Broad Single Cell</b>：把网页 Download 给出的 <code>curl …generate_curl_config…</code> 代码粘到右侧代码框执行，逐文件下载、断点续传。</div>
-              <div class="ex-tip">⚠️ 许多生物数据网站对 Cookie 有<b>使用次数限制</b>，请勿短时间内高频重复请求，以免会话被封。</div>
-            </div>
-          </div>
-          <!-- 内置浏览器(独立分区会话) -->
-          <webview id="extractionWebview" class="extraction-webview" partition="persist:biodl-browser" allowpopups style="display:none;"></webview>
-        </div>
-
-        <aside class="extraction-sidebar">
-          <div class="ex-side-head">🔎 资源嗅探</div>
-          <div class="ex-resources" id="extractionResources">
-            <div class="ex-empty">浏览网页后，这里会列出可下载资源。<br>重要资源会<b style="color:#ef4444">加粗红字</b>置顶，点击即可下载。</div>
-          </div>
-          <div class="ex-codebox">
-            <div class="ex-side-head">⌨️ 代码框 <span class="ex-code-hint">粘贴 cURL / Broad 下载代码</span></div>
-            <textarea id="extractionCodeInput" rows="3" placeholder='curl "https://singlecell.broadinstitute.org/.../generate_curl_config?accessions=SCP259&auth_code=..." -o cfg.txt; curl -K cfg.txt'></textarea>
-            <button class="btn btn-primary ex-run" onclick="extractionRunCode()">执行下载</button>
-          </div>
-        </aside>
       </div>
     </div>
 

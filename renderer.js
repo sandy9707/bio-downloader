@@ -501,6 +501,67 @@ async function startUpgrade2x() {
 }
 window.startUpgrade2x = startUpgrade2x;
 
+// 首页小入口 / File 菜单:打开引导式提取独立弹窗
+function openExtraction() { window.api.openExtraction(); }
+window.openExtraction = openExtraction;
+
+// File →「添加链接」:切到下载中心直链页并聚焦输入框
+function focusAddLink() {
+  switchTab('download-hub');
+  const pill = document.querySelector('.pill-btn[onclick*="links"]');
+  if (pill) { try { switchDownloadType(pill, 'links'); } catch (e) {} }
+  setTimeout(() => {
+    const ta = document.getElementById('accInput-links') || document.getElementById('linkInput');
+    if (ta) { try { ta.focus(); } catch (e) {} }
+    showToast('请粘贴下载链接（每行一个），点击“检验下载大小”后开始加速下载', 'info');
+  }, 80);
+}
+window.api.onMenuAddLink(focusAddLink);
+
+// 传输列表右键菜单:任意状态(下载中/已完成/失败)均可复制下载链接,便于回溯
+function copyText(text) {
+  try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text); return true; } } catch (e) {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
+}
+let _ctxMenu = null;
+function hideContextMenu() { if (_ctxMenu) _ctxMenu.style.display = 'none'; }
+function showContextMenu(x, y, url) {
+  if (!_ctxMenu) {
+    _ctxMenu = document.createElement('div');
+    _ctxMenu.style.cssText = 'position:fixed;z-index:9999;min-width:152px;background:var(--modal-bg);border:1px solid var(--border-color);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,0.28);padding:5px 0;font-size:0.85rem;';
+    document.body.appendChild(_ctxMenu);
+    document.addEventListener('click', hideContextMenu);
+    document.addEventListener('scroll', hideContextMenu, true);
+    window.addEventListener('blur', hideContextMenu);
+  }
+  _ctxMenu.innerHTML = '';
+  const it = document.createElement('div');
+  it.textContent = '📋 复制下载链接';
+  it.style.cssText = 'padding:8px 14px;cursor:pointer;color:var(--text-main);display:flex;align-items:center;gap:8px;transition:background .12s;';
+  it.onmouseenter = () => { it.style.background = 'var(--queue-item-bg)'; };
+  it.onmouseleave = () => { it.style.background = 'transparent'; };
+  it.onclick = () => { const ok = copyText(url); showToast(ok ? '已复制下载链接' : '复制失败', ok ? 'success' : 'error'); hideContextMenu(); };
+  _ctxMenu.appendChild(it);
+  _ctxMenu.style.display = 'block';
+  _ctxMenu.style.left = Math.min(x, window.innerWidth - 168) + 'px';
+  _ctxMenu.style.top = Math.min(y, window.innerHeight - 44) + 'px';
+}
+document.addEventListener('contextmenu', (e) => {
+  const card = e.target.closest('.transfer-item[data-url]');
+  if (!card) return;
+  const url = card.getAttribute('data-url');
+  if (!url) return;
+  e.preventDefault();
+  showContextMenu(e.clientX, e.clientY, url);
+});
+
 function closeUpdateCard() {
   document.getElementById('updateCard').style.display = 'none';
 }
@@ -1736,6 +1797,7 @@ function renderDownloadingList() {
     const itemEl = document.createElement('div');
     itemEl.className = 'transfer-item';
     itemEl.id = `transfer-card-${fileId}`;
+    itemEl.dataset.url = file.url || '';
 
     const totalSizeStr = formatBytes(file.size || 0);
     const speedText = file.speed || '排队中...';
@@ -1782,6 +1844,7 @@ function renderCompletedList() {
   completedDownloads.forEach((item, index) => {
     const itemEl = document.createElement('div');
     itemEl.className = 'transfer-item completed';
+    itemEl.dataset.url = item.url || '';
     itemEl.innerHTML = `
       <div class="transfer-item-info">
         <div class="transfer-item-name-row">
@@ -1820,6 +1883,7 @@ function renderFailedList() {
   failedDownloads.forEach((item, index) => {
     const itemEl = document.createElement('div');
     itemEl.className = 'transfer-item failed';
+    itemEl.dataset.url = item.url || '';
     itemEl.innerHTML = `
       <div class="transfer-item-info">
         <div class="transfer-item-name-row">
@@ -2563,10 +2627,9 @@ async function extractionRunCode() {
 
 // ---- 拦截/嗅探下载事件 → 传输列表 ----
 function handleExtractionEvent(d) {
-  if (!d) return;
-  if (d.type === 'resource') return addExtractionResource(d);
-  if (d.type === 'log') return showToast(d.message, 'info');
-  if (d.type === 'download') return handleExtractionDownload(d);
+  // 主窗口只负责把拦截/代码框/嗅探点击的下载送进「传输列表」;资源嗅探与日志由独立弹窗处理
+  if (!d || d.type !== 'download') return;
+  return handleExtractionDownload(d);
 }
 function handleExtractionDownload(d) {
   const id = d.id;

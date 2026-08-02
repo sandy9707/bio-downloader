@@ -40,6 +40,8 @@ contextBridge.exposeInMainWorld('api', {
   downloadCurl: (payload) => ipcRenderer.invoke('download-curl', payload),
 
   // 2.0.0 引导式提取(内置浏览器:下载拦截/资源嗅探/代码框)
+  openExtraction: () => ipcRenderer.invoke('open-extraction'),
+  syncExtractionProxy: () => ipcRenderer.invoke('extraction-sync-proxy'),
   extractionDownload: (payload) => ipcRenderer.invoke('extraction-download', payload),
   extractionRunCode: (code, saveDir) => ipcRenderer.invoke('extraction-run-code', { code, saveDir }),
   extractionCookiesFor: (url) => ipcRenderer.invoke('extraction-cookies-for', { url }),
@@ -82,5 +84,9 @@ contextBridge.exposeInMainWorld('api', {
   onExtractionEvent: (callback) => {
     ipcRenderer.removeAllListeners('extraction-event');
     ipcRenderer.on('extraction-event', (event, data) => callback(data));
+  },
+  onMenuAddLink: (callback) => {
+    ipcRenderer.removeAllListeners('menu-add-link');
+    ipcRenderer.on('menu-add-link', () => callback());
   }
 });
