@@ -4,6 +4,7 @@
 let currentTab = 'download-hub';
 let currentDownloadType = 'sra_raw';
 let currentUser = null;
+let clashToggleBusy = false; // 手动切换加速器期间,阻止 3s 轮询覆盖开关状态
 let currentQueue = [];
 let defaultDir = '';
 let currentOrderId = null;
@@ -205,21 +206,23 @@ async function updateClashUIState() {
   if (!currentUser) return;
 
   try {
+    // 用户正在手动切换时，轮询不要覆盖开关状态（否则刚点开会被 3s 轮询打回，表现为“无法开启开关”）
+    if (clashToggleBusy) return;
     const isRunning = await window.api.getClashStatus();
     const dot = document.getElementById('clashDot');
     const text = document.getElementById('clashStatusText');
     const toggle = document.getElementById('clashToggle');
-    
+
     if (isRunning) {
       dot.className = 'dot active';
       text.innerText = '加速器已开启';
       toggle.checked = true;
-      document.getElementById('clashConfigInfo').innerText = '高速加速通道已建立。';
+      const info = document.getElementById('clashConfigInfo'); if (info) info.innerText = '高速加速通道已建立。';
     } else {
       dot.className = 'dot';
       text.innerText = '加速器已关闭';
       toggle.checked = false;
-      document.getElementById('clashConfigInfo').innerText = '尚未启动下载加速器。启动下载时会自动开启。';
+      const info = document.getElementById('clashConfigInfo'); if (info) info.innerText = '尚未启动下载加速器。启动下载时会自动开启。';
     }
     try {
       const nodeCount = await window.api.getNodeCount();
@@ -234,39 +237,44 @@ async function toggleClash() {
   const toggle = document.getElementById('clashToggle');
   const dot = document.getElementById('clashDot');
   const text = document.getElementById('clashStatusText');
-
-  if (toggle.checked) {
-    if (!currentUser) {
-      // 未登录时允许开启，但显示黄色警示/待激活状态
-      showToast('请先登录账户，获取您的专属加速服务', 'error');
-      dot.className = 'dot warning';
-      text.innerText = '未激活加速服务';
-      document.getElementById('clashConfigInfo').innerText = '未登录账户，加速通道未激活。';
-      return;
-    }
-    try {
+  if (clashToggleBusy) return;
+  clashToggleBusy = true;
+  try {
+    if (toggle.checked) {
+      if (!currentUser) {
+        showToast('请先登录账户，获取您的专属加速服务', 'error');
+        dot.className = 'dot warning';
+        text.innerText = '未激活加速服务';
+        const info = document.getElementById('clashConfigInfo'); if (info) info.innerText = '未登录账户，加速通道未激活。';
+        toggle.checked = false;
+        return;
+      }
       showToast('正在初始化下载加速器...');
-      await window.api.startClash(currentUser.token);
-      showToast('下载加速器启动成功', 'success');
-      updateClashUIState();
-    } catch (err) {
-      showToast(err.message, 'error');
-      toggle.checked = false;
-      dot.className = 'dot';
-      text.innerText = '加速器已关闭';
-    }
-  } else {
-    if (currentUser) {
-      await window.api.stopClash();
-    }
-    showToast('下载加速器已关闭');
-    dot.className = 'dot';
-    text.innerText = '加速器已关闭';
-    if (currentUser) {
-      document.getElementById('clashConfigInfo').innerText = '尚未启动下载加速器。启动下载时会自动开启。';
+      try {
+        await window.api.startClash(currentUser.token);
+        showToast('下载加速器启动成功', 'success');
+      } catch (err) {
+        const msg = (err && err.message) || '未知错误';
+        showToast('加速器启动失败: ' + msg, 'error');
+        const info = document.getElementById('clashConfigInfo'); if (info) info.innerText = '启动失败: ' + msg;
+        toggle.checked = false;
+        dot.className = 'dot';
+        text.innerText = '加速器已关闭';
+        return;
+      }
     } else {
-      document.getElementById('clashConfigInfo').innerText = '未登录账户，加速通道未激活。';
+      if (currentUser) { try { await window.api.stopClash(); } catch (e) {} }
+      showToast('下载加速器已关闭');
     }
+  } finally {
+    clashToggleBusy = false;
+    // 以真实运行状态为准回写开关，避免开关与后台不一致
+    try {
+      const isRunning = await window.api.getClashStatus();
+      toggle.checked = isRunning;
+      dot.className = isRunning ? 'dot active' : 'dot';
+      text.innerText = isRunning ? '加速器已开启' : '加速器已关闭';
+    } catch (e) {}
   }
 }
 
