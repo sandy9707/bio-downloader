@@ -255,6 +255,7 @@ async function toggleClash() {
         showToast('下载加速器启动成功', 'success');
       } catch (err) {
         const msg = (err && err.message) || '未知错误';
+        console.error('[toggleClash] startClash failed:', err);
         showToast('加速器启动失败: ' + msg, 'error');
         const info = document.getElementById('clashConfigInfo'); if (info) info.innerText = '启动失败: ' + msg;
         toggle.checked = false;

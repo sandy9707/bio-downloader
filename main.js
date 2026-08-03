@@ -455,25 +455,56 @@ function checkPortBusy(port) {
   });
 }
 
+// 【2.0.3 诊断】加速器日志:写入 LOG_DIR(即 设置→诊断日志 可查看/上传),便于回溯
+const CLASH_LOG_FILE = path.join(LOG_DIR, 'clash.log');
+function writeClashLog(msg) {
+  try {
+    const line = `[${new Date().toISOString()}] ${msg}\n`;
+    fs.appendFileSync(CLASH_LOG_FILE, line, 'utf8');
+    console.log(msg);
+  } catch (e) {}
+}
 async function startClash(token) {
+  writeClashLog(`[startClash] begin token=${token ? token.slice(0, 8) + '…' : '(空)'}`);
   if (clashProcess) {
-    console.log('Clash is already running.');
+    writeClashLog('[startClash] already running, return true');
     return true;
   }
 
   // 1. 强制清理残留后台 Clash 进程，释放加速端口
   await killExistingClashProcesses();
+  writeClashLog('[startClash] killed existing clash processes');
 
   // 2. 检测 43289 端口是否被占用
   const isPortBusy = await checkPortBusy(43289);
+  writeClashLog(`[startClash] port 43289 busy=${isPortBusy}`);
   if (isPortBusy) {
-    throw new Error('下载加速器启动失败：加速端口冲突，请关闭其他代理/加速器软件或重启电脑后重试。');
+    const e = new Error('下载加速器启动失败：加速端口冲突，请关闭其他代理/加速器软件或重启电脑后重试。');
+    writeClashLog('[startClash] FAIL port busy');
+    throw e;
   }
 
   try {
-    console.log('Fetching clash configuration for token:', token);
+    writeClashLog('[startClash] fetching /speedup subscription...');
     const subUrl = `${BACKEND_BASE_URL}/speedup?token=${token}`;
-    const response = await axios.get(subUrl, { timeout: 10000 });
+    let response;
+    try {
+      response = await axios.get(subUrl, { timeout: 10000, validateStatus: () => true });
+    } catch (netErr) {
+      writeClashLog('[startClash] /speedup network error: ' + netErr.message);
+      throw new Error('下载加速器启动失败：无法连接订阅服务器（' + netErr.message + '），请检查网络。');
+    }
+    if (response.status >= 400) {
+      const body = typeof response.data === 'string' ? response.data.slice(0, 200) : '';
+      writeClashLog(`[startClash] /speedup HTTP ${response.status}: ${body}`);
+      // 把服务端明文(订阅过期/流量用尽/Token不存在)透传给界面,不再只显示 "Request failed"
+      const friendly = body.includes('Token 不存在') ? 'Token 不存在，请退出重新登录。'
+        : body.includes('流量已用完') ? '高速流量已用完，请到流量商店购买。'
+        : body.includes('已过期') ? '加速服务已过期，请到流量商店续费。'
+        : ('订阅服务器返回 ' + response.status);
+      throw new Error('下载加速器启动失败：' + friendly);
+    }
+    writeClashLog('[startClash] /speedup OK (' + String(response.data).length + ' bytes yaml)');
     
     // 动态修改 yaml 配置中的监听端口为 43289 (仅限根节点配置，避免破坏代理节点端口)
     let yamlContent = response.data;
@@ -518,12 +549,14 @@ async function startClash(token) {
     ensureExecutable(binaryPath);
 
     console.log(`Spawning Clash from ${binaryPath} with config at ${CLASH_WORK_DIR}`);
-    
+    writeClashLog('[startClash] spawning mihomo: ' + binaryPath);
+
     let spawnError = null;
     clashProcess = spawn(binaryPath, ['-d', CLASH_WORK_DIR]);
 
     clashProcess.on('error', (err) => {
       console.error('Clash spawn error:', err);
+      writeClashLog('[startClash] spawn error: ' + err.message);
       spawnError = err;
     });
 
@@ -537,6 +570,7 @@ async function startClash(token) {
 
     clashProcess.on('close', (code) => {
       console.log(`Clash process exited with code ${code}`);
+      writeClashLog(`[Clash] process exited code=${code}`);
       clashProcess = null;
     });
 
@@ -558,6 +592,7 @@ async function startClash(token) {
     return true;
   } catch (err) {
     console.error('Failed to start Clash:', err.message);
+    writeClashLog('[startClash] FAIL: ' + err.message);
     throw new Error('下载加速器启动失败: ' + err.message);
   }
 }
@@ -565,8 +600,10 @@ async function startClash(token) {
 function stopClash() {
   if (clashProcess) {
     console.log('Terminating Clash process...');
+    writeClashLog('[stopClash] terminating mihomo');
     killProcess(clashProcess);
     clashProcess = null;
+    writeClashLog('[stopClash] done');
   }
 }
 
