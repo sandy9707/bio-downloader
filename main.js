@@ -2422,7 +2422,11 @@ async function streamDownloadToDisk({ id, url, name, headers, cookie, saveDir, s
   if (start > 0) reqHeaders['Range'] = 'bytes=' + start + '-';
 
   sendExtraction({ type: 'download', id, status: 'progress', percentage: 0, speed: '连接中…' });
-  const response = await axios({ url, method: 'GET', headers: reqHeaders, responseType: 'stream', maxRedirects: 8, timeout: 30 * 60 * 1000, validateStatus: () => true });
+  // 与主下载器一致:加速器开启且目标为境外站时走 mihomo 代理(否则直连,境外数据会被限速到几十 KB/s)
+  const proxy = shouldUseProxy(url) && clashProcess
+    ? { protocol: 'http', host: '127.0.0.1', port: 43289 }
+    : false;
+  const response = await axios({ url, method: 'GET', headers: reqHeaders, responseType: 'stream', maxRedirects: 8, timeout: 30 * 60 * 1000, validateStatus: () => true, proxy });
   if (response.status >= 400) throw new Error(`服务器返回 HTTP ${response.status}(链接无效或会话已失效)`);
 
   const resumed = (start > 0 && response.status === 206); // 服务器支持断点
