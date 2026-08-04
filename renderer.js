@@ -2671,6 +2671,15 @@ function handleExtractionDownload(d) {
     return;
   }
   if (d.status === 'failed') {
+    // 暂停(中断流保留断点)也走 failed 通道,但特殊标记为"已暂停"而不是失败
+    if (d.message === 'PAUSED' && j) {
+      j.paused = true;
+      j.speed = '已暂停';
+      const st = document.getElementById('ex-status-' + id); if (st) st.innerText = '引导式提取 · 已暂停';
+      const sp = document.getElementById('ex-speed-' + id); if (sp) sp.innerText = '已暂停（可点击右键菜单中的重试续传）';
+      const fill = document.getElementById('ex-fill-' + id); if (fill) fill.style.width = (j.percentage || 0) + '%';
+      return;
+    }
     const rec = { name: (j && j.name) || '下载', url: (j && j.url) || '', size: (j && j.size) || 0, failedReason: d.message || '下载失败', failedAt: new Date().toLocaleString(), folder: '', type: 'extraction', fileObj: {} };
     failedDownloads.unshift(rec);
     localStorage.setItem('failed_downloads', JSON.stringify(failedDownloads));
@@ -2705,9 +2714,16 @@ function renderExtractionTransferCards() {
           <span class="transfer-item-status" id="ex-status-${id}">引导式提取 · 下载中</span>
         </div>
       </div>
-      <div class="transfer-progress-bar"><div class="transfer-progress-fill" id="ex-fill-${id}" style="width: ${j.percentage || 0}%"></div></div>`;
+      <div class="transfer-progress-bar"><div class="transfer-progress-fill" id="ex-fill-${id}" style="width: ${j.percentage || 0}%"></div></div>
+      <div class="transfer-item-actions">
+        <button class="action-btn" onclick="pauseExtractionDownload('${id}')">${j.paused ? '已暂停' : '暂停'}</button>
+      </div>`;
     container.appendChild(el);
   });
+}
+function pauseExtractionDownload(id) {
+  window.api.extractionPause(id);
+  showToast('已暂停，部分文件保留，稍后可重新下载续传', 'info');
 }
 
 window.extractionGo = extractionGo;
@@ -2716,5 +2732,6 @@ window.extractionBack = extractionBack;
 window.extractionForward = extractionForward;
 window.extractionReload = extractionReload;
 window.extractionClearCookies = extractionClearCookies;
+window.pauseExtractionDownload = pauseExtractionDownload;
 window.extractionRunCode = extractionRunCode;
 window.extractionDownloadResource = extractionDownloadResource;

@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('api', {
   extractionBrowserNav: (url) => ipcRenderer.invoke('extraction-browser-nav', { url }),
   extractionBrowserResize: (bounds) => ipcRenderer.invoke('extraction-browser-resize', bounds),
   extractionBrowserControl: (action) => ipcRenderer.invoke('extraction-browser-control', { action }),
+  extractionPause: (id) => ipcRenderer.invoke('extraction-pause', { id }),
   extractionDownload: (payload) => ipcRenderer.invoke('extraction-download', payload),
   extractionRunCode: (code, saveDir) => ipcRenderer.invoke('extraction-run-code', { code, saveDir }),
   extractionCookiesFor: (url) => ipcRenderer.invoke('extraction-cookies-for', { url }),

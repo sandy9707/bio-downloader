@@ -2267,6 +2267,7 @@ ipcMain.handle('download-curl', async (event, { parsed, saveDir }) => {
 const BROWSER_PARTITION = 'persist:biodl-browser';
 let browserSessionReady = false;
 let extractionJobSeq = 1;
+const extractionAborters = new Map(); // id -> AbortController(支持暂停引导式提取下载)
 
 function getBrowserSession() {
   return session.fromPartition(BROWSER_PARTITION);
@@ -2426,8 +2427,23 @@ async function streamDownloadToDisk({ id, url, name, headers, cookie, saveDir, s
   const proxy = shouldUseProxy(url) && clashProcess
     ? { protocol: 'http', host: '127.0.0.1', port: 43289 }
     : false;
-  const response = await axios({ url, method: 'GET', headers: reqHeaders, responseType: 'stream', maxRedirects: 8, timeout: 30 * 60 * 1000, validateStatus: () => true, proxy });
-  if (response.status >= 400) throw new Error(`服务器返回 HTTP ${response.status}(链接无效或会话已失效)`);
+  // 暂停支持:注册中止控制器,暂停时中断流但保留已下载部分(下次经 Range 断点续传)
+  const ac = new AbortController();
+  extractionAborters.set(id, ac);
+  let response;
+  try {
+    response = await axios({ url, method: 'GET', headers: reqHeaders, responseType: 'stream', maxRedirects: 8, timeout: 30 * 60 * 1000, validateStatus: () => true, proxy, signal: ac.signal });
+  } catch (err) {
+    extractionAborters.delete(id);
+    if (err && err.name === 'CanceledError') {
+      // 用户暂停:保留已下载部分,抛出明确标记(渲染层把状态置为"已暂停")
+      const e = new Error('PAUSED');
+      e.isPaused = true;
+      throw e;
+    }
+    throw err;
+  }
+  if (response.status >= 400) { extractionAborters.delete(id); throw new Error(`服务器返回 HTTP ${response.status}(链接无效或会话已失效)`); }
 
   const resumed = (start > 0 && response.status === 206); // 服务器支持断点
   if (!resumed) start = 0;                                // 否则从头覆盖
@@ -2449,6 +2465,7 @@ async function streamDownloadToDisk({ id, url, name, headers, cookie, saveDir, s
     const finish = (err) => {
       if (done) return; done = true;
       if (timer) clearInterval(timer);
+      extractionAborters.delete(id); // 结束即注销,避免内存泄漏
       try { writer.destroy(); } catch (e) {}
       if (err) {
         sendExtraction({ type: 'download', id, status: 'failed', message: err.message });
@@ -2576,16 +2593,26 @@ function setupExtractionBrowser() {
     try {
       const rt = details.resourceType;
       const url = details.url;
-      if (rt !== 'mainFrame' && rt !== 'subFrame') {
-        const cls = classifyResource(url);
-        const isMedia = (rt === 'image' || rt === 'media');
-        const looksFile = /\.(gz|zip|tar|fastq|fq|fasta|fa|gb|gff|csv|tsv|txt|h5|h5ad|loom|bam|cram|sra|pdf|mp4|png|jpe?g)(\?|$)/i.test(url);
-        if (isMedia || cls.important || looksFile) {
-          const key = url.slice(0, 300);
-          if (!seen.has(key) && seen.size < 2000) {
-            seen.add(key);
-            sendExtraction({ type: 'resource', url, resourceType: rt, important: cls.important, site: cls.site, label: cls.label, name: fileNameFromUrl(url) });
-          }
+      const cls = classifyResource(url);
+      const isMedia = (rt === 'image' || rt === 'media');
+      // 通用"文件样"URL(带扩展名)
+      const looksFile = /\.(gz|zip|tar|fastq|fq|fasta|fa|gb|gff|csv|tsv|txt|h5|h5ad|loom|bam|cram|sra|pdf|mp4|png|jpe?g)(\?|$)/i.test(url);
+      // 常见网盘/分享站的"直链/签名下载"导航(如 Box zip_download、带 download/authcode/hmac 的链接)
+      const looksDownloadNav = /zip_download|dl\.boxcloud|\/download|authcode|hmac|auth_code|download=1|response-content-disposition|alt=media|download\.box/i.test(url);
+      // 子资源一律按原有规则;mainFrame/subFrame 仅当它是"文件样/下载样"导航才收录(否则是普通网页跳转,不嗅探)
+      const isNav = (rt === 'mainFrame' || rt === 'subFrame');
+      if (!isNav && (isMedia || cls.important || looksFile)) {
+        const key = url.slice(0, 300);
+        if (!seen.has(key) && seen.size < 2000) {
+          seen.add(key);
+          sendExtraction({ type: 'resource', url, resourceType: rt, important: cls.important, site: cls.site, label: cls.label, name: fileNameFromUrl(url) });
+        }
+      } else if (isNav && (looksFile || looksDownloadNav)) {
+        // 文件/直链导航:收进嗅探列表(点击即下),但 webview 仍正常跳转,由用户选择
+        const key = url.slice(0, 300);
+        if (!seen.has(key) && seen.size < 2000) {
+          seen.add(key);
+          sendExtraction({ type: 'resource', url, resourceType: 'download-link', important: true, site: cls.site, label: '直链下载', name: fileNameFromUrl(url) });
         }
       }
     } catch (e) {}
@@ -2596,6 +2623,12 @@ function setupExtractionBrowser() {
 // ---- 引导式提取 IPC ----
 ipcMain.handle('open-extraction', () => { openExtractionWindow(); return true; });
 ipcMain.handle('extraction-sync-proxy', () => { setExtractionProxy(); return true; });
+ipcMain.handle('extraction-pause', (event, { id }) => {
+  const ac = extractionAborters.get(id);
+  if (!ac) return { success: false, error: 'no active download' };
+  ac.abort(); // 中断 axios 流(保留已下载部分,下次 Range 续传)
+  return { success: true };
+});
 ipcMain.handle('extraction-download', async (event, { url, name, headers, cookie, saveDir, size }) => {
   return await runExtractionDownload({ url, name, headers: headers || {}, cookie, saveDir, size }, '嗅探下载');
 });

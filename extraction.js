@@ -14,6 +14,11 @@ const SITES = [
     eg: '1. 打开研究页，例如 SCP259\n2. 点 Download，复制形如：\n   curl "…/generate_curl_config?accessions=SCP259&auth_code=…" -o cfg.txt; curl -K cfg.txt\n3. 粘到代码框 → 执行下载（逐文件断点续传）\n4. auth_code 过期时回网页重新 Download 复制'
   },
   {
+    icon: '📦', name: 'Box', url: 'https://utdallas.app.box.com/s/dgs8a7vo9uu9cx6l81somaxb468hpgnz',
+    desc: 'Box 分享文件夹示例：点下载后会自动嗅探 zip_download 直链，点击即可加速下载。',
+    eg: '1. 打开 Box 分享链接（如 utdallas.app.box.com/s/…）\n2. 页面点「下载全部」生成 zip_download 直链\n3. 右侧嗅探列表会高亮「直链下载」，点击即下（走加速器）\n4. 直链含签名，过期后重新点下载生成新链'
+  },
+  {
     icon: '🌐', name: '通用网站', url: 'https://www.baidu.com',
     desc: '任意网站的真实下载自动拦截；右侧列出嗅探到的媒体/数据资源。',
     eg: '正常浏览并触发下载：\n• 下载被自动拦截 → 主窗口传输列表\n• 右侧「资源嗅探」列出 png/mp4/数据文件\n• 重要资源加粗红字置顶，点击即下\n• 有 Cookie 次数限制的网站勿高频重复请求'
@@ -58,8 +63,8 @@ function showStart() {
   statusBar('');
   $('exStart').style.display = 'flex';
   urlInput.value = '';
-  window.api.extractionBrowserControl('home');
-  syncBrowserBounds();
+  window.api.extractionBrowserControl('home');  // 停在起始页(不跳 about:blank)
+  syncBrowserBounds();                          // 把 BrowserView 缩到 0 隐藏
 }
 function showWebview() {
   $('exStart').style.display = 'none';
@@ -173,7 +178,13 @@ window.addEventListener('DOMContentLoaded', async () => {
   $('exFwd').onclick = () => window.api.extractionBrowserControl('forward');
   $('exReload').onclick = () => window.api.extractionBrowserControl('reload');
   $('exHome').onclick = showStart;
-  $('exClear').onclick = async () => { const r = await window.api.extractionClearSession(); toast(r && r.success ? '已清除会话，请重新登录刷新 Token' : '清除失败'); };
+  $('exClear').onclick = async () => {
+    // 清除会话 + 清空当前嗅探列表(右上角 🧹 应同时生效)
+    resources = [];
+    renderResources();
+    const r = await window.api.extractionClearSession();
+    toast(r && r.success ? '已清除会话与嗅探列表，请重新登录刷新 Token' : '清除失败');
+  };
   $('exRun').onclick = runCode;
 
   // 打开后停在起始页(主页),由用户选择站点/输入网址
