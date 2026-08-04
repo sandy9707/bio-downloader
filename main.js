@@ -2268,6 +2268,7 @@ const BROWSER_PARTITION = 'persist:biodl-browser';
 let browserSessionReady = false;
 let extractionJobSeq = 1;
 const extractionAborters = new Map(); // id -> AbortController(支持暂停引导式提取下载)
+const extractionNativeDownloads = new Map(); // id -> DownloadItem(原生下载引擎接管,支持原生暂停/恢复)
 
 function getBrowserSession() {
   return session.fromPartition(BROWSER_PARTITION);
@@ -2579,12 +2580,42 @@ function setupExtractionBrowser() {
   setExtractionProxy();
 
   // 下载拦截:取消 Electron 原生保存,改用本程序下载引擎(多线程/断点/进传输列表)
+  // 下载拦截(2.0.10):不再取消+重放,而是用 Electron 原生下载引擎接管同一请求。
+  // 关键:网页里的签名直链(如 Box zip_download)是一次性 token,若 cancel 后用 axios 重放会失效 → 必失败。
+  // 原生 item 继续用浏览器那次有效请求,天然带上 cookie/签名;进度/暂停/恢复走原生 API。
   bs.on('will-download', (event, item) => {
     const url = item.getURL();
     const name = item.getFilename() || fileNameFromUrl(url);
     const size = (item.getTotalBytes && item.getTotalBytes()) || 0;
-    event.preventDefault(); // 取消原生下载
-    runExtractionDownload({ url, name, size, headers: {} }, '网页拦截');
+    // 不 preventDefault —— 让原生下载继续,但我们接管保存路径与状态上报
+    const id = 'ex' + (extractionJobSeq++);
+    const saved = getSettings() || {};
+    const saveDir = saved.defaultDir || app.getPath('downloads');
+    const savePath = path.join(saveDir, sanitizePathSegment(name) || ('download_' + Date.now()));
+    try { item.setSavePath(savePath); } catch (e) { writeClashLog('[will-download] setSavePath err: ' + e.message); }
+    sendExtraction({ type: 'download', id, status: 'started', url, name, size, title: '网页拦截' });
+
+    item.on('updated', () => {
+      try {
+        const recv = item.getReceivedBytes();
+        const total = item.getTotalBytes() || size || 0;
+        const pct = total > 0 ? Math.min(99, Math.floor(recv / total * 100)) : null;
+        const speed = (item.getCurrentSpeed && item.getCurrentSpeed()) || 0;
+        const speedStr = speed > 1048576 ? (speed / 1048576).toFixed(2) + ' MB/s' : speed > 1024 ? (speed / 1024).toFixed(1) + ' KB/s' : Math.round(speed) + ' B/s';
+        sendExtraction({ type: 'download', id, status: 'progress', percentage: pct, speed: speedStr + '  ' + fmtBytes(recv) + (total > 0 ? '/' + fmtBytes(total) : '') });
+      } catch (e) {}
+    });
+    item.once('done', (e, state) => {
+      try {
+        if (state === 'completed') {
+          sendExtraction({ type: 'download', id, status: 'completed', name: item.getFilename() || name, savePath, size: item.getReceivedBytes() });
+        } else {
+          sendExtraction({ type: 'download', id, status: 'failed', message: state === 'cancelled' ? '已取消' : (state === 'interrupted' ? '下载中断(可重试续传)' : '下载失败') });
+        }
+      } catch (err) {}
+    });
+    extractionNativeDownloads.set(id, item);
+    item.once('done', () => extractionNativeDownloads.delete(id));
   });
 
   // 资源嗅探:按类型/站点分类后回传侧边栏(重要资源加粗红字置顶)
@@ -2624,9 +2655,19 @@ function setupExtractionBrowser() {
 ipcMain.handle('open-extraction', () => { openExtractionWindow(); return true; });
 ipcMain.handle('extraction-sync-proxy', () => { setExtractionProxy(); return true; });
 ipcMain.handle('extraction-pause', (event, { id }) => {
+  // 原生下载引擎拦截的 → 原生暂停/恢复
+  const item = extractionNativeDownloads.get(id);
+  if (item) {
+    try {
+      if (item.isPaused()) item.resume();
+      else item.pause();
+      return { success: true, paused: item.isPaused() };
+    } catch (e) { return { success: false, error: e.message }; }
+  }
+  // axios 流式下载的 → 中断流(保留断点)
   const ac = extractionAborters.get(id);
   if (!ac) return { success: false, error: 'no active download' };
-  ac.abort(); // 中断 axios 流(保留已下载部分,下次 Range 续传)
+  ac.abort();
   return { success: true };
 });
 ipcMain.handle('extraction-download', async (event, { url, name, headers, cookie, saveDir, size }) => {

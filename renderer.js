@@ -2721,9 +2721,19 @@ function renderExtractionTransferCards() {
     container.appendChild(el);
   });
 }
-function pauseExtractionDownload(id) {
-  window.api.extractionPause(id);
-  showToast('已暂停，部分文件保留，稍后可重新下载续传', 'info');
+async function pauseExtractionDownload(id) {
+  const j = extractionJobs[id];
+  if (j && j.paused) {
+    // 已暂停:再次点击=重试续传(原生下载已暂停则恢复,否则重新发起)
+    delete extractionJobs[id];
+    j.paused = false;
+    renderExtractionTransferCards();
+    if (j.url) { try { window.api.extractionBrowserNav ? window.api.extractionDownload({ url: j.url, name: j.name, saveDir: defaultDir }) : null; } catch (e) {} }
+    showToast('已恢复，继续下载（断点续传）', 'info');
+    return;
+  }
+  const r = await window.api.extractionPause(id);
+  showToast(r && r.success ? '已暂停' : (r && r.error) || '暂停失败', 'info');
 }
 
 window.extractionGo = extractionGo;
