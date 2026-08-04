@@ -2295,9 +2295,12 @@ function sendExtraction(payload) {
 // 内置浏览器代理:加速器开启时走 mihomo,否则直连。Chromium 不读 http_proxy 环境变量,必须对分区会话显式 setProxy,否则境外站点(如 NCBI/Broad)全部打不开
 function setExtractionProxy() {
   try {
-    const rules = (clashProcess !== null) ? 'http=127.0.0.1:43289;https=127.0.0.1:43289' : 'direct://';
-    getBrowserSession().setProxy({ proxyRules: rules }).catch(() => {});
-  } catch (e) {}
+    // 注意:Chromium 的 proxyRules 是 PAC 风格,不能带 scheme://。
+    // 直连必须用 "direct"(不是 "direct://"),否则整个 webview 会话请求会被代理层卡死→任何网站白屏。
+    const rules = (clashProcess !== null) ? 'http=127.0.0.1:43289;https=127.0.0.1:43289' : 'direct';
+    writeClashLog('[extraction] setExtractionProxy rules=' + rules);
+    getBrowserSession().setProxy({ proxyRules: rules }).catch((e) => writeClashLog('[extraction] setProxy error: ' + e.message));
+  } catch (e) { writeClashLog('[extraction] setExtractionProxy throw: ' + e.message); }
 }
 
 // 打开引导式提取独立弹出窗口(不占用主程序页面)
