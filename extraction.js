@@ -59,6 +59,22 @@ function statusBar(msg, isError) {
 function showWebview() { $('exStart').style.display = 'none'; }              // 露出下方已挂载的 webview
 function showStart() { try { wv.stop(); } catch (e) {} $('exStart').style.display = 'flex'; urlInput.value = ''; }  // 覆盖层盖回
 
+// 关键修复:webview 必须先挂载并触发 dom-ready 才能 loadURL。
+// 否则会抛 "The WebView must be attached to the DOM and the dom-ready event emitted before this method can be called." → 任何页面都白屏。
+let wvReadyPromise = null;
+function waitForWebviewReady() {
+  if (wvReadyPromise) return wvReadyPromise;
+  wvReadyPromise = new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    wv.addEventListener('dom-ready', finish);
+    // 已就绪则立即放行;最多等 10s,超时也放行(由 did-fail-load 提示)
+    setTimeout(finish, 10000);
+    try { if (wv.getWebContentsId && wv.getWebContentsId() > 0) finish(); } catch (e) {}
+  });
+  return wvReadyPromise;
+}
+
 async function go(urlOverride) {
   let u = (urlOverride != null ? urlOverride : (urlInput.value || '')).trim();
   if (!u) { toast('请输入网址'); return; }
@@ -68,8 +84,9 @@ async function go(urlOverride) {
   statusBar('正在打开 ' + u);
   // 每次导航前按当前加速器状态刷新代理;等待 webview 就绪再加载,避免静默丢弃
   try { await window.api.syncExtractionProxy(); } catch (e) {}
+  await waitForWebviewReady();
   if (wv.isLoading) { try { wv.stop(); } catch (e) {} }
-  wv.loadURL(u);
+  try { wv.loadURL(u); } catch (e) { statusBar('加载失败: ' + e.message, true); }
 }
 
 function renderSites() {
