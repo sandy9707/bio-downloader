@@ -1,6 +1,6 @@
-// 引导式提取 · 独立弹窗控制器
-// 内置浏览器(<webview>) 的分区会话 persist:biodl-browser 已在主进程接入下载拦截/资源嗅探/代理,
-// 本窗口只负责 UI:导航、起始页、嗅探侧边栏、代码框。拦截到的下载由主窗口「传输列表」呈现。
+// 引导式提取 · 独立弹窗控制器(2.0.7 改用原生 BrowserView 内嵌网页)
+// 网页由主进程的 BrowserView 渲染(分区会话 persist:biodl-browser,下载拦截/嗅探/代理自动生效)。
+// 本窗口只负责 UI:地址栏、起始页、嗅探侧边栏、代码框;通过 IPC 驱动 BrowserView 导航/尺寸/前进后退。
 
 const SITES = [
   {
@@ -35,11 +35,6 @@ function toast(msg) {
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), 3200);
 }
-
-const wv = $('exWebview');
-const urlInput = $('exUrl');
-
-// 在 webview 区域顶部显示一条可消失的加载/错误条(比一闪而过的 toast 更持久、可读)
 let statusTimer = null;
 function statusBar(msg, isError) {
   let bar = document.getElementById('exStatus');
@@ -56,23 +51,31 @@ function statusBar(msg, isError) {
   statusTimer = setTimeout(() => { bar.style.display = 'none'; }, isError ? 8000 : 4000);
 }
 
-function showWebview() { $('exStart').style.display = 'none'; }              // 露出下方已挂载的 webview
-function showStart() { try { wv.stop(); } catch (e) {} $('exStart').style.display = 'flex'; urlInput.value = ''; }  // 覆盖层盖回
+const urlInput = $('exUrl');
+const MAIN_EL = document.querySelector('.ex-main');
 
-// 关键修复:webview 必须先挂载并触发 dom-ready 才能 loadURL。
-// 否则会抛 "The WebView must be attached to the DOM and the dom-ready event emitted before this method can be called." → 任何页面都白屏。
-let wvReadyPromise = null;
-function waitForWebviewReady() {
-  if (wvReadyPromise) return wvReadyPromise;
-  wvReadyPromise = new Promise((resolve) => {
-    let done = false;
-    const finish = () => { if (!done) { done = true; resolve(); } };
-    wv.addEventListener('dom-ready', finish);
-    // 已就绪则立即放行;最多等 10s,超时也放行(由 did-fail-load 提示)
-    setTimeout(finish, 10000);
-    try { if (wv.getWebContentsId && wv.getWebContentsId() > 0) finish(); } catch (e) {}
-  });
-  return wvReadyPromise;
+function showStart() {
+  statusBar('');
+  $('exStart').style.display = 'flex';
+  urlInput.value = '';
+  window.api.extractionBrowserControl('home');
+  syncBrowserBounds();
+}
+function showWebview() {
+  $('exStart').style.display = 'none';
+  syncBrowserBounds();
+}
+
+// 尺寸同步:BrowserView 始终渲染在 HTML 之上,所以起始页可见时必须把 BrowserView 缩到 0×0 隐藏,
+// 导航时按 .ex-main 实际尺寸显示
+function syncBrowserBounds() {
+  const startVisible = $('exStart').style.display !== 'none';
+  const rect = MAIN_EL.getBoundingClientRect();
+  if (startVisible) {
+    window.api.extractionBrowserResize({ width: 0, height: 0, x: 0, y: 0 });
+  } else if (rect.width > 0 && rect.height > 0) {
+    window.api.extractionBrowserResize({ width: Math.round(rect.width), height: Math.round(rect.height), x: Math.round(rect.x), y: Math.round(rect.y) });
+  }
 }
 
 async function go(urlOverride) {
@@ -82,11 +85,9 @@ async function go(urlOverride) {
   urlInput.value = u;
   showWebview();
   statusBar('正在打开 ' + u);
-  // 每次导航前按当前加速器状态刷新代理;等待 webview 就绪再加载,避免静默丢弃
   try { await window.api.syncExtractionProxy(); } catch (e) {}
-  await waitForWebviewReady();
-  if (wv.isLoading) { try { wv.stop(); } catch (e) {} }
-  try { wv.loadURL(u); } catch (e) { statusBar('加载失败: ' + e.message, true); }
+  const r = await window.api.extractionBrowserNav(u);
+  if (r && !r.success) statusBar('加载失败: ' + (r.error || ''), true);
 }
 
 function renderSites() {
@@ -145,6 +146,19 @@ window.addEventListener('DOMContentLoaded', async () => {
   try { const s = await window.api.getSettings(); defaultDir = (s && s.defaultDir) || ''; } catch (e) {}
 
   renderSites();
+  syncBrowserBounds();
+  window.addEventListener('resize', syncBrowserBounds);
+
+  // 主进程推送导航状态(经 onExtractionNav)
+  window.api.onExtractionNav((d) => {
+    if (!d) return;
+    if (d.failed) { statusBar('加载失败: ' + (d.desc || ''), true); return; }
+    if (d.url) {
+      urlInput.value = d.url;
+      showWebview();
+      statusBar(d.url === 'about:blank' ? '' : '已加载 ' + d.url);
+    }
+  });
 
   window.api.onExtractionEvent((d) => {
     if (!d) return;
@@ -153,28 +167,14 @@ window.addEventListener('DOMContentLoaded', async () => {
     else if (d.type === 'download' && d.status === 'started') toast('拦截到下载: ' + (d.name || '') + ' → 主窗口传输列表');
   });
 
-  wv.addEventListener('did-navigate', (e) => { urlInput.value = e.url; showWebview(); statusBar('已加载 ' + e.url); });
-  wv.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) urlInput.value = e.url; });
-  wv.addEventListener('did-finish-load', () => { statusBar('加载完成'); });
-  wv.addEventListener('did-fail-load', (e) => {
-    // -3 = ABORTED(用户主动停止/被新导航打断),不算错误
-    if (e.errorCode && e.errorCode !== -3) {
-      const desc = e.errorDescription || ('错误码 ' + e.errorCode);
-      const hint = (e.errorCode === -105 || e.errorCode === -106 || e.errorCode === -118 || e.errorCode === -102)
-        ? ' 境外站点请确认主窗口「加速器」已开启。'
-        : '';
-      statusBar('加载失败: ' + desc + hint, true);
-    }
-  });
-
   $('exGo').onclick = go;
   urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-  $('exBack').onclick = () => { try { if (wv.canGoBack()) wv.goBack(); } catch (e) {} };
-  $('exFwd').onclick = () => { try { if (wv.canGoForward()) wv.goForward(); } catch (e) {} };
-  $('exReload').onclick = () => { try { wv.reload(); } catch (e) {} };
+  $('exBack').onclick = () => window.api.extractionBrowserControl('back');
+  $('exFwd').onclick = () => window.api.extractionBrowserControl('forward');
+  $('exReload').onclick = () => window.api.extractionBrowserControl('reload');
   $('exHome').onclick = showStart;
   $('exClear').onclick = async () => { const r = await window.api.extractionClearSession(); toast(r && r.success ? '已清除会话，请重新登录刷新 Token' : '清除失败'); };
   $('exRun').onclick = runCode;
 
-  // 打开后停在起始页(主页),由用户选择站点/输入网址,不再自动跳转示例页
+  // 打开后停在起始页(主页),由用户选择站点/输入网址
 });

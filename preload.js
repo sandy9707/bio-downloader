@@ -42,6 +42,9 @@ contextBridge.exposeInMainWorld('api', {
   // 2.0.0 引导式提取(内置浏览器:下载拦截/资源嗅探/代码框)
   openExtraction: () => ipcRenderer.invoke('open-extraction'),
   syncExtractionProxy: () => ipcRenderer.invoke('extraction-sync-proxy'),
+  extractionBrowserNav: (url) => ipcRenderer.invoke('extraction-browser-nav', { url }),
+  extractionBrowserResize: (bounds) => ipcRenderer.invoke('extraction-browser-resize', bounds),
+  extractionBrowserControl: (action) => ipcRenderer.invoke('extraction-browser-control', { action }),
   extractionDownload: (payload) => ipcRenderer.invoke('extraction-download', payload),
   extractionRunCode: (code, saveDir) => ipcRenderer.invoke('extraction-run-code', { code, saveDir }),
   extractionCookiesFor: (url) => ipcRenderer.invoke('extraction-cookies-for', { url }),
@@ -88,5 +91,9 @@ contextBridge.exposeInMainWorld('api', {
   onMenuAddLink: (callback) => {
     ipcRenderer.removeAllListeners('menu-add-link');
     ipcRenderer.on('menu-add-link', () => callback());
+  },
+  onExtractionNav: (callback) => {
+    ipcRenderer.removeAllListeners('extraction-nav');
+    ipcRenderer.on('extraction-nav', (event, data) => callback(data));
   }
 });

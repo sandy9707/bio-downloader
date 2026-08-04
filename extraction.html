@@ -134,7 +134,7 @@
 
   <div class="ex-body">
     <div class="ex-main">
-      <webview id="exWebview" class="ex-webview" partition="persist:biodl-browser"></webview>
+      <!-- 网页区:由主进程 BrowserView 渲染在 .ex-main 区域(BrowserView 覆盖其上) -->
       <div class="ex-start" id="exStart">
         <div class="ex-start-hint">在下方输入网址开始浏览，或点击下方常用站点（点开查看用法示例）。<br>登录 / 点击 Send to / Download 后，真实下载会被自动拦截并送入主窗口「传输列表」。<br><b>提示：访问境外站点（如 NCBI / Broad）请先在主窗口开启加速器。</b></div>
         <div class="ex-sites" id="exSites"></div>

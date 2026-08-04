@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, session, Menu } = require('electron');
+const { app, BrowserWindow, BrowserView, ipcMain, dialog, shell, session, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
@@ -2303,18 +2303,82 @@ function setExtractionProxy() {
   } catch (e) { writeClashLog('[extraction] setExtractionProxy throw: ' + e.message); }
 }
 
-// 打开引导式提取独立弹出窗口(不占用主程序页面)
+// 【2.0.7】引导式提取改用原生 BrowserView 内嵌网页(替代 <webview> 标签)。
+// <webview> 在本窗口始终无法生成 guest 进程(即便无 partition,getWebContentsId 仍抛
+// 'must be attached',导致任何网站白屏)。BrowserView 是 Electron 官方受支持的页面嵌入方式,
+// 且同样使用 persist:biodl-browser 分区会话,下载拦截/资源嗅探/代理等既有 hook 自动生效。
+let extractionBrowserView = null; // 当前弹窗对应的 BrowserView
+
 function openExtractionWindow() {
   if (extractionWindow && !extractionWindow.isDestroyed()) { extractionWindow.focus(); return; }
+
+  // 1. 先创建"壳窗口"(放地址栏/侧边栏/代码框),webPreferences 不再依赖 webviewTag
   extractionWindow = new BrowserWindow({
     width: 1180, height: 800, minWidth: 920, minHeight: 620,
     title: '引导式提取 · User-Guided Extraction',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, webviewTag: true },
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
     backgroundColor: '#f0f4f8'
   });
   extractionWindow.loadFile('extraction.html');
-  extractionWindow.on('closed', () => { extractionWindow = null; });
+  extractionWindow.on('closed', () => {
+    if (extractionBrowserView) { try { extractionBrowserView.destroy(); } catch (e) {} extractionBrowserView = null; }
+    extractionWindow = null;
+  });
+
+  // 2. 创建内嵌浏览器视图,使用既有分区会话(下载拦截/嗅探/代理自动生效)
+  extractionBrowserView = new BrowserView({
+    webPreferences: { partition: 'persist:biodl-browser', contextIsolation: true, nodeIntegration: false, sandbox: false }
+  });
+  extractionWindow.setBrowserView(extractionBrowserView);
+
+  // 3. 首次显示:先放到壳窗口右下区域(避免遮挡),渲染进程就绪后会通过 IPC 告知精确位置
+  const [sw, sh] = extractionWindow.getSize();
+  extractionBrowserView.setBounds({ x: 0, y: 0, width: Math.max(100, sw - 320), height: Math.max(100, sh) });
+
+  const bv = extractionBrowserView.webContents;
+  bv.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  // 4. 同步导航/加载状态回壳窗口(渲染进程经 IPC 查询或事件推送)
+  const emitNav = () => {
+    try { extractionWindow.webContents.send('extraction-nav', { url: bv.getURL(), title: bv.getTitle() }); } catch (e) {}
+  };
+  bv.on('did-navigate', emitNav);
+  bv.on('did-navigate-in-page', emitNav);
+  bv.on('page-title-updated', emitNav);
+  bv.on('did-fail-load', (e, code, desc, url) => {
+    if (code !== -3) {
+      const hint = (code === -105 || code === -106 || code === -118 || code === -102) ? ' 境外站点请确认主窗口「加速器」已开启。' : '';
+      try { extractionWindow.webContents.send('extraction-nav', { url, failed: true, desc: desc + hint, code }); } catch (err) {}
+    }
+  });
+
+  // 5. 默认加载起始页(about:blank),用户点击站点/输入网址后由渲染进程经 IPC 导航
+  bv.loadURL('about:blank');
 }
+
+// 渲染进程 → 主进程:导航请求 / 尺寸更新 / 前进后退刷新
+ipcMain.handle('extraction-browser-nav', (event, { url }) => {
+  const bv = extractionBrowserView;
+  if (!bv) return { success: false, error: 'no browser view' };
+  try { bv.webContents.loadURL(url); return { success: true }; } catch (e) { return { success: false, error: e.message }; }
+});
+ipcMain.handle('extraction-browser-resize', (event, { width, height, x, y }) => {
+  const bv = extractionBrowserView;
+  if (!bv) return false;
+  try { bv.setBounds({ x: Math.max(0, x || 0), y: Math.max(0, y || 0), width: Math.max(80, width || 100), height: Math.max(80, height || 100) }); return true; } catch (e) { return false; }
+});
+ipcMain.handle('extraction-browser-control', (event, { action }) => {
+  const bv = extractionBrowserView;
+  if (!bv) return false;
+  try {
+    if (action === 'back') { if (bv.webContents.canGoBack()) bv.webContents.goBack(); }
+    else if (action === 'forward') { if (bv.webContents.canGoForward()) bv.webContents.goForward(); }
+    else if (action === 'reload') bv.webContents.reload();
+    else if (action === 'stop') bv.webContents.stop();
+    else if (action === 'home') bv.webContents.loadURL('about:blank');
+    return true;
+  } catch (e) { return false; }
+});
 
 // 应用菜单:File 提供「添加链接 / 打开引导式提取」;保留标准 Edit(否则输入框 Cmd+C/V 失效)
 function buildAppMenu() {
