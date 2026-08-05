@@ -28,3 +28,4 @@ build_patch.js
 *.gz
 .claude/
 诊断报告_*.md
+AGENT_HANDOFF.md

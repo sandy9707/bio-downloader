@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('api', {
   checkSize: (type, inputVal) => ipcRenderer.invoke('check-download-size', { type, inputVal }),
   startDownload: (files, targetDir, token, maxConcurrent) => ipcRenderer.invoke('start-download', { files, targetDir, token, maxConcurrent }),
   cancelDownload: (fileIndex) => ipcRenderer.invoke('cancel-download', fileIndex),
+  pauseDownload: (fileIndex) => ipcRenderer.invoke('pause-download', fileIndex),
+  resumeDownload: (fileIndex) => ipcRenderer.invoke('resume-download', fileIndex),
   openDownloadsFolder: (folderPath) => ipcRenderer.invoke('open-downloads-folder', folderPath),
   cancelAllDownloadsSignal: () => ipcRenderer.send('cancel-all-downloads-signal'),
 
@@ -46,6 +48,7 @@ contextBridge.exposeInMainWorld('api', {
   extractionBrowserResize: (bounds) => ipcRenderer.invoke('extraction-browser-resize', bounds),
   extractionBrowserControl: (action) => ipcRenderer.invoke('extraction-browser-control', { action }),
   extractionPause: (id) => ipcRenderer.invoke('extraction-pause', { id }),
+  extractionCancel: (id) => ipcRenderer.invoke('extraction-cancel', { id }),
   extractionDownload: (payload) => ipcRenderer.invoke('extraction-download', payload),
   extractionRunCode: (code, saveDir) => ipcRenderer.invoke('extraction-run-code', { code, saveDir }),
   extractionCookiesFor: (url) => ipcRenderer.invoke('extraction-cookies-for', { url }),

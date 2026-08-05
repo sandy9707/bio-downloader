@@ -886,6 +886,148 @@
       border-color: #10b981;
     }
 
+    /* ===== 传输列表 v2(参考 Downie/Motrix/迅雷 的成熟任务卡片) ===== */
+    .transfer-toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .transfer-search {
+      height: 34px;
+      min-width: 160px;
+      max-width: 220px;
+      padding: 0 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-input, var(--surface-subtle));
+      color: var(--text-main, var(--text-color));
+      font-size: 0.82rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .transfer-search:focus {
+      border-color: var(--primary-color);
+    }
+
+    .transfer-stats-line {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      padding: 0 0.15rem;
+      display: none;
+    }
+
+    .tl-card {
+      flex-direction: row;
+      align-items: center;
+      gap: 0.9rem;
+      padding: 1rem 1.1rem;
+    }
+
+    .tl-icon {
+      font-size: 1.6rem;
+      flex: 0 0 auto;
+      opacity: 0.9;
+      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.15));
+    }
+
+    .tl-body {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+
+    .tl-progress-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    .tl-progress-row .transfer-progress-bar {
+      flex: 1;
+    }
+
+    .tl-pct {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-family: 'SF Mono', Consolas, monospace;
+      min-width: 36px;
+      text-align: right;
+      flex: 0 0 auto;
+    }
+
+    .tl-eta {
+      color: var(--primary-light, #818cf8);
+      font-weight: 500;
+    }
+
+    .transfer-progress-fill.paused {
+      background: linear-gradient(90deg, #f59e0b, #fbbf24);
+    }
+
+    .transfer-item-status.paused {
+      color: #f59e0b;
+    }
+
+    .tl-card.tl-paused {
+      border-color: rgba(245, 158, 11, 0.35);
+    }
+
+    .tl-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex: 0 0 auto;
+    }
+
+    .tl-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background: var(--surface-subtle);
+      color: var(--text-color);
+      font-size: 0.85rem;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+    }
+
+    .tl-btn:hover {
+      border-color: var(--text-muted);
+      transform: translateY(-1px);
+    }
+
+    .tl-btn.primary {
+      border-color: rgba(99, 102, 241, 0.4);
+      color: var(--primary-light, #818cf8);
+      background: rgba(99, 102, 241, 0.08);
+    }
+
+    .tl-btn.primary:hover {
+      background: rgba(99, 102, 241, 0.18);
+      border-color: var(--primary-color);
+    }
+
+    .tl-btn.danger {
+      border-color: rgba(239, 68, 68, 0.3);
+      color: #ef4444;
+      background: transparent;
+    }
+
+    .tl-btn.danger:hover {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: #ef4444;
+    }
+
     .empty-state {
       display: flex;
       flex-direction: column;
@@ -1173,7 +1315,11 @@
             <button class="sub-tab-btn" id="tabBtnCompleted" onclick="switchTransferSubTab('completed')">已完成 (<span id="completedCount">0</span>)</button>
             <button class="sub-tab-btn" id="tabBtnFailed" onclick="switchTransferSubTab('failed')">下载失败 (<span id="failedCount">0</span>)</button>
           </div>
-          <div class="transfer-actions">
+          <div class="transfer-actions transfer-toolbar-right">
+            <input type="text" class="transfer-search" id="transferSearchInput" placeholder="🔍 搜索任务名称…" oninput="onTransferSearch(event)">
+            <button class="btn btn-secondary" id="btnPauseAll" onclick="pauseAllDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">⏸ 全部暂停</button>
+            <button class="btn btn-secondary" id="btnResumeAll" onclick="resumeAllDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">▶ 全部恢复</button>
+            <button class="btn btn-secondary" id="btnCancelAll" onclick="cancelAllDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">✕ 全部取消</button>
             <button class="btn btn-secondary" onclick="openDownloadsDirectory()" style="font-size: 0.85rem; padding: 0.45rem 1rem;">📂 打开下载目录</button>
             <button class="btn btn-primary" id="btnRetryAllFailed" onclick="retryAllFailedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🔄 一键重试全部</button>
             <button class="btn btn-danger" id="btnClearCompleted" onclick="clearCompletedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空已完成</button>
@@ -1182,6 +1328,7 @@
         </div>
 
         <!-- 正在下载列表 -->
+        <div class="transfer-stats-line" id="transferStatsLine"></div>
         <div class="transfer-list-container" id="transferDownloadingList">
           <div class="empty-state" id="emptyDownloadingState">
             <div class="empty-icon">📥</div>

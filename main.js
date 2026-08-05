@@ -124,6 +124,8 @@ let extractionWindow = null; // 引导式提取独立弹出窗口
 let clashProcess = null;
 let currentAxelProcess = null;
 const activeAxelProcesses = new Map();
+const pausedAxelFiles = new Set(); // 用户手动暂停的 fileIndex:kill 进程但保留 axel 断点(.st),进程退出不自动重试,状态回传 paused
+const cancelledFiles = new Set();  // 用户手动取消的 fileIndex:立即中止重试与 Node 保底,状态回传 cancelled
 
 function killProcess(proc) {
   if (!proc) return;
@@ -1460,6 +1462,12 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
 
   async function downloadSingleFile(file, fileIndex) {
     if (cancelled) return;
+    if (cancelledFiles.has(fileIndex)) {
+      // 任务在排队期间已被用户取消:直接回传取消状态,不再起下载进程
+      cancelledFiles.delete(fileIndex);
+      mainWindow.webContents.send('download-status', { index: fileIndex, fileName: file.name, status: 'cancelled', percentage: 0, speed: '已取消' });
+      return;
+    }
     
     let fileDestFolder;
     if (file.isUpdate) {
@@ -1519,6 +1527,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     let lastErrorMsg = '';
 
     while (attempt < MAX_RETRIES && !downloadSuccess && !cancelled) {
+      if (pausedAxelFiles.has(fileIndex)) break; // 重试间隙收到暂停请求:不再起新尝试,等待用户恢复
       attempt++;
 
       if (attempt > 1) {
@@ -1821,6 +1830,11 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
             if (logStream) {
               logStream.write(`\n=== 进程退出 ===\n状态码: ${code}\n`);
             }
+            if (pausedAxelFiles.has(fileIndex)) {
+              // 用户手动暂停:进程已终止,保留已下载部分与 .st 断点文件,恢复时从断点续传
+              if (logStream) { logStream.write(`\n=== 任务被用户暂停,断点已保留(可随时恢复) ===\n`); logStream.end(); }
+              return reject(new Error('Paused'));
+            }
             if (code === 0 && !axelHasDyldError) {
               // 检测是否误下了 HTML 错误页(如 NCBI 会话型链接无浏览器会话时返回网页),避免把网页当文件"成功"
               if (looksLikeHtmlError(savePath)) {
@@ -1853,8 +1867,8 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
       } catch (err) {
         lastErrorMsg = err.message;
         console.warn(`Attempt ${attempt} for ${file.name} failed: ${lastErrorMsg}`);
-        if (lastErrorMsg === 'Cancelled') {
-          break; // 被取消时立即中断重试循环
+        if (lastErrorMsg === 'Cancelled' || lastErrorMsg === 'Paused' || cancelledFiles.has(fileIndex)) {
+          break; // 被取消/暂停时立即中断重试循环(暂停须保留断点,重试会破坏语义)
         }
       }
     }
@@ -1862,7 +1876,8 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
     cancelTokens.delete(fileIndex);
 
     // 所有 axel 重试均失败后,最后用 Node 保底引擎兜底一次(清除 axel 断点状态,从头下载)
-    if (!downloadSuccess && !cancelled) {
+    // 注意:用户暂停/取消的任务不走保底,否则暂停会被后台偷偷续跑
+    if (!downloadSuccess && !cancelled && lastErrorMsg !== 'Paused' && !pausedAxelFiles.has(fileIndex) && !cancelledFiles.has(fileIndex)) {
       try {
         try { fs.unlinkSync(savePath + '.st'); } catch (e) {}
         console.warn(`All axel retries failed for ${file.name}, final fallback to Node engine.`);
@@ -1874,6 +1889,8 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
     }
 
     if (downloadSuccess) {
+      pausedAxelFiles.delete(fileIndex); // 任务成功后清理暂停/取消标记,防止残留影响后续同下标任务
+      cancelledFiles.delete(fileIndex);
       if (!file.isUpdate) {
         try {
           // 上报【实际下载字节数】(落盘文件大小)而非预估 file.size——直链未知大小时 file.size=0 会漏计;
@@ -1908,9 +1925,26 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
         savePath
       });
     } else {
+      const wasPaused = pausedAxelFiles.has(fileIndex) || lastErrorMsg === 'Paused';
+      const wasCancelled = cancelledFiles.has(fileIndex) || lastErrorMsg === 'Cancelled';
+      pausedAxelFiles.delete(fileIndex);
+      cancelledFiles.delete(fileIndex);
+
+      if (wasPaused) {
+        // 暂停:保留断点与传输列表卡片,等待用户恢复
+        mainWindow.webContents.send('download-status', {
+          index: fileIndex,
+          fileName: file.name,
+          status: 'paused',
+          percentage: null,
+          speed: '已暂停'
+        });
+        return;
+      }
+
       // 智能失败提示:识别 NCBI 会话型链接 / HTML 错误页 / HTTP 4xx,给出可操作说明(而非笼统"下载失败")
       let failReason = '下载失败';
-      if (lastErrorMsg && lastErrorMsg !== 'Cancelled') {
+      if (lastErrorMsg && !wasCancelled) {
         if (isSessionBoundNcbiLink(file.url)) {
           failReason = '该 NCBI 动态导出链接(viewer.cgi?query_key)依赖浏览器检索会话,独立下载无法获取。建议改用 accession 编号(如 NM_007482.3)经 EFetch 下载,或在浏览器 Network 中 Copy as cURL 提取直链。';
         } else if (/返回网页|错误页|需登录/i.test(lastErrorMsg)) {
@@ -1925,9 +1959,9 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
       mainWindow.webContents.send('download-status', {
         index: fileIndex,
         fileName: file.name,
-        status: lastErrorMsg === 'Cancelled' ? 'cancelled' : 'failed',
+        status: wasCancelled ? 'cancelled' : 'failed',
         percentage: 0,
-        speed: lastErrorMsg === 'Cancelled' ? '已取消' : failReason
+        speed: wasCancelled ? '已取消' : failReason
       });
     }
   }
@@ -1965,6 +1999,8 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
     // 注册全局取消钩子
     event.sender.on('cancel-all-downloads-signal', () => {
       cancelled = true;
+      // 确保被杀进程不再触发重试/保底;清除暂停标记,避免被挂起的任务取消后误报 paused
+      for (const idx of activeAxelProcesses.keys()) { cancelledFiles.add(idx); pausedAxelFiles.delete(idx); }
       killAllAxelProcesses();
       resolve({ success: true, cancelled: true });
     });
@@ -1977,19 +2013,74 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
 
 ipcMain.handle('cancel-download', (event, fileIndex) => {
   if (fileIndex !== undefined && fileIndex !== null) {
+    // 标记取消:无论进程是否正在跑(排队中同样生效),重试循环与保底引擎见到标记立即终止
+    pausedAxelFiles.delete(fileIndex);
+    cancelledFiles.add(fileIndex);
     const proc = activeAxelProcesses.get(fileIndex);
     if (proc) {
       console.log(`Cancelling single task at index: ${fileIndex}`);
       killProcess(proc);
       activeAxelProcesses.delete(fileIndex);
-      return true;
     }
+    return true;
   } else {
     console.log('Cancelling all active downloads...');
+    for (const idx of activeAxelProcesses.keys()) cancelledFiles.add(idx);
     killAllAxelProcesses();
     return true;
   }
-  return false;
+});
+
+// 挂起/恢复子进程(Unix 用 SIGSTOP/SIGCONT 原地冻结,进度与连接状态零丢失;
+// Windows 用系统自带 Suspend-Process/Resume-Process。实测 axel 的 .st 断点在信号终止时
+// 记录不完整会触发重复下载甚至卡死,故暂停绝不能杀进程,只能挂起)
+function pauseProcess(proc) {
+  if (!proc || proc.killed) return false;
+  try {
+    if (process.platform === 'win32') {
+      exec(`powershell -NoProfile -Command "Suspend-Process -Id ${proc.pid}"`, (err) => { if (err) console.warn('Suspend-Process failed:', err.message); });
+    } else {
+      process.kill(proc.pid, 'SIGSTOP');
+    }
+    return true;
+  } catch (e) { console.error('pauseProcess error:', e.message); return false; }
+}
+
+function resumeProcess(proc) {
+  if (!proc || proc.killed) return false;
+  try {
+    if (process.platform === 'win32') {
+      exec(`powershell -NoProfile -Command "Resume-Process -Id ${proc.pid}"`, (err) => { if (err) console.warn('Resume-Process failed:', err.message); });
+    } else {
+      process.kill(proc.pid, 'SIGCONT');
+    }
+    return true;
+  } catch (e) { console.error('resumeProcess error:', e.message); return false; }
+}
+
+// 暂停单个下载任务:挂起 axel 进程(原地冻结,断点/连接全保留);排队/重试间隙的任务打标记,由重试循环检查点退出
+ipcMain.handle('pause-download', (event, fileIndex) => {
+  if (cancelledFiles.has(fileIndex)) return { success: false, error: '该任务正在取消' };
+  const proc = activeAxelProcesses.get(fileIndex);
+  if (proc && !proc.killed && pauseProcess(proc)) {
+    pausedAxelFiles.add(fileIndex);
+    return { success: true, suspended: true };
+  }
+  // 无运行中的进程(排队中或重试退避间隙):标记暂停,重试循环顶部检测到后回传 paused
+  pausedAxelFiles.add(fileIndex);
+  return { success: true, suspended: false };
+});
+
+// 恢复单个下载任务:优先唤醒被挂起的进程(原任务原地继续);无挂起进程时由渲染层重新发起下载走断点续传
+ipcMain.handle('resume-download', (event, fileIndex) => {
+  const proc = activeAxelProcesses.get(fileIndex);
+  if (proc && !proc.killed) {
+    pausedAxelFiles.delete(fileIndex);
+    resumeProcess(proc);
+    return { success: true, resumed: true };
+  }
+  pausedAxelFiles.delete(fileIndex);
+  return { success: true, resumed: false };
 });
 
 ipcMain.handle('open-downloads-folder', (event, folderPath) => {
@@ -2056,7 +2147,7 @@ function buildEfetchUrl({ db, queryKey, webEnv, rettype, retstart, retmax }) {
   ].join('&');
 }
 
-async function downloadNcbiPaginated(parsed, saveDir, send) {
+async function downloadNcbiPaginated(parsed, saveDir, send, shouldCancel) {
   const url = parsed.url;
   const db = queryParam(url, 'db') || 'nuccore';
   const queryKey = queryParam(url, 'query_key') || queryParam(url, 'QueryKey');
@@ -2110,6 +2201,11 @@ async function downloadNcbiPaginated(parsed, saveDir, send) {
     let retstart = 0, records = 0, pageIdx = 0;
     const totalPages = total > 0 ? Math.ceil(total / PAGE) : null;
     while (true) {
+      if (shouldCancel && shouldCancel()) {
+        const e = new Error('CANCELLED');
+        e.isCancelled = true;
+        throw e; // 外层 catch 负责清理临时分片
+      }
       const text = await fetchPage(retstart);
       if (!text) break;
       const chunkPath = path.join(tmpDir, 'chunk_' + String(retstart).padStart(9, '0') + '.' + ext);
@@ -2269,6 +2365,7 @@ let browserSessionReady = false;
 let extractionJobSeq = 1;
 const extractionAborters = new Map(); // id -> AbortController(支持暂停引导式提取下载)
 const extractionNativeDownloads = new Map(); // id -> DownloadItem(原生下载引擎接管,支持原生暂停/恢复)
+const extractionCancelled = new Set(); // 用户手动取消的提取任务 id:回传 cancelled 状态并清理未完成文件,不计入失败列表
 
 function getBrowserSession() {
   return session.fromPartition(BROWSER_PARTITION);
@@ -2437,6 +2534,13 @@ async function streamDownloadToDisk({ id, url, name, headers, cookie, saveDir, s
   } catch (err) {
     extractionAborters.delete(id);
     if (err && err.name === 'CanceledError') {
+      if (extractionCancelled.has(id)) {
+        // 用户取消:删除未完成的部分文件,抛出取消标记(渲染层移除卡片,不进失败列表)
+        try { if (fs.existsSync(savePath)) fs.unlinkSync(savePath); } catch (e) {}
+        const e = new Error('CANCELLED');
+        e.isCancelled = true;
+        throw e;
+      }
       // 用户暂停:保留已下载部分,抛出明确标记(渲染层把状态置为"已暂停")
       const e = new Error('PAUSED');
       e.isPaused = true;
@@ -2483,7 +2587,8 @@ async function streamDownloadToDisk({ id, url, name, headers, cookie, saveDir, s
       const bps = diff / 0.5;
       const speedStr = bps > 1048576 ? (bps / 1048576).toFixed(2) + ' MB/s' : bps > 1024 ? (bps / 1024).toFixed(1) + ' KB/s' : Math.round(bps) + ' B/s';
       const pct = total > 0 ? Math.min(99, Math.floor(downloaded / total * 100)) : null;
-      sendExtraction({ type: 'download', id, status: 'progress', percentage: pct, speed: speedStr + '  ' + fmtBytes(downloaded) + (total > 0 ? '/' + fmtBytes(total) : '') });
+      // received/total/speedBps 为数值字段,供渲染层计算剩余时间(ETA)
+      sendExtraction({ type: 'download', id, status: 'progress', percentage: pct, received: downloaded, total, speedBps: Math.round(bps), speed: speedStr });
     }, 500);
     response.data.on('data', (chunk) => {
       downloaded += chunk.length;
@@ -2514,10 +2619,15 @@ async function runExtractionDownload({ url, name, headers, cookie, saveDir, size
     if (isSessionBoundNcbiLink(url) && queryParam(url, 'query_key') && extractCookieValue(cookieStr, 'WebEnv')) {
       const parsed = { url, method: 'GET', headers: headers || [], cookie: cookieStr, data: null };
       const send2 = (d) => sendExtraction(Object.assign({ type: 'download', id }, d));
-      return await downloadNcbiPaginated(parsed, dir, send2);
+      return await downloadNcbiPaginated(parsed, dir, send2, () => extractionCancelled.has(id));
     }
     return await streamDownloadToDisk({ id, url, name, headers: headers || {}, cookie: cookieStr, saveDir: dir, sizeHint: size || 0 });
   } catch (e) {
+    if (e && e.isCancelled) {
+      extractionCancelled.delete(id);
+      sendExtraction({ type: 'download', id, status: 'cancelled' });
+      return { success: false, cancelled: true };
+    }
     sendExtraction({ type: 'download', id, status: 'failed', message: e.message });
     return { success: false, error: e.message };
   }
@@ -2602,15 +2712,20 @@ function setupExtractionBrowser() {
         const pct = total > 0 ? Math.min(99, Math.floor(recv / total * 100)) : null;
         const speed = (item.getCurrentSpeed && item.getCurrentSpeed()) || 0;
         const speedStr = speed > 1048576 ? (speed / 1048576).toFixed(2) + ' MB/s' : speed > 1024 ? (speed / 1024).toFixed(1) + ' KB/s' : Math.round(speed) + ' B/s';
-        sendExtraction({ type: 'download', id, status: 'progress', percentage: pct, speed: speedStr + '  ' + fmtBytes(recv) + (total > 0 ? '/' + fmtBytes(total) : '') });
+        // received/total/speedBps 为数值字段,供渲染层计算剩余时间(ETA)
+        sendExtraction({ type: 'download', id, status: 'progress', percentage: pct, received: recv, total, speedBps: Math.round(speed), speed: speedStr });
       } catch (e) {}
     });
     item.once('done', (e, state) => {
       try {
         if (state === 'completed') {
           sendExtraction({ type: 'download', id, status: 'completed', name: item.getFilename() || name, savePath, size: item.getReceivedBytes() });
+        } else if (state === 'cancelled' || extractionCancelled.has(id)) {
+          // 用户主动取消:回传 cancelled,渲染层直接移除卡片(不进失败列表)
+          extractionCancelled.delete(id);
+          sendExtraction({ type: 'download', id, status: 'cancelled' });
         } else {
-          sendExtraction({ type: 'download', id, status: 'failed', message: state === 'cancelled' ? '已取消' : (state === 'interrupted' ? '下载中断(可重试续传)' : '下载失败') });
+          sendExtraction({ type: 'download', id, status: 'failed', message: state === 'interrupted' ? '下载中断(可重试续传)' : '下载失败' });
         }
       } catch (err) {}
     });
@@ -2668,6 +2783,26 @@ ipcMain.handle('extraction-pause', (event, { id }) => {
   const ac = extractionAborters.get(id);
   if (!ac) return { success: false, error: 'no active download' };
   ac.abort();
+  return { success: true };
+});
+ipcMain.handle('extraction-cancel', (event, { id }) => {
+  // 取消提取下载任务:原生下载走 item.cancel();axios/NCBI 走 abort/标记。未完成的部分文件一并删除
+  extractionCancelled.add(id);
+  const item = extractionNativeDownloads.get(id);
+  if (item) {
+    let savePath = '';
+    try { savePath = item.getSavePath(); } catch (e) {}
+    try { item.cancel(); } catch (e) {}
+    try { if (savePath && fs.existsSync(savePath)) fs.unlinkSync(savePath); } catch (e) {}
+    extractionNativeDownloads.delete(id);
+    return { success: true };
+  }
+  const ac = extractionAborters.get(id);
+  if (ac) {
+    try { ac.abort(); } catch (e) {}
+    return { success: true };
+  }
+  // NCBI 分页下载无 AbortController:标记位会在每页循环开头被检查;这里不删除标记,由任务结束时清理
   return { success: true };
 });
 ipcMain.handle('extraction-download', async (event, { url, name, headers, cookie, saveDir, size }) => {
