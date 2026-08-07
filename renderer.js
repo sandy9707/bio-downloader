@@ -2461,8 +2461,8 @@ window.api.onDownloadStatus((data) => {
 });
 
 window.api.onDownloadProgress((data) => {
-  const { index, percentage, speed } = data;
-  
+  const { index, percentage, speed, receivedBytes, totalBytes } = data;
+
   // 1. 更新下载中心的队列 UI
   if (percentage !== null) {
     const fill = document.getElementById(`progress-fill-${index}`);
@@ -2480,14 +2480,22 @@ window.api.onDownloadProgress((data) => {
   if (activeItem) {
     if (percentage !== null && percentage !== undefined) {
       activeItem.percentage = percentage;
-      const fill = document.getElementById(`trans-progress-fill-${index}`);
-      const sizeEl = document.getElementById(`trans-size-${index}`);
-      const pctEl = document.getElementById(`trans-pct-${index}`);
-      if (fill) fill.style.width = percentage + '%';
-      if (pctEl) pctEl.innerText = percentage + '%';
-      if (sizeEl && (activeItem.size || 0) > 0) {
-        sizeEl.innerText = `${formatBytes((activeItem.size * percentage) / 100)} / ${formatBytes(activeItem.size)}`;
-      }
+    }
+    if (receivedBytes != null) {
+      activeItem.receivedBytes = receivedBytes;
+    }
+    if (totalBytes != null) {
+      activeItem.totalBytes = totalBytes;
+    }
+    const fill = document.getElementById(`trans-progress-fill-${index}`);
+    const sizeEl = document.getElementById(`trans-size-${index}`);
+    const pctEl = document.getElementById(`trans-pct-${index}`);
+    if (fill) fill.style.width = (activeItem.percentage || 0) + '%';
+    if (pctEl) pctEl.innerText = (activeItem.percentage || 0) + '%';
+    if (sizeEl) {
+      const totalSize = activeItem.totalBytes != null ? activeItem.totalBytes : (activeItem.size || 0);
+      const receivedSize = activeItem.receivedBytes != null ? activeItem.receivedBytes : (totalSize > 0 ? (totalSize * (activeItem.percentage || 0)) / 100 : 0);
+      sizeEl.innerText = totalSize > 0 ? `${formatBytes(receivedSize)} / ${formatBytes(totalSize)}` : formatBytes(receivedSize);
     }
     if (speed !== null && speed !== undefined) {
       activeItem.speed = speed;
@@ -2497,9 +2505,9 @@ window.api.onDownloadProgress((data) => {
     // 实时估算剩余时间(ETA)
     const etaEl = document.getElementById(`trans-eta-${index}`);
     if (etaEl) {
-      const totalSize = activeItem.size || 0;
-      const received = totalSize > 0 ? (totalSize * (activeItem.percentage || 0)) / 100 : 0;
-      etaEl.innerText = computeEta(totalSize > 0 ? totalSize - received : 0, activeItem.speed);
+      const totalSize = activeItem.totalBytes != null ? activeItem.totalBytes : (activeItem.size || 0);
+      const receivedSize = activeItem.receivedBytes != null ? activeItem.receivedBytes : (totalSize > 0 ? (totalSize * (activeItem.percentage || 0)) / 100 : 0);
+      etaEl.innerText = computeEta(totalSize > 0 ? totalSize - receivedSize : 0, activeItem.speed);
     }
     updateGlobalTotalSpeed();
   }
@@ -2946,14 +2954,14 @@ function handleExtractionDownload(d) {
     if (d.speed) j.speed = d.speed;
     if (d.name) j.name = d.name;
     if (d.received != null) j.received = d.received;
-    if (d.total) j.total = d.total;
+    if (d.total != null) j.total = d.total;
     j.eta = (d.speedBps > 0 && j.total > 0 && j.received < j.total) ? formatEta((j.total - j.received) / d.speedBps) : '';
     const fill = document.getElementById('ex-fill-' + id); if (fill) fill.style.width = (j.percentage || 0) + '%';
     const pct = document.getElementById('ex-pct-' + id); if (pct) pct.innerText = (j.percentage || 0) + '%';
     const sp = document.getElementById('ex-speed-' + id); if (sp) sp.innerText = j.speed;
     const eta = document.getElementById('ex-eta-' + id); if (eta) eta.innerText = j.eta;
     const sz = document.getElementById('ex-size-' + id);
-    if (sz) sz.innerText = j.total > 0 ? `${formatBytes(j.received || 0)} / ${formatBytes(j.total)}` : (j.received ? formatBytes(j.received) : '');
+    if (sz) sz.innerText = j.total > 0 ? `${formatBytes(j.received)} / ${formatBytes(j.total)}` : formatBytes(j.received || 0);
     const st = document.getElementById('ex-status-' + id); if (st) st.innerText = '引导式提取 · 下载中';
     updateGlobalTotalSpeed();
     return;
@@ -3004,7 +3012,7 @@ function renderExtractionTransferCards() {
     const j = extractionJobs[id];
     const paused = !!j.paused;
     const percentage = Math.min(100, j.percentage || 0);
-    const sizeText = j.total > 0 ? `${formatBytes(j.received || 0)} / ${formatBytes(j.total)}` : (j.received ? formatBytes(j.received) : (j.size ? formatBytes(j.size) : ''));
+    const sizeText = j.total > 0 ? `${formatBytes(j.received)} / ${formatBytes(j.total)}` : formatBytes(j.received || j.size || 0);
     const el = document.createElement('div');
     el.className = 'transfer-item tl-card transfer-item-ex' + (paused ? ' tl-paused' : '');
     el.id = 'ex-card-' + id;

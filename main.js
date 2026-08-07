@@ -1639,7 +1639,9 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
       mainWindow.webContents.send('download-progress', {
         index: fileIndex,
         percentage,
-        speed: speedStr
+        speed: speedStr,
+        receivedBytes: downloadedBytes,
+        totalBytes: finalTotalSize || null
       });
     }, 500);
 
@@ -1804,11 +1806,15 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
               // 节流处理: 限制最多 250ms (4Hz) 向渲染进程推送一次进度，降低 Mac CPU 重绘开销与发热
               if (percentage === 100 || (now - lastTime >= 250)) {
                 lastProgressEmitMap.set(fileIndex, now);
-                mainWindow.webContents.send('download-progress', {
-                  index: fileIndex,
-                  percentage,
-                  speed
-                });
+                 let axelReceivedBytes = null;
+                  try { axelReceivedBytes = fs.statSync(savePath).size; } catch (e) { axelReceivedBytes = null; }
+                  mainWindow.webContents.send('download-progress', {
+                    index: fileIndex,
+                    percentage,
+                    speed,
+                    receivedBytes: axelReceivedBytes,
+                    totalBytes: file.size || null
+                  });
               }
             }
           });
