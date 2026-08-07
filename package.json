@@ -35,6 +35,7 @@
       "extraction.html",
       "extraction.js",
       "logo.png",
+      "img/group_qrcode.jpg",
       "package.json",
       "icons/**/*"
     ],
