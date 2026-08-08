@@ -1141,6 +1141,25 @@
       .extraction-body { flex-direction:column; }
       .extraction-sidebar { width:100%; flex:0 0 auto; }
     }
+
+    /* 二维码放大灯箱 */
+    .qr-lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(0,0,0,0.88);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: zoom-out;
+    }
+    .qr-lightbox img {
+      max-width: 92vw;
+      max-height: 92vh;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+      cursor: default;
+    }
   </style>
 </head>
 <body>
@@ -1622,11 +1641,11 @@
           <label style="font-weight:600;">💬 客户支持</label>
           <div style="display: flex; align-items: center; gap: 1.5rem; margin-top:0.5rem; padding: 1rem; background:var(--bg-input); border-radius: 8px; border: 1px solid var(--border-color); flex-wrap: wrap;">
             <div style="flex-shrink:0;">
-              <img src="img/group_qrcode.jpg?v=1" alt="客户支持群二维码" style="width:140px; height:140px; border-radius:8px; border:1px solid var(--border-color);">
+              <img src="img/group_qrcode.jpg?v=1" alt="客户支持群二维码" style="width:auto; height:auto; max-width:160px; border-radius:8px; border:1px solid var(--border-color); cursor:zoom-in;" onclick="openQrLightbox(this.src)">
             </div>
             <div style="font-size:0.9rem; color:var(--text-muted); line-height:1.6;">
               <p style="margin:0 0 0.5rem 0;">在使用过程中遇到任何问题，欢迎加入我们的用户支持群交流：</p>
-              <p style="margin:0; font-weight:600; color:var(--text-primary);">📢 官方支持群：876543210</p>
+              <p style="margin:0; font-weight:600; color:var(--text-primary);">📢 官方支持群：1102855142</p>
               <p style="margin:0.35rem 0 0 0; font-size:0.82rem;">工作时间：周一至周五 9:00–21:00</p>
             </div>
           </div>
@@ -1742,5 +1761,17 @@
 
   <!-- 载入渲染器逻辑 -->
   <script src="renderer.js"></script>
+  <script>
+    function openQrLightbox(imgSrc) {
+      var lb = document.createElement('div');
+      lb.className = 'qr-lightbox';
+      lb.innerHTML = '<img src="' + imgSrc + '" alt="二维码放大">';
+      lb.onclick = function () { document.body.removeChild(lb); };
+      document.body.appendChild(lb);
+    }
+    document.querySelectorAll('.qr-code-img').forEach(function (img) {
+      img.addEventListener('click', function () { openQrLightbox(img.src); });
+    });
+  </script>
 </body>
 </html>
