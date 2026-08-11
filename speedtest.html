@@ -178,8 +178,8 @@
   </div>
 
   <script>
-    const NETWORK_TEST_URL = 'http://speedtest.tele2.net/10MB.zip';
-    const DOWNLOADER_TEST_URL = 'http://speedtest.tele2.net/50MB.zip';
+    const NETWORK_TEST_URL = 'https://cdn.npmmirror.com/binaries/node/v20.11.0/node-v20.11.0-darwin-arm64.tar.gz';
+    const DOWNLOADER_TEST_URL = 'https://cdn.npmmirror.com/binaries/node/v20.11.0/node-v20.11.0-x64.msi';
     const DOWNLOADER_TEST_SIZE_MB = 50;
     const NETWORK_TEST_TIMEOUT_MS = 10000;
     const DOWNLOADER_TEST_TIMEOUT_MS = 10000;
@@ -209,11 +209,12 @@
       progressEl.style.width = '0%';
 
       let receivedBytes = 0;
-      let maxBytes = DOWNLOADER_TEST_SIZE_MB * 1024 * 1024;
+      let maxBytes = 50 * 1024 * 1024;
 
       if (window.api.onSpeedtestProgress) {
         window.api.onSpeedtestProgress((data) => {
           if (data.bytesReceived != null) receivedBytes = data.bytesReceived;
+          if (data.totalBytes != null && data.totalBytes > 0) maxBytes = data.totalBytes;
           if (data.bytesPerSecond) {
             speedEl.innerText = formatSpeed(data.bytesPerSecond);
             if (maxBytes > 0) {
@@ -271,6 +272,7 @@
       if (window.api.onSpeedtestProgress) {
         window.api.onSpeedtestProgress((data) => {
           if (data.bytesReceived != null) receivedBytes = data.bytesReceived;
+          if (data.totalBytes != null && data.totalBytes > 0) maxBytes = data.totalBytes;
           if (data.bytesPerSecond) {
             speedEl.innerText = formatSpeed(data.bytesPerSecond);
             if (maxBytes > 0) {
@@ -284,7 +286,7 @@
         const result = await window.api.speedtestDownloader({
           url: DOWNLOADER_TEST_URL,
           expectedSizeMB: DOWNLOADER_TEST_SIZE_MB,
-          timeoutMs: SPEED_TEST_TIMEOUT_MS
+          timeoutMs: DOWNLOADER_TEST_TIMEOUT_MS
         });
 
         if (result.success) {

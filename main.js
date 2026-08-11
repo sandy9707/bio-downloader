@@ -1251,7 +1251,8 @@ ipcMain.handle('speedtest-downloader', async (event, { url, expectedSizeMB = 50,
               sender.send('speedtest-progress', {
                 bytesPerSecond: speedBps,
                 bytesReceived: lastBytesReceived,
-                elapsedSeconds: (Date.now() - startTime) / 1000
+                elapsedSeconds: (Date.now() - startTime) / 1000,
+                totalBytes: maxBytes
               });
             }
             if (lastBytesReceived >= maxBytes) {
