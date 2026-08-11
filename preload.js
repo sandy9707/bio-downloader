@@ -60,6 +60,11 @@ contextBridge.exposeInMainWorld('api', {
   downloadAppUpdate: (url, fileName) => ipcRenderer.invoke('download-app-update', { url, fileName }),
   applyHotPatch: (patchUrl) => ipcRenderer.invoke('apply-hot-patch', { patchUrl }),
 
+  // 测速 (v2.1.0)
+  openSpeedtestPage: () => ipcRenderer.invoke('open-speedtest-page'),
+  speedtestNetwork: (options) => ipcRenderer.invoke('speedtest-network', options),
+  speedtestDownloader: (options) => ipcRenderer.invoke('speedtest-downloader', options),
+
   // 诊断与诊断日志 (v1.4.5)
   testNodeConnection: () => ipcRenderer.invoke('test-node-connection'),
   getLogsList: () => ipcRenderer.invoke('get-logs-list'),
@@ -87,6 +92,10 @@ contextBridge.exposeInMainWorld('api', {
   onCurlProgress: (callback) => {
     ipcRenderer.removeAllListeners('curl-download-progress');
     ipcRenderer.on('curl-download-progress', (event, data) => callback(data));
+  },
+  onSpeedtestProgress: (callback) => {
+    ipcRenderer.removeAllListeners('speedtest-progress');
+    ipcRenderer.on('speedtest-progress', (event, data) => callback(data));
   },
   onExtractionEvent: (callback) => {
     ipcRenderer.removeAllListeners('extraction-event');

@@ -1220,15 +1220,20 @@
     <!-- 头部栏 -->
     <div class="header-bar">
       <div class="page-title" id="tabTitle">下载中心</div>
-      <div class="user-info-badge" id="userInfoBadge" style="display:none;">
-        <span id="headerUsername">未登录</span>
-        <div class="traffic-progress-container">
-          <div class="traffic-text">
-            <span>流量额度:</span>
-            <span id="headerTrafficText">0 / 0 MB</span>
-          </div>
-          <div class="progress-bar-bg">
-            <div class="progress-bar-fill" id="headerTrafficFill" style="width: 0%;"></div>
+      <div style="display:flex; align-items:center; gap:0.75rem;">
+        <button class="btn btn-secondary" onclick="if(window.api&&window.api.openSpeedtestPage){window.api.openSpeedtestPage();}else{window.open('speedtest.html','_blank');}" style="font-size:0.85rem; padding:0.4rem 0.9rem; white-space:nowrap;">
+          🚀 测速
+        </button>
+        <div class="user-info-badge" id="userInfoBadge" style="display:none;">
+          <span id="headerUsername">未登录</span>
+          <div class="traffic-progress-container">
+            <div class="traffic-text">
+              <span>流量额度:</span>
+              <span id="headerTrafficText">0 / 0 MB</span>
+            </div>
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" id="headerTrafficFill" style="width: 0%;"></div>
+            </div>
           </div>
         </div>
       </div>

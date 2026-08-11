@@ -1106,6 +1106,186 @@ ipcMain.handle('open-external-url', async (event, { url }) => {
   }
 });
 
+ipcMain.handle('open-speedtest-page', async () => {
+  const speedtestWindow = new BrowserWindow({
+    width: 900,
+    height: 620,
+    title: 'Speed Test - BioDownloader',
+    resizable: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: true
+    }
+  });
+  speedtestWindow.loadFile('speedtest.html');
+  return { success: true };
+});
+
+ipcMain.handle('speedtest-network', async (event, { url, timeoutMs = 10000 }) => {
+  console.log('[Speedtest] 开始网络基准测速:', { url, timeoutMs });
+  return new Promise((resolve) => {
+    const https = require('https');
+    const http = require('http');
+    const client = url.startsWith('https') ? https : http;
+    const sender = event.sender || mainWindow;
+
+    const startTime = Date.now();
+    let receivedBytes = 0;
+
+    const req = client.get(url, { timeout: timeoutMs }, (res) => {
+      const contentLength = parseInt(res.headers['content-length'] || '0', 10);
+      const totalBytes = contentLength > 0 ? contentLength : 10 * 1024 * 1024;
+
+      res.on('data', (chunk) => {
+        receivedBytes += chunk.length;
+        const elapsed = (Date.now() - startTime) / 1000;
+        if (elapsed > 0 && sender && !sender.isDestroyed()) {
+          sender.send('speedtest-progress', {
+            bytesPerSecond: receivedBytes / elapsed,
+            bytesReceived: receivedBytes,
+            elapsedSeconds: elapsed,
+            totalBytes: totalBytes
+          });
+        }
+      });
+
+      res.on('end', () => {
+        const elapsed = (Date.now() - startTime) / 1000;
+        if (receivedBytes > 0 && elapsed > 0) {
+          resolve({
+            success: true,
+            bytesPerSecond: receivedBytes / elapsed,
+            elapsedSeconds: elapsed,
+            bytesReceived: receivedBytes
+          });
+        } else {
+          resolve({ success: false, error: '未收到数据' });
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      resolve({ success: false, error: '下载失败: ' + err.message });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      const elapsed = (Date.now() - startTime) / 1000;
+      if (receivedBytes > 0 && elapsed > 0) {
+        resolve({
+          success: true,
+          bytesPerSecond: receivedBytes / elapsed,
+          elapsedSeconds: elapsed,
+          bytesReceived: receivedBytes
+        });
+      } else {
+        resolve({ success: false, error: '测速超时' });
+      }
+    });
+  });
+});
+
+ipcMain.handle('speedtest-downloader', async (event, { url, expectedSizeMB = 50, timeoutMs = 10000 }) => {
+  console.log('[Speedtest] 开始下载器测速:', { url, expectedSizeMB, timeoutMs });
+  return new Promise((resolve) => {
+    const axelBin = getAxelBinaryPath();
+    const tmpDir = path.join(app.getPath('temp'), 'biodl-speedtest');
+    const timestamp = Date.now();
+    const savePath = path.join(tmpDir, 'speedtest_' + timestamp + '.bin');
+
+    try {
+      if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+    } catch (e) {
+      return resolve({ success: false, error: '无法创建临时目录: ' + e.message });
+    }
+
+    const args = ['-n', '16', '-o', savePath, url];
+    const proc = spawn(axelBin, args, { env: process.env });
+    let lastBytesReceived = 0;
+    let startTime = Date.now();
+    const maxBytes = expectedSizeMB * 1024 * 1024;
+    let resolved = false;
+
+    const timer = setTimeout(() => {
+      killProcess(proc);
+      const elapsed = (Date.now() - startTime) / 1000;
+      if (!resolved) {
+        resolved = true;
+        if (lastBytesReceived > 0 && elapsed > 0) {
+          resolve({ success: true, bytesPerSecond: lastBytesReceived / elapsed, elapsedSeconds: elapsed, bytesReceived: lastBytesReceived });
+        } else {
+          resolve({ success: false, error: '测速超时，未收到数据' });
+        }
+      }
+      cleanup();
+    }, timeoutMs);
+
+    function cleanup() {
+      clearTimeout(timer);
+      try { if (fs.existsSync(savePath)) fs.unlinkSync(savePath); } catch (e) {}
+      try { if (fs.existsSync(tmpDir) && fs.readdirSync(tmpDir).length === 0) fs.rmdirSync(tmpDir); } catch (e) {}
+    }
+
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      cleanup();
+      resolve({ success: false, error: '进程启动失败: ' + err.message });
+    });
+
+    proc.stdout.on('data', (data) => {
+      const output = data.toString();
+      const speedMatch = output.match(/\[\s*\d+%\][\s]*([\d.]+)\s*(KB|MB|GB|TB|B)\/s/i);
+      if (speedMatch) {
+        const value = parseFloat(speedMatch[1]);
+        const unit = speedMatch[2].toUpperCase();
+        const multipliers = { B: 1, KB: 1024, MB: 1024 * 1024, GB: 1024 * 1024 * 1024, TB: 1024 * 1024 * 1024 * 1024 };
+        const speedBps = value * (multipliers[unit] || 1);
+        try {
+          if (fs.existsSync(savePath)) {
+            const stat = fs.statSync(savePath);
+            lastBytesReceived = stat.size;
+            const sender = event.sender || mainWindow;
+            if (sender && !sender.isDestroyed()) {
+              sender.send('speedtest-progress', {
+                bytesPerSecond: speedBps,
+                bytesReceived: lastBytesReceived,
+                elapsedSeconds: (Date.now() - startTime) / 1000
+              });
+            }
+            if (lastBytesReceived >= maxBytes) {
+              clearTimeout(timer);
+              killProcess(proc);
+              const elapsed = (Date.now() - startTime) / 1000;
+              if (!resolved) {
+                resolved = true;
+                resolve({ success: true, bytesPerSecond: lastBytesReceived / elapsed, elapsedSeconds: elapsed, bytesReceived: lastBytesReceived });
+              }
+              cleanup();
+            }
+          }
+        } catch (e) {}
+      }
+    });
+
+    proc.on('close', (code) => {
+      const elapsed = (Date.now() - startTime) / 1000;
+      if (!resolved) {
+        resolved = true;
+        if (code === 0 && lastBytesReceived > 0) {
+          resolve({ success: true, bytesPerSecond: lastBytesReceived / elapsed, elapsedSeconds: elapsed, bytesReceived: lastBytesReceived });
+        } else if (code !== 0 && lastBytesReceived > 0) {
+          resolve({ success: true, bytesPerSecond: lastBytesReceived / elapsed, elapsedSeconds: elapsed, bytesReceived: lastBytesReceived });
+        } else {
+          resolve({ success: false, error: '下载进程异常退出 (code ' + code + ')' });
+        }
+      }
+      cleanup();
+    });
+  });
+});
+
 ipcMain.handle('download-app-update', async (event, { url, fileName }) => {
   const downloadsDir = app.getPath('downloads');
   const savePath = path.join(downloadsDir, fileName);

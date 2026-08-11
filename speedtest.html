@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Speed Test - BioDownloader</title>
+  <style>
+    :root {
+      --bg-main: #f0f4f8;
+      --bg-card: #ffffff;
+      --bg-input: #f8fafc;
+      --border-color: rgba(203, 213, 225, 0.8);
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --primary: #4f46e5;
+      --primary-light: #6366f1;
+      --success: #10b981;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg-main);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .container {
+      max-width: 900px;
+      width: 100%;
+    }
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 1.5rem;
+      text-align: center;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+    @media (max-width: 768px) {
+      .cards { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+    }
+    .card h2 {
+      font-size: 1.1rem;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .card p {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 1rem;
+      line-height: 1.5;
+    }
+    .speed-display {
+      font-size: 2.5rem;
+      font-weight: 800;
+      text-align: center;
+      margin: 1rem 0;
+      font-family: monospace;
+    }
+    .speed-unit {
+      font-size: 1rem;
+      font-weight: 400;
+      color: var(--text-muted);
+    }
+    .progress-bar-bg {
+      width: 100%;
+      height: 8px;
+      background: #e2e8f0;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 0.75rem 0;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #6366f1, #38bdf8);
+      width: 0%;
+      transition: width 0.2s ease;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      padding: 0.6rem 1.2rem;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s ease;
+      width: 100%;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: white;
+    }
+    .btn-primary:hover { opacity: 0.92; }
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-secondary {
+      background: var(--bg-input);
+      color: var(--text-main);
+      border: 1px solid var(--border-color);
+    }
+    .status {
+      font-size: 0.85rem;
+      text-align: center;
+      margin-top: 0.75rem;
+      min-height: 1.2em;
+    }
+    .status.success { color: var(--success); }
+    .status.error { color: var(--danger); }
+    .status.info { color: var(--text-muted); }
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      margin-bottom: 1rem;
+      color: var(--primary);
+      text-decoration: none;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+    .back-link:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a class="back-link" onclick="window.history.back()">← 返回下载中心</a>
+    <h1>🚀 下载速度测试</h1>
+
+    <div class="cards">
+      <!-- 网络基准速度 -->
+      <div class="card">
+        <h2>🌐 网络基准速度</h2>
+        <p>测试您的网络最大下载带宽（HTTP 直连测速）。</p>
+        <div class="speed-display">
+          <span id="networkSpeed">0.00</span> <span class="speed-unit">MB/s</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="networkProgress"></div>
+        </div>
+        <button class="btn btn-primary" id="btnNetworkTest" onclick="startNetworkTest()">开始测试</button>
+        <div class="status info" id="networkStatus">点击按钮开始测试</div>
+      </div>
+
+      <!-- 下载器真实速度 -->
+      <div class="card">
+        <h2>⚡ 下载器真实速度</h2>
+        <p>使用 16 线程加速引擎下载测试文件，反映实际下载速度。</p>
+        <div class="speed-display">
+          <span id="downloaderSpeed">0.00</span> <span class="speed-unit">MB/s</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="downloaderProgress"></div>
+        </div>
+        <button class="btn btn-primary" id="btnDownloaderTest" onclick="startDownloaderTest()">开始测试</button>
+        <div class="status info" id="downloaderStatus">点击按钮开始测试</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const NETWORK_TEST_URL = 'http://speedtest.tele2.net/10MB.zip';
+    const DOWNLOADER_TEST_URL = 'http://speedtest.tele2.net/50MB.zip';
+    const DOWNLOADER_TEST_SIZE_MB = 50;
+    const NETWORK_TEST_TIMEOUT_MS = 10000;
+    const DOWNLOADER_TEST_TIMEOUT_MS = 10000;
+
+    function formatSpeed(bytesPerSecond) {
+      const mbps = bytesPerSecond / (1024 * 1024);
+      return mbps.toFixed(2);
+    }
+
+    async function startNetworkTest() {
+      const btn = document.getElementById('btnNetworkTest');
+      const statusEl = document.getElementById('networkStatus');
+      const speedEl = document.getElementById('networkSpeed');
+      const progressEl = document.getElementById('networkProgress');
+
+      if (!window.api || !window.api.speedtestNetwork) {
+        statusEl.className = 'status error';
+        statusEl.innerText = '当前环境不支持网络测速（请在客户端内使用）';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerText = '测试中...';
+      statusEl.className = 'status info';
+      statusEl.innerText = '正在连接测速节点...';
+      speedEl.innerText = '0.00';
+      progressEl.style.width = '0%';
+
+      let receivedBytes = 0;
+      let maxBytes = DOWNLOADER_TEST_SIZE_MB * 1024 * 1024;
+
+      if (window.api.onSpeedtestProgress) {
+        window.api.onSpeedtestProgress((data) => {
+          if (data.bytesReceived != null) receivedBytes = data.bytesReceived;
+          if (data.bytesPerSecond) {
+            speedEl.innerText = formatSpeed(data.bytesPerSecond);
+            if (maxBytes > 0) {
+              progressEl.style.width = Math.min(100, (receivedBytes / maxBytes) * 100) + '%';
+            }
+          }
+        });
+      }
+
+      try {
+        const result = await window.api.speedtestNetwork({
+          url: NETWORK_TEST_URL,
+          timeoutMs: NETWORK_TEST_TIMEOUT_MS
+        });
+
+        if (result.success) {
+          speedEl.innerText = formatSpeed(result.bytesPerSecond);
+          progressEl.style.width = '100%';
+          statusEl.className = 'status success';
+          statusEl.innerText = `测试完成：下载 ${formatSpeed(result.bytesPerSecond)} MB/s，耗时 ${result.elapsedSeconds.toFixed(1)}s`;
+        } else {
+          throw new Error(result.error || '网络测速失败');
+        }
+      } catch (err) {
+        statusEl.className = 'status error';
+        statusEl.innerText = '测试失败：' + err.message;
+      } finally {
+        btn.disabled = false;
+        btn.innerText = '重新测试';
+      }
+    }
+
+    async function startDownloaderTest() {
+      const btn = document.getElementById('btnDownloaderTest');
+      const statusEl = document.getElementById('downloaderStatus');
+      const speedEl = document.getElementById('downloaderSpeed');
+      const progressEl = document.getElementById('downloaderProgress');
+
+      if (!window.api || !window.api.speedtestDownloader) {
+        statusEl.className = 'status error';
+        statusEl.innerText = '当前环境不支持下载器测速（请在客户端内使用）';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerText = '测试中...';
+      statusEl.className = 'status info';
+      statusEl.innerText = '正在启动 16 线程下载...';
+      speedEl.innerText = '0.00';
+      progressEl.style.width = '0%';
+
+      let receivedBytes = 0;
+      let maxBytes = DOWNLOADER_TEST_SIZE_MB * 1024 * 1024;
+
+      if (window.api.onSpeedtestProgress) {
+        window.api.onSpeedtestProgress((data) => {
+          if (data.bytesReceived != null) receivedBytes = data.bytesReceived;
+          if (data.bytesPerSecond) {
+            speedEl.innerText = formatSpeed(data.bytesPerSecond);
+            if (maxBytes > 0) {
+              progressEl.style.width = Math.min(100, (receivedBytes / maxBytes) * 100) + '%';
+            }
+          }
+        });
+      }
+
+      try {
+        const result = await window.api.speedtestDownloader({
+          url: DOWNLOADER_TEST_URL,
+          expectedSizeMB: DOWNLOADER_TEST_SIZE_MB,
+          timeoutMs: SPEED_TEST_TIMEOUT_MS
+        });
+
+        if (result.success) {
+          speedEl.innerText = formatSpeed(result.bytesPerSecond);
+          progressEl.style.width = '100%';
+          statusEl.className = 'status success';
+          statusEl.innerText = `测试完成：平均 ${formatSpeed(result.bytesPerSecond)} MB/s，耗时 ${result.elapsedSeconds.toFixed(1)}s`;
+        } else {
+          throw new Error(result.error || '下载测试失败');
+        }
+      } catch (err) {
+        statusEl.className = 'status error';
+        statusEl.innerText = '测试失败：' + err.message;
+      } finally {
+        btn.disabled = false;
+        btn.innerText = '重新测试';
+      }
+    }
+  </script>
+</body>
+</html>
