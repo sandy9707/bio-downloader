@@ -534,6 +534,15 @@ async function startClash(token) {
     yamlContent = yamlContent.replace(/timeout:\s*10000/g, 'timeout: 3000');
     yamlContent = yamlContent.replace(/(type:\s*(?:load-balance|url-test|fallback))/g, '$1\n    lazy: true');
 
+    // 过滤上游订阅混入的「流量信息假节点」(如 剩余流量/套餐到期/距离下次/官网地址 等伪装成代理的文本节点)
+    // 它们会排到 proxies 列表最前,主策略组默认选中它们导致所有下载走假节点 → 502 Bad Gateway
+    yamlContent = stripFakeProxyNodes(yamlContent);
+
+    // 主策略组(select 手动组)改为 url-test 自动测速选优:
+    // 默认 select 会固定选中列表第一个节点,一旦该节点故障则所有下载 502;改为 url-test 后自动挑选延迟最低的健康节点,
+    // 配合已设置的 max-failed-times:1 / interval:15 / timeout:3000 快速剔除故障节点,保证下载始终走可用节点。
+    yamlContent = yamlContent.replace(/^(\s*- name: 一分机场\n)(\s*type:)\s*select/gm, '$1$2 url-test');
+
     // 统计订阅配置中真实的节点数量
     const proxyMatches = yamlContent.match(/^\s*-\s*(?:\{\s*)?name\s*:/gm);
     if (proxyMatches && proxyMatches.length > 0) {
@@ -639,6 +648,12 @@ async function optimizeClash(token) {
     yamlContent = yamlContent.replace(/interval:\s*\d+/g, 'interval: 15');
     yamlContent = yamlContent.replace(/timeout:\s*10000/g, 'timeout: 3000');
     yamlContent = yamlContent.replace(/(type:\s*(?:load-balance|url-test|fallback))/g, '$1\n    lazy: true');
+
+    // 过滤流量信息假节点(与 startClash 一致)
+    yamlContent = stripFakeProxyNodes(yamlContent);
+
+    // 主策略组改为 url-test 自动测速选优(与 startClash 一致)
+    yamlContent = yamlContent.replace(/^(\s*- name: 一分机场\n)(\s*type:)\s*select/gm, '$1$2 url-test');
 
     const configPath = path.join(CLASH_WORK_DIR, 'config.yaml');
     fs.writeFileSync(configPath, yamlContent, 'utf8');
@@ -928,6 +943,54 @@ ipcMain.handle('clash-optimize', async (event, { token }) => {
 ipcMain.handle('clash-get-node-count', () => {
   return currentRealNodeCount || 80;
 });
+
+// 过滤上游订阅混入的「流量信息假节点」: 部分机场(如一分机场)会在 proxies 里插入
+// name=剩余流量/套餐到期/距离下次重置/官网地址/套餐订阅已过期 等伪装成代理节点的文本,
+// 它们排在 proxies 列表最前, 主策略组默认选中 → 所有下载流量走假节点 → 502 Bad Gateway。
+// 做法: 用正则删除这些假节点的整个配置块, 并剔除策略组中对它们的引用行。
+function stripFakeProxyNodes(yamlContent) {
+  const FAKE_NAME_PATTERN = /剩余流量|套餐到期|距离下次|官网地址|套餐订阅已过期|请去官网/;
+  const lines = yamlContent.split('\n');
+  const out = [];
+  let inFakeBlock = false;
+  let fakeNames = new Set();
+
+  for (const line of lines) {
+    // 检测 proxies 区新节点的开始
+    const nodeStart = line.match(/^\s*-\s*(?:\{\s*)?name:\s*(.+?)\s*$/);
+    if (nodeStart) {
+      const nodeName = nodeStart[1].trim().replace(/^["']|["']$/g, '');
+      if (FAKE_NAME_PATTERN.test(nodeName)) {
+        inFakeBlock = true;
+        fakeNames.add(nodeName);
+        continue; // 跳过假节点的 name 行
+      } else {
+        inFakeBlock = false;
+        out.push(line);
+        continue;
+      }
+    }
+    if (inFakeBlock) {
+      // 遇到 proxy-groups: 说明 proxies 区结束, 退出假节点块状态
+      if (/^\s*proxy-groups:\s*$/.test(line)) {
+        inFakeBlock = false;
+        out.push(line);
+        continue;
+      }
+      continue; // 跳过假节点块的属性行
+    }
+    // 剔除策略组中引用假节点的行(如 "  - 剩余流量：4.87 TB")
+    if (/^\s*-\s*.+$/.test(line)) {
+      const refName = line.replace(/^\s*-\s*/, '').trim().replace(/^["']|["']$/g, '');
+      if (fakeNames.has(refName) || FAKE_NAME_PATTERN.test(refName)) {
+        continue; // 跳过对假节点的引用
+      }
+    }
+    out.push(line);
+  }
+
+  return out.join('\n');
+}
 
 // 判断某 URL 是否应走 clash 代理:境外(如 github.com、国外数据源)→ true;境内/后端主机 → false(直连)。
 // 修复"更新/热更新下载慢":此前对境内后端的请求也绕 clash 代理(甚至可能被路由到境外节点),改为境内直连。
