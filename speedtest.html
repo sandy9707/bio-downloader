@@ -119,6 +119,28 @@
       color: var(--text-main);
       border: 1px solid var(--border-color);
     }
+    .test-file-info {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      margin-bottom: 0.75rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--bg-input);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+    }
+    .test-file-name {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-main);
+      word-break: break-all;
+    }
+    .test-file-url {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      word-break: break-all;
+      overflow-wrap: anywhere;
+    }
     .status {
       font-size: 0.85rem;
       text-align: center;
@@ -150,7 +172,11 @@
       <!-- 网络基准速度 -->
       <div class="card">
         <h2>🌐 网络基准速度</h2>
-        <p>测试您的网络最大下载带宽（HTTP 直连测速）。</p>
+        <p>直连国内 CDN 文件，测试您的宽带真实下载速度。</p>
+        <div class="test-file-info">
+          <span id="networkFileName" class="test-file-name">-</span>
+          <span id="networkFileUrl" class="test-file-url"></span>
+        </div>
         <div class="speed-display">
           <span id="networkSpeed">0.00</span> <span class="speed-unit">MB/s</span>
         </div>
@@ -164,7 +190,11 @@
       <!-- 下载器真实速度 -->
       <div class="card">
         <h2>⚡ 下载器真实速度</h2>
-        <p>使用 16 线程加速引擎下载测试文件，反映实际下载速度。</p>
+        <p>通过 16 线程加速引擎 + 代理下载国外 SRA 文件，反映加速下载速度。</p>
+        <div class="test-file-info">
+          <span id="downloaderFileName" class="test-file-name">-</span>
+          <span id="downloaderFileUrl" class="test-file-url"></span>
+        </div>
         <div class="speed-display">
           <span id="downloaderSpeed">0.00</span> <span class="speed-unit">MB/s</span>
         </div>
@@ -179,15 +209,29 @@
 
   <script>
     const NETWORK_TEST_URL = 'https://cdn.npmmirror.com/binaries/node/v20.11.0/node-v20.11.0-darwin-arm64.tar.gz';
-    const DOWNLOADER_TEST_URL = 'https://cdn.npmmirror.com/binaries/node/v20.11.0/node-v20.11.0-x64.msi';
-    const DOWNLOADER_TEST_SIZE_MB = 50;
+    const DOWNLOADER_TEST_URL = 'https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR390728/SRR390728';
     const NETWORK_TEST_TIMEOUT_MS = 10000;
     const DOWNLOADER_TEST_TIMEOUT_MS = 10000;
+
+    function getFileNameFromUrl(url) {
+      try {
+        const u = new URL(url);
+        const parts = u.pathname.split('/').filter(Boolean);
+        return parts.length > 0 ? decodeURIComponent(parts[parts.length - 1]) : u.hostname;
+      } catch (e) {
+        return url.split('/').pop() || url;
+      }
+    }
 
     function formatSpeed(bytesPerSecond) {
       const mbps = bytesPerSecond / (1024 * 1024);
       return mbps.toFixed(2);
     }
+
+    document.getElementById('networkFileName').innerText = '文件: ' + getFileNameFromUrl(NETWORK_TEST_URL);
+    document.getElementById('networkFileUrl').innerText = NETWORK_TEST_URL;
+    document.getElementById('downloaderFileName').innerText = '文件: SRR390728 (NCBI SRA 真实数据)';
+    document.getElementById('downloaderFileUrl').innerText = DOWNLOADER_TEST_URL;
 
     async function startNetworkTest() {
       const btn = document.getElementById('btnNetworkTest');
@@ -267,7 +311,7 @@
       progressEl.style.width = '0%';
 
       let receivedBytes = 0;
-      let maxBytes = DOWNLOADER_TEST_SIZE_MB * 1024 * 1024;
+      let maxBytes = 100 * 1024 * 1024;
 
       if (window.api.onSpeedtestProgress) {
         window.api.onSpeedtestProgress((data) => {
@@ -285,7 +329,7 @@
       try {
         const result = await window.api.speedtestDownloader({
           url: DOWNLOADER_TEST_URL,
-          expectedSizeMB: DOWNLOADER_TEST_SIZE_MB,
+          expectedSizeMB: 200,
           timeoutMs: DOWNLOADER_TEST_TIMEOUT_MS
         });
 

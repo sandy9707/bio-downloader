@@ -1201,8 +1201,19 @@ ipcMain.handle('speedtest-downloader', async (event, { url, expectedSizeMB = 50,
       return resolve({ success: false, error: '无法创建临时目录: ' + e.message });
     }
 
-    const args = ['-n', '16', '-o', savePath, url];
-    const proc = spawn(axelBin, args, { env: process.env });
+    // 与正式下载一致:境外目标走 clash 代理,境内目标直连
+    const env = { ...process.env };
+    if (clashProcess && shouldUseProxy(url)) {
+      env.http_proxy = 'http://127.0.0.1:43289';
+      env.https_proxy = 'http://127.0.0.1:43289';
+      env.all_proxy = 'http://127.0.0.1:43289';
+    } else {
+      delete env.http_proxy; delete env.https_proxy; delete env.all_proxy;
+      delete env.HTTP_PROXY; delete env.HTTPS_PROXY; delete env.ALL_PROXY;
+    }
+
+    const args = ['-n', '16', '-k', '-o', savePath, url];
+    const proc = spawn(axelBin, args, { env });
     let lastBytesReceived = 0;
     let startTime = Date.now();
     const maxBytes = expectedSizeMB * 1024 * 1024;
