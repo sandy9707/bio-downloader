@@ -175,6 +175,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   // 4. 初始化传输中心历史记录与并发限制
   initTransfersAndSettings(settings);
 
+  // 4.5 恢复高级模式开关状态
+  const advToggle = document.getElementById('settingsAdvancedModeToggle');
+  if (advToggle) advToggle.checked = !!(settings && settings.advancedModeEnabled);
+
   // 5. 定时更新加速器状态
   updateClashUIState();
   setInterval(updateClashUIState, 3000);
@@ -410,11 +414,14 @@ async function chooseDefaultDir() {
 // ==========================================
 let updateInfoGlobal = null;
 let upgrade2xInfoGlobal = null; // 2.x 升级桥接信息(来自 1.x 清单的 upgrade2x 块)
+let previewInfoGlobal = null;   // Preview 预览版信息(高级模式开启时返回)
 
 async function triggerCheckForUpdates() {
   showToast('正在检查服务器最新版本...', 'info');
   try {
-    const res = await window.api.checkForUpdates();
+    // 高级模式开启时,同时拉取正式版(channel=主版本)与预览版(channel=P2)
+    const advancedMode = await isAdvancedModeEnabled();
+    const res = await window.api.checkForUpdates(advancedMode);
     if (res.success) {
       if (res.hasUpdate) {
         updateInfoGlobal = res;
@@ -446,6 +453,21 @@ async function triggerCheckForUpdates() {
           card2x.style.display = 'block';
         } else {
           card2x.style.display = 'none';
+        }
+      }
+
+      // Preview 预览版卡片:仅高级模式开启且存在可用的预览版更新时显示
+      const cardPreview = document.getElementById('updateCardPreview');
+      if (cardPreview) {
+        const pv = res.preview;
+        if (advancedMode && pv && pv.version && pv.patchUrl) {
+          document.getElementById('updatePreviewVersion').innerText = pv.version;
+          document.getElementById('updatePreviewReleaseNotes').innerText = pv.releaseNotes || '';
+          previewInfoGlobal = pv;
+          cardPreview.style.display = 'block';
+        } else {
+          cardPreview.style.display = 'none';
+          previewInfoGlobal = null;
         }
       }
     } else {
@@ -509,6 +531,51 @@ async function startUpgrade2x() {
   }
 }
 window.startUpgrade2x = startUpgrade2x;
+
+// ---- 高级模式(Preview 预览版可选更新) ----
+// 读取高级模式开关状态(持久化到 settings)
+async function isAdvancedModeEnabled() {
+  try {
+    const s = await window.api.getSettings();
+    return !!(s && s.advancedModeEnabled);
+  } catch (e) {
+    return false;
+  }
+}
+
+// 切换高级模式开关
+async function toggleAdvancedMode(checked) {
+  try {
+    await window.api.saveSettings({ advancedModeEnabled: !!checked });
+    showToast(checked ? '已开启高级模式（检查更新将显示预览版）' : '已关闭高级模式');
+  } catch (err) {
+    console.error('Failed to toggle advanced mode:', err);
+    showToast('设置保存失败: ' + err.message, 'error');
+  }
+}
+window.toggleAdvancedMode = toggleAdvancedMode;
+
+// Preview 预览版热更新:与正式版热更新同一套签名校验(applyHotPatch 按补丁版本取对应通道清单校验)
+async function startPreviewUpdate() {
+  if (isUpdating) {
+    showToast('正在更新中，请勿重复点击', 'warning');
+    return;
+  }
+  if (!previewInfoGlobal || !previewInfoGlobal.patchUrl) return;
+  const btn = document.getElementById('btnUpdatePreview');
+  if (btn) { btn.disabled = true; btn.innerText = '⏳ 正在升级到预览版...'; }
+  isUpdating = true;
+  showToast('正在下载预览版热更新包...', 'info');
+  try {
+    const res = await window.api.applyHotPatch(previewInfoGlobal.patchUrl);
+    if (res.success) showToast(res.message || '预览版升级成功！应用即将重启...', 'success');
+  } catch (err) {
+    showToast('升级到预览版失败: ' + err.message, 'error');
+    if (btn) { btn.disabled = false; btn.innerText = '⚡ 热更新到预览版'; }
+    isUpdating = false;
+  }
+}
+window.startPreviewUpdate = startPreviewUpdate;
 
 // 首页小入口 / File 菜单:打开引导式提取独立弹窗
 function openExtraction() { window.api.openExtraction(); }

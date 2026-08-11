@@ -1561,6 +1561,22 @@
               <button class="btn btn-secondary" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="document.getElementById('updateCard2x').style.display='none'">暂不升级</button>
             </div>
           </div>
+          <!-- Preview 预览版更新卡片(仅高级模式开启且存在预览版时显示) -->
+          <div id="updateCardPreview" style="display:none; margin-top:0.75rem; padding:1rem; background:rgba(244,63,94,0.06); border:1px solid rgba(244,63,94,0.3); border-radius:8px;">
+            <div style="font-weight:700; color:#f43f5e; font-size:0.95rem; margin-bottom:0.35rem; display:flex; justify-content:space-between; align-items:center;">
+              <span>🧪 预览版 v<span id="updatePreviewVersion">-</span> 可用（高级模式）</span>
+              <button onclick="document.getElementById('updateCardPreview').style.display='none'" style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:1.1rem; padding:0 0.2rem;">&times;</button>
+            </div>
+            <div style="font-size:0.8rem; color:#f43f5e; margin-bottom:0.5rem;">预览版用于体验新功能，可能不够稳定。升级后可随时回滚到正式版。</div>
+            <div style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.75rem;">
+              <strong>更新日志：</strong>
+              <pre id="updatePreviewReleaseNotes" style="font-family:inherit; white-space:pre-wrap; margin-top:0.25rem; background:var(--code-bg); padding:0.5rem; border-radius:4px; font-size:0.8rem; line-height:1.4; color:var(--code-text);"></pre>
+            </div>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+              <button id="btnUpdatePreview" class="btn btn-primary" style="font-size:0.8rem; padding:0.4rem 0.85rem; background:linear-gradient(135deg,#f43f5e,#e11d48); border:none;" onclick="startPreviewUpdate()">⚡ 热更新到预览版</button>
+              <button class="btn btn-secondary" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="document.getElementById('updateCardPreview').style.display='none'">暂不升级</button>
+            </div>
+          </div>
         </div>
 
         <!-- 官方发布渠道 -->
@@ -1654,6 +1670,19 @@
               <p style="margin:0.35rem 0 0 0; font-size:0.82rem;">工作时间：周一至周五 9:00–21:00</p>
             </div>
           </div>
+        </div>
+
+        <!-- 高级模式 -->
+        <div class="form-group" style="margin-top:1.5rem; padding-top:1.5rem; border-top: 1px solid var(--border-color);">
+          <label style="font-weight:600;">🔧 高级模式</label>
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-top:0.5rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color);">
+            <div style="font-size:0.9rem; color:var(--text-muted);">启用后，"检查更新"将同时显示正式版与预览版（Preview）可选更新。</div>
+            <label class="switch">
+              <input type="checkbox" id="settingsAdvancedModeToggle" onchange="toggleAdvancedMode(this.checked)">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">预览版用于提前体验新功能，可能不够稳定；升级预览版后仍可随时回滚到正式版。</div>
         </div>
 
         <!-- 危险区 -->

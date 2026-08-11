@@ -55,7 +55,7 @@ contextBridge.exposeInMainWorld('api', {
   extractionClearSession: () => ipcRenderer.invoke('extraction-clear-session'),
 
   // 自动更新与发布页
-  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  checkForUpdates: (advancedMode) => ipcRenderer.invoke('check-for-updates', { advancedMode }),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', { url }),
   downloadAppUpdate: (url, fileName) => ipcRenderer.invoke('download-app-update', { url, fileName }),
   applyHotPatch: (patchUrl) => ipcRenderer.invoke('apply-hot-patch', { patchUrl }),

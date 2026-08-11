@@ -1045,9 +1045,10 @@ async function applyHotPatch(patchUrl) {
   // 2) 从官方后端拉取可信清单(sha256 + 签名),不信任渲染进程传入的任何校验值
   let manifest = null;
   try {
-    // 通道隔离:2.x 补丁(patch-2.x.asar)取 2.x 清单校验,否则取 1.x,确保拿到对应的 sha256/signature
+    // 通道隔离:预览补丁(含 -preview)取 P2 清单校验;2.x 补丁取 2.x 清单;否则取 1.x
     const pm = String(patchUrl).match(/patch-(\d+)\./);
-    const verifyChannel = pm && parseInt(pm[1], 10) >= 2 ? 2 : 1;
+    let verifyChannel = pm && parseInt(pm[1], 10) >= 2 ? 2 : 1;
+    if (/preview/i.test(patchUrl)) verifyChannel = 'P2';
     const mres = await axios.get(`${BACKEND_BASE_URL}/api/client/version?channel=${verifyChannel}`, { timeout: 8000, proxy: axiosProxyFor(`${BACKEND_BASE_URL}/api/client/version`) });
     manifest = mres.data || null;
   } catch (e) {
@@ -1117,11 +1118,11 @@ ipcMain.handle('apply-hot-patch', async (event, { patchUrl }) => {
 });
 
 // --- 自动更新与外部链接 ---
-ipcMain.handle('check-for-updates', async () => {
+ipcMain.handle('check-for-updates', async (event, { advancedMode } = {}) => {
   try {
     const currentVersion = app.getVersion();
-    // 【2.0.0 通道隔离】按主版本号请求各自通道:1.x → channel=1(只见 1.x 线),2.x → channel=2。
-    // 线上旧客户端(≤1.7.6)不带该参数,服务端默认返回 1.x 清单 → 完全不受影响、绝不会被升到 2.x。
+    // 【通道隔离】按主版本号请求各自通道:1.x → channel=1,2.x → channel=2。
+    // 高级模式(advancedMode)额外请求 channel=P2(Preview 预览版独立通道),用于"稳定版 + 预览版"双选。
     const major = parseInt(String(currentVersion).split('.')[0], 10) || 1;
     const versionUrl = `${BACKEND_BASE_URL}/api/client/version?channel=${major}`;
     // 后端是境内服务 → 直连(axiosProxyFor 对境内返回 false,强制直连并忽略系统代理),避免绕代理变慢
@@ -1146,6 +1147,29 @@ ipcMain.handle('check-for-updates', async () => {
       };
     }
 
+    // 【Preview 预览版】高级模式开启时才拉取 channel=P2 独立清单,返回预览版可选信息
+    let preview = null;
+    if (advancedMode) {
+      try {
+        const pUrl = `${BACKEND_BASE_URL}/api/client/version?channel=P2`;
+        const pRes = await axios.get(pUrl, { timeout: 6000, proxy: axiosProxyFor(pUrl) });
+        const pv = pRes.data && pRes.data.version;
+        if (pv) {
+          preview = {
+            version: pv,
+            releaseNotes: pRes.data.releaseNotes || '',
+            patchUrl: pRes.data.patchUrl ? (pRes.data.patchUrl.startsWith('http') ? pRes.data.patchUrl : `${BACKEND_BASE_URL}${pRes.data.patchUrl}`) : null,
+            winUrl: pRes.data.winUrl ? `${BACKEND_BASE_URL}${pRes.data.winUrl}` : null,
+            macUrl: pRes.data.macUrl ? `${BACKEND_BASE_URL}${pRes.data.macUrl}` : null,
+            // 预览版有更新(版本高于当前)则提示
+            hasUpdate: compareVersions(pv, currentVersion) > 0
+          };
+        }
+      } catch (e) {
+        console.error('Check preview updates failed:', e.message);
+      }
+    }
+
     return {
       success: true,
       currentVersion,
@@ -1157,7 +1181,8 @@ ipcMain.handle('check-for-updates', async () => {
       winUrl: res.data.winUrl ? `${BACKEND_BASE_URL}${res.data.winUrl}` : null,
       macUrl: res.data.macUrl ? `${BACKEND_BASE_URL}${res.data.macUrl}` : null,
       releaseNotes: res.data.releaseNotes,
-      upgrade2x
+      upgrade2x,
+      preview
     };
   } catch (err) {
     console.error('Check for updates failed:', err.message);
