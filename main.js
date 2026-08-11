@@ -361,6 +361,8 @@ function createWindow() {
     mainWindow.show();
   });
 
+
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -812,27 +814,22 @@ async function headRequestSize(url) {
     return 0;
   };
 
-  const requestOptions = {
-    timeout: 10000,
-    maxRedirects: 5,
-    proxy: clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false
-  };
+  // 校验大小只需极小的 HEAD / Range 请求, 直连通常远快于绕代理(代理走单节点延迟高,实测 4.7s vs 直连 0.9s)。
+  // 因此顺序: 直连优先 → 代理兜底(加速器开启时, 若直连被墙/失败才走代理)。
+  const directOptions = { timeout: 10000, maxRedirects: 5 };            // 无 proxy = 直连
+  const proxyOptions = { timeout: 10000, maxRedirects: 5,
+    proxy: clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false };
 
-  // 1. 尝试 HEAD 请求
+  // ---- 直连路径 ----
+  // 1. 直连 HEAD
   try {
-    const response = await axios.head(url, requestOptions);
+    const response = await axios.head(url, directOptions);
     const sz = tryGetSizeFromHeaders(response.headers);
     if (sz > 0) return sz;
   } catch (e) {}
-
-  // 2. 尝试轻量 Range: bytes=0-1 GET 请求 (极小开销只取头部，破除 CDN 重定向 / chunked 问题)
+  // 2. 直连轻量 Range GET (破除 CDN 重定向 / chunked)
   try {
-    const rangeOptions = {
-      ...requestOptions,
-      headers: { Range: 'bytes=0-1' },
-      timeout: 12000
-    };
-    const res = await axios.get(url, rangeOptions);
+    const res = await axios.get(url, { ...directOptions, headers: { Range: 'bytes=0-1' }, timeout: 12000 });
     const sz = tryGetSizeFromHeaders(res.headers);
     if (sz > 0) return sz;
   } catch (e) {
@@ -842,12 +839,24 @@ async function headRequestSize(url) {
     }
   }
 
-  // 3. 尝试直连备用
+  // ---- 代理兜底路径 (直连失败/被墙时) ----
+  // 3. 代理 HEAD
   try {
-    const directRes = await axios.get(url, { headers: { Range: 'bytes=0-1' }, timeout: 8000, maxRedirects: 5 });
-    const sz = tryGetSizeFromHeaders(directRes.headers);
+    const response = await axios.head(url, proxyOptions);
+    const sz = tryGetSizeFromHeaders(response.headers);
     if (sz > 0) return sz;
   } catch (e) {}
+  // 4. 代理轻量 Range GET
+  try {
+    const res = await axios.get(url, { ...proxyOptions, headers: { Range: 'bytes=0-1' }, timeout: 12000 });
+    const sz = tryGetSizeFromHeaders(res.headers);
+    if (sz > 0) return sz;
+  } catch (e) {
+    if (e.response && e.response.headers) {
+      const sz = tryGetSizeFromHeaders(e.response.headers);
+      if (sz > 0) return sz;
+    }
+  }
 
   return 0;
 }
@@ -1299,8 +1308,48 @@ ipcMain.handle('speedtest-downloader', async (event, { url, expectedSizeMB = 50,
       cleanup();
     }, timeoutMs);
 
+    // 基于文件实际大小的定时采样: 不依赖 axel stdout 正则(其输出常被拆成不含百分比的小块, 正则匹配不到)
+    let lastSampleTime = startTime;
+    let lastSampleBytes = 0;
+    const sampleTimer = setInterval(() => {
+      try {
+        if (!fs.existsSync(savePath)) return;
+        const st = fs.statSync(savePath);
+        if (st.size > 0) lastBytesReceived = st.size;
+        const now = Date.now();
+        const dt = (now - lastSampleTime) / 1000;
+        const db = st.size - lastSampleBytes;
+        if (dt > 0) {
+          lastSampleTime = now;
+          lastSampleBytes = st.size;
+          const instBps = db / dt;
+          const sender = event.sender || mainWindow;
+          if (sender && !sender.isDestroyed()) {
+            sender.send('speedtest-progress', {
+              bytesPerSecond: instBps,
+              bytesReceived: st.size,
+              elapsedSeconds: (now - startTime) / 1000,
+              totalBytes: maxBytes
+            });
+          }
+          if (st.size >= maxBytes) {
+            clearTimeout(timer);
+            clearInterval(sampleTimer);
+            killProcess(proc);
+            const elapsed = (now - startTime) / 1000;
+            if (!resolved) {
+              resolved = true;
+              resolve({ success: true, bytesPerSecond: st.size / elapsed, elapsedSeconds: elapsed, bytesReceived: st.size });
+            }
+            cleanup();
+          }
+        }
+      } catch (e) {}
+    }, 500);
+
     function cleanup() {
       clearTimeout(timer);
+      clearInterval(sampleTimer);
       try { if (fs.existsSync(savePath)) fs.unlinkSync(savePath); } catch (e) {}
       try { if (fs.existsSync(tmpDir) && fs.readdirSync(tmpDir).length === 0) fs.rmdirSync(tmpDir); } catch (e) {}
     }
