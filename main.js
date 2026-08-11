@@ -1272,12 +1272,20 @@ ipcMain.handle('speedtest-downloader', async (event, { url, expectedSizeMB = 50,
 
     proc.on('close', (code) => {
       const elapsed = (Date.now() - startTime) / 1000;
+      // 若 close 时 lastBytesReceived 仍为 0(文件下载过快,stdout 事件尚未触发),直接从磁盘读取实际大小
+      let actualBytes = lastBytesReceived;
+      if (actualBytes <= 0) {
+        try {
+          if (fs.existsSync(savePath)) {
+            const st = fs.statSync(savePath);
+            if (st.size > 0) actualBytes = st.size;
+          }
+        } catch (e) {}
+      }
       if (!resolved) {
         resolved = true;
-        if (code === 0 && lastBytesReceived > 0) {
-          resolve({ success: true, bytesPerSecond: lastBytesReceived / elapsed, elapsedSeconds: elapsed, bytesReceived: lastBytesReceived });
-        } else if (code !== 0 && lastBytesReceived > 0) {
-          resolve({ success: true, bytesPerSecond: lastBytesReceived / elapsed, elapsedSeconds: elapsed, bytesReceived: lastBytesReceived });
+        if (actualBytes > 0 && elapsed > 0) {
+          resolve({ success: true, bytesPerSecond: actualBytes / elapsed, elapsedSeconds: elapsed, bytesReceived: actualBytes });
         } else {
           resolve({ success: false, error: '下载进程异常退出 (code ' + code + ')' });
         }
