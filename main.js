@@ -782,16 +782,17 @@ function parseCurlCommand(text) {
 async function headRequestSize(url) {
   const tryGetSizeFromHeaders = (headers) => {
     if (!headers) return 0;
-    if (headers['content-length']) {
-      const len = parseInt(headers['content-length'], 10);
-      if (!isNaN(len) && len > 0) return len;
-    }
+    // 优先 content-range(Range 请求会带 /总大小,content-length 此时只是分段长度,如 2B)
     if (headers['content-range']) {
       const match = headers['content-range'].match(/\/(\d+)$/);
       if (match) {
         const len = parseInt(match[1], 10);
         if (!isNaN(len) && len > 0) return len;
       }
+    }
+    if (headers['content-length']) {
+      const len = parseInt(headers['content-length'], 10);
+      if (!isNaN(len) && len > 0) return len;
     }
     return 0;
   };
@@ -1218,6 +1219,8 @@ ipcMain.handle('speedtest-downloader', async (event, { url, expectedSizeMB = 50,
     let startTime = Date.now();
     const maxBytes = expectedSizeMB * 1024 * 1024;
     let resolved = false;
+    let stderrText = '';
+    proc.stderr.on('data', (d) => { try { stderrText += d.toString(); } catch (e) {} });
 
     const timer = setTimeout(() => {
       killProcess(proc);
@@ -1298,7 +1301,11 @@ ipcMain.handle('speedtest-downloader', async (event, { url, expectedSizeMB = 50,
         if (actualBytes > 0 && elapsed > 0) {
           resolve({ success: true, bytesPerSecond: actualBytes / elapsed, elapsedSeconds: elapsed, bytesReceived: actualBytes });
         } else {
-          resolve({ success: false, error: '下载进程异常退出 (code ' + code + ')' });
+          // 提取 axel 的真实报错(如 ERROR 502/403/连接失败),并提示加速器可能未开启或节点不可用
+          let detail = stderrText.trim().split('\n').slice(0, 2).join(' ');
+          const proxyHint = '（请确认加速器已开启且节点可用）';
+          if (!detail) detail = '未知错误';
+          resolve({ success: false, error: '下载失败: ' + detail + proxyHint });
         }
       }
       cleanup();
