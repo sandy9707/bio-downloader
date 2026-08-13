@@ -1182,9 +1182,13 @@ ipcMain.handle('check-for-updates', async (event, { advancedMode } = {}) => {
       };
     }
 
-    // 【Preview 预览版】高级模式开启时才拉取 channel=P2 独立清单,返回预览版可选信息
+    // 【Preview 预览版】请求 P2 独立清单的条件:
+    //   - 高级模式(advancedMode)开启:正式版用户也能看到预览版(双选)
+    //   - 当前客户端本身是预览版(版本含 -preview):自动跟随预览版通道(无需手动开高级模式)
+    // 正式版客户端未开高级模式 → 不请求 P2,预览版更新对其完全不可见(不污染正式版)
+    const isPreviewClient = /preview/i.test(String(currentVersion));
     let preview = null;
-    if (advancedMode) {
+    if (advancedMode || isPreviewClient) {
       try {
         const pUrl = `${BACKEND_BASE_URL}/api/client/version?channel=P2`;
         const pRes = await axios.get(pUrl, { timeout: 6000, proxy: axiosProxyFor(pUrl) });
@@ -1212,6 +1216,7 @@ ipcMain.handle('check-for-updates', async (event, { advancedMode } = {}) => {
       hasUpdate,
       forceUpdate,
       minClientVersion,
+      isPreviewClient,
       patchUrl: res.data.patchUrl ? (res.data.patchUrl.startsWith('http') ? res.data.patchUrl : `${BACKEND_BASE_URL}${res.data.patchUrl}`) : null,
       winUrl: res.data.winUrl ? `${BACKEND_BASE_URL}${res.data.winUrl}` : null,
       macUrl: res.data.macUrl ? `${BACKEND_BASE_URL}${res.data.macUrl}` : null,

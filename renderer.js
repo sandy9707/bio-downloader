@@ -441,7 +441,14 @@ async function triggerCheckForUpdates() {
         document.getElementById('updateCard').style.display = 'block';
         showToast('检测到新版本，请及时更新', 'success');
       } else {
-        showToast(`当前已是最新版本 (v${res.currentVersion})`, 'success');
+        // 正式版通道已是最新,但预览版通道可能仍有新版本:避免误导提示
+        // (预览版客户端自动跟随 P2 通道;正式版用户需开启高级模式才能看到预览版)
+        const pv = res.preview;
+        if (pv && pv.version && pv.hasUpdate) {
+          showToast(`正式版已是最新；预览版 v${pv.version} 可更新`, 'info');
+        } else {
+          showToast(`当前已是最新版本 (v${res.currentVersion})`, 'success');
+        }
       }
 
       // 2.x 升级桥接:清单声明 2.x 可热更新时,在常规更新之后额外显示升级卡片(1.x 绝不强制)
@@ -457,11 +464,12 @@ async function triggerCheckForUpdates() {
         }
       }
 
-      // Preview 预览版卡片:仅高级模式开启且存在可用的预览版更新时显示
+      // Preview 预览版卡片:当前客户端是预览版(自动跟随)或高级模式开启、存在预览版、且版本确实高于当前时显示
       const cardPreview = document.getElementById('updateCardPreview');
       if (cardPreview) {
         const pv = res.preview;
-        if (advancedMode && pv && pv.version && pv.patchUrl) {
+        const showPreview = (res.isPreviewClient || advancedMode) && pv && pv.version && pv.patchUrl && pv.hasUpdate;
+        if (showPreview) {
           document.getElementById('updatePreviewVersion').innerText = pv.version;
           document.getElementById('updatePreviewReleaseNotes').innerText = pv.releaseNotes || '';
           previewInfoGlobal = pv;
