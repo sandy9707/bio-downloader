@@ -676,6 +676,34 @@
       background: rgba(99, 102, 241, 0.25);
     }
 
+    .recharge-opt.selected {
+      border-color: #10b981;
+      background: rgba(16, 185, 129, 0.15);
+      box-shadow: 0 0 0 1px #10b981;
+    }
+    .btn-sm {
+      font-size: 0.8rem;
+      padding: 0.3rem 0.7rem;
+    }
+    .order-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .order-row:last-child { border-bottom: none; }
+    .device-row-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .device-row-item:last-child { border-bottom: none; }
+
     /* ==========================================
        【通知框 & 载入框】
        ========================================== */
@@ -1381,9 +1409,16 @@
     <!-- VIEW: 流量商店 -->
     <div class="tab-view" id="store-tab">
       <div class="card" style="max-width: 800px; margin: 0 auto; width: 100%;">
-        <h3 style="color:#38bdf8; margin-bottom: 1.5rem; text-align: center;">流量充值套餐</h3>
+        <h3 style="color:#38bdf8; margin-bottom: 0.5rem; text-align: center;">流量充值套餐 <small style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">有效期 30 天</small></h3>
         <div class="package-grid" id="packageList">
-          <!-- 动态载入充值包 -->
+          <!-- 动态载入限时充值包 -->
+        </div>
+      </div>
+
+      <div class="card" style="max-width: 800px; margin: 1.5rem auto 0 auto; width: 100%;">
+        <h3 style="color:#10b981; margin-bottom: 0.5rem; text-align: center;">永久流量包 <small style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">永不过期</small></h3>
+        <div class="package-grid" id="packageListPerm">
+          <!-- 动态载入永久流量包 -->
         </div>
       </div>
 
@@ -1473,7 +1508,33 @@
             <label>到期时间</label>
             <div id="profExpiry" style="font-size:0.95rem;margin-top:0.25rem;">-</div>
           </div>
-          
+
+          <div class="form-group">
+            <label>限时流量</label>
+            <div id="profLimitedTraffic" style="font-size:0.95rem;margin-top:0.25rem;">-</div>
+          </div>
+
+          <div class="form-group">
+            <label>永久流量</label>
+            <div id="profPermanentTraffic" style="font-size:0.95rem;margin-top:0.25rem;">-</div>
+          </div>
+
+          <div class="form-group">
+            <label>设备数上限</label>
+            <div id="profMaxDevices" style="font-size:0.95rem;margin-top:0.25rem;">-</div>
+          </div>
+
+          <div class="form-group" style="border-top:1px solid var(--border-color); padding-top:1rem; margin-top:0.5rem;">
+            <label>我的订阅链接 (填入 Clash/Mihomo 远程配置使用)</label>
+            <div style="display:flex; gap:0.5rem; margin-top:0.25rem;">
+              <input type="text" id="profSubLink" readonly style="font-size:0.78rem; cursor:pointer;" onclick="this.select()">
+              <button class="btn btn-secondary" style="padding:0 0.75rem; white-space:nowrap;" onclick="copySubLink()">复制</button>
+            </div>
+          </div>
+
+          <div class="form-group" style="display:flex; gap:0.5rem; margin-top:0.5rem;">
+            <button class="btn btn-secondary" style="flex:1;" onclick="handleResetToken()">重置 Token</button>
+          </div>
           <div class="form-group" style="border-top:1px solid var(--border-color); padding-top:1rem; margin-top:0.5rem; display:flex; flex-direction:column; gap:0.5rem;">
             <label>绑定邮箱</label>
             <div id="emailBindStatus" style="font-size:0.85rem; color:var(--text-muted); font-weight:bold;">未绑定邮箱 (绑定后可自助找回密码)</div>
@@ -1515,6 +1576,21 @@
             <div style="font-size:0.8rem; color:var(--text-muted); text-align:right; max-width: 170px;">
               <div>享受到好友消费金额 <span style="color:#10b981; font-weight:bold;">50%</span> 终身返利。可在购买流量时直接抵扣。</div>
             </div>
+          </div>
+        </div>
+
+        <!-- 底部跨列卡片：钱包/签到/充值 + 订单历史 + 设备管理 -->
+        <div class="card" style="grid-column: 1 / -1;">
+          <h3 style="color:#38bdf8; margin-bottom:1rem;">💰 钱包与账户管理</h3>
+          <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem; padding:0.9rem; background:var(--bg-input); border:1px solid var(--border-color); border-radius:8px;">
+            <div style="flex:1; min-width:180px;">
+              <div style="font-size:0.8rem; color:var(--text-muted);">账号可用余额 (可用于购买套餐)</div>
+              <div style="font-size:1.7rem; font-weight:800; color:#10b981;">¥ <span id="profWalletBalance">0.00</span></div>
+            </div>
+            <button class="btn btn-primary" id="btnDailyCheckin" onclick="handleCheckin()" style="font-size:0.85rem; padding:0.45rem 0.9rem;">📅 每日签到</button>
+            <button class="btn btn-secondary" onclick="openRechargeModal()" style="font-size:0.85rem; padding:0.45rem 0.9rem;">💳 充值到余额</button>
+            <button class="btn btn-secondary" onclick="openOrdersModal()" style="font-size:0.85rem; padding:0.45rem 0.9rem;">📋 我的订单</button>
+            <button class="btn btn-secondary" onclick="openDevicesModal()" style="font-size:0.85rem; padding:0.45rem 0.9rem;">📱 设备管理</button>
           </div>
         </div>
 
@@ -1707,6 +1783,73 @@
       <div style="display:flex; flex-direction:column; gap:0.5rem; margin-top:1rem;">
         <button class="btn btn-primary" onclick="checkPayArrival()">我已付款,刷新到账状态</button>
         <button class="btn btn-secondary" onclick="closePayModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 每日签到弹窗 -->
+  <div class="modal-overlay" id="checkinModal">
+    <div class="modal" style="max-width: 420px;">
+      <h3>🎉 签到成功</h3>
+      <div style="text-align:center; padding:1.5rem 0 0.5rem;">
+        <div style="font-size:2.6rem; font-weight:800; color:#10b981;" id="checkinReward">+0 MB</div>
+        <div style="font-size:0.85rem; color:var(--text-muted); margin-top:0.5rem;">已计入<strong style="color:#10b981;">永久流量</strong>，永不过期</div>
+      </div>
+      <div style="display:flex; justify-content:center; margin-top:1rem;">
+        <button class="btn btn-primary" onclick="closeCheckinModal()">收下奖励</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 余额充值弹窗 -->
+  <div class="modal-overlay" id="rechargeModal">
+    <div class="modal" style="max-width: 440px; text-align:left;">
+      <h3 style="text-align:center;">💳 充值到余额</h3>
+      <p style="font-size:0.82rem; color:var(--text-muted); margin-bottom:0.9rem;">充值后余额可用于在商店购买套餐（含永久流量包）。</p>
+      <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:0.5rem; margin-bottom:0.9rem;">
+        <button class="btn btn-secondary recharge-opt" onclick="selectRecharge(2, this)">¥2</button>
+        <button class="btn btn-secondary recharge-opt" onclick="selectRecharge(10, this)">¥10</button>
+        <button class="btn btn-secondary recharge-opt" onclick="selectRecharge(40, this)">¥40</button>
+        <button class="btn btn-secondary recharge-opt" onclick="selectRecharge(120, this)">¥120</button>
+      </div>
+      <div class="form-group">
+        <label style="font-size:0.82rem; color:var(--text-muted);">自定义金额（元）</label>
+        <input type="number" id="customRechargeInput" placeholder="≥1，≤1000" min="1" max="1000" style="width:100%; background:var(--bg-input); color:var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:0.5rem; outline:none;">
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:0.9rem;">
+        <button class="btn btn-secondary" onclick="closeRechargeModal()">取消</button>
+        <button class="btn btn-success" onclick="doRecharge()">充值到余额</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 订单历史弹窗 -->
+  <div class="modal-overlay" id="ordersModal">
+    <div class="modal" style="max-width: 640px; width: 92%; text-align:left;">
+      <h3 style="text-align:center;">📋 我的订单</h3>
+      <div style="display:flex; gap:0.4rem; margin-bottom:0.9rem;">
+        <button class="btn btn-primary btn-sm" id="ordTabAll" onclick="switchOrdersFilter('all', this)">全部</button>
+        <button class="btn btn-secondary btn-sm" id="ordTabPending" onclick="switchOrdersFilter('pending', this)">待支付</button>
+        <button class="btn btn-secondary btn-sm" id="ordTabPaid" onclick="switchOrdersFilter('paid', this)">已支付</button>
+      </div>
+      <div id="ordersListBody" style="max-height: 320px; overflow-y:auto; background:rgba(0,0,0,0.2); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem; font-size:0.85rem;">
+        加载中...
+      </div>
+      <div style="display:flex; justify-content:flex-end; margin-top:0.9rem;">
+        <button class="btn btn-secondary" onclick="closeOrdersModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 设备管理弹窗 -->
+  <div class="modal-overlay" id="devicesModal">
+    <div class="modal" style="max-width: 640px; width: 92%; text-align:left;">
+      <h3 style="text-align:center;">📱 设备管理 <small style="font-size:0.8rem; color:var(--text-muted);">(<span id="devCountText">0</span>/<span id="devMaxText">2</span>)</small></h3>
+      <div id="devicesListBody" style="max-height: 300px; overflow-y:auto; background:rgba(0,0,0,0.2); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem; font-size:0.85rem;">
+        加载中...
+      </div>
+      <div style="display:flex; justify-content:flex-end; margin-top:0.9rem;">
+        <button class="btn btn-secondary" onclick="closeDevicesModal()">关闭</button>
       </div>
     </div>
   </div>

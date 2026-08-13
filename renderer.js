@@ -171,6 +171,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // 3. 渲染充値包
   loadPackages();
+  updateCheckinButton();
 
   // 4. 初始化传输中心历史记录与并发限制
   initTransfersAndSettings(settings);
@@ -1207,6 +1208,44 @@ async function verifyToken(token, isAutoLogin = false) {
       } else {
         document.getElementById('profExpiry').innerText = expiryDate.toLocaleString() + (res.isActive ? ' (激活中)' : ' (已过期)');
       }
+
+      // 更新限时流量 / 永久流量 / 设备上限
+      const limitedTrafficEl = document.getElementById('profLimitedTraffic');
+      if (limitedTrafficEl) {
+        const limitedRemain = Math.max(0, (res.limitedTrafficLimit || 0) - (res.limitedTrafficConsumed || 0));
+        limitedTrafficEl.innerText = `${formatBytes(limitedRemain)} / ${formatBytes(res.limitedTrafficLimit || 0)}`;
+      }
+      const permTrafficEl = document.getElementById('profPermanentTraffic');
+      if (permTrafficEl) {
+        const permRemain = Math.max(0, (res.permanentTrafficLimit || 0) - (res.permanentTrafficConsumed || 0));
+        permTrafficEl.innerText = `${formatBytes(permRemain)} / ${formatBytes(res.permanentTrafficLimit || 0)}`;
+      }
+      const maxDevicesEl = document.getElementById('profMaxDevices');
+      if (maxDevicesEl) maxDevicesEl.innerText = res.maxDevices || 2;
+
+      // 更新订阅链接
+      const subLinkEl = document.getElementById('profSubLink');
+      if (subLinkEl) {
+        const backendUrl = await window.api.getBackendUrl().catch(() => 'https://biodown.ye.aimeals.cn');
+        subLinkEl.value = `${backendUrl}/speedup?token=${res.token}`;
+      }
+
+      // 更新钱包余额 (账号可用余额)
+      const walletBalanceEl = document.getElementById('profWalletBalance');
+      if (walletBalanceEl) walletBalanceEl.innerText = (res.balance || 0).toFixed(2);
+
+      // 刷新签到按钮状态
+      updateCheckinButton();
+      
+      // 上报当前设备（供后台设备管理）——使用稳定设备ID，避免每次登录膨胀设备列表
+      try {
+        let devId = localStorage.getItem('bd_device_id');
+        if (!devId) {
+          devId = `desktop-${(navigator.platform || 'unknown').replace(/\s+/g, '')}-${Date.now().toString(36)}`;
+          localStorage.setItem('bd_device_id', devId);
+        }
+        await window.api.reportDevice(res.token, devId, '桌面客户端');
+      } catch (e) {}
       
       // 更新邮箱绑定状态与界面显示
       const emailBindStatus = document.getElementById('emailBindStatus');
@@ -1329,8 +1368,8 @@ async function loadPackages() {
     const res = await window.api.getPackages();
     if (res.success) {
       const container = document.getElementById('packageList');
-      container.innerHTML = '';
-      
+      const permContainer = document.getElementById('packageListPerm');
+
       res.packages.forEach(pkg => {
         const card = document.createElement('div');
         card.className = 'package-card';
@@ -1339,12 +1378,16 @@ async function loadPackages() {
         const priceHtml = pkg.originalPrice
           ? `<span style="text-decoration: line-through; font-size: 0.9rem; color: var(--text-muted); margin-right: 0.5rem; font-weight: normal;">¥ ${pkg.originalPrice.toFixed(2)}</span>¥ ${pkg.price.toFixed(2)}`
           : `¥ ${pkg.price.toFixed(2)}`;
+        const perm = !!pkg.permanent;
+        const subtitle = perm
+          ? '永久流量 · 永不过期'
+          : `有效期: ${pkg.days} 天 | 设备上限 ${pkg.maxDevices || 2} 台`;
         
         card.innerHTML = `
           <h4 style="font-weight:bold;">${pkg.name}</h4>
-          <div style="font-size:0.85rem;color:var(--text-muted);">有效期: ${pkg.days} 天 | 纯流量包</div>
+          <div style="font-size:0.85rem;color:var(--text-muted);">${subtitle}</div>
           <div class="package-price">${priceHtml}</div>
-          <div style="font-size:1.1rem;font-weight:bold;color:#10b981;margin-bottom:0.5rem;">高速流量: ${trafficStr}</div>
+          <div style="font-size:1.1rem;font-weight:bold;color:#10b981;margin-bottom:0.5rem;">${perm ? '永久' : '高速'}流量: ${trafficStr}</div>
           <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-top:0.5rem; margin-bottom:0.75rem; background:rgba(255,255,255,0.03); padding:0.4rem 0.6rem; border-radius:6px; border:1px solid var(--border-color);">
             <span style="font-size:0.85rem; color:var(--text-muted);">选择购买数量:</span>
             <input type="number" id="qty-${pkg.id}" value="1" min="1" max="99" style="width:60px; background:var(--bg-input); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:0.2rem; text-align:center; outline:none; font-weight:bold;">
@@ -1354,7 +1397,11 @@ async function loadPackages() {
             <button class="btn btn-success" style="flex:1; padding:0.5rem; font-size:0.85rem; background:#10b981;" onclick="buyPackage('${pkg.id}', 'balance')">余额支付</button>
           </div>
         `;
-        container.appendChild(card);
+        if (perm && permContainer) {
+          permContainer.appendChild(card);
+        } else if (container) {
+          container.appendChild(card);
+        }
       });
     }
   } catch (e) {
@@ -1427,6 +1474,298 @@ async function checkPayArrival() {
     showToast('暂未检测到到账,若已付款请稍候再点刷新', 'warning');
   }
 }
+
+// ==========================================
+// 【每日签到 / 余额充值 / 订单历史 / 设备管理 / 重置Token】
+// ==========================================
+let checkinToday = false;
+
+function updateCheckinButton() {
+  const btn = document.getElementById('btnDailyCheckin');
+  if (!btn) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const signed = localStorage.getItem('bd_checkin_' + today);
+  checkinToday = !!signed;
+  if (signed) {
+    btn.innerText = '📅 明日再来';
+    btn.disabled = true;
+    btn.style.opacity = '0.6';
+  } else {
+    btn.innerText = '📅 每日签到';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+  }
+}
+
+async function handleCheckin() {
+  if (!currentUser || !currentUser.token) {
+    showToast('请先登录账户后再签到', 'error');
+    switchTab('profile-tab');
+    return;
+  }
+  if (checkinToday) {
+    showToast('今日已签到，明日再来吧', 'info');
+    return;
+  }
+  try {
+    const res = await window.api.checkin(currentUser.token);
+    if (res && res.success) {
+      localStorage.setItem('bd_checkin_' + new Date().toISOString().slice(0, 10), String(res.rewardBytes || 0));
+      checkinToday = true;
+      updateCheckinButton();
+      const rewardEl = document.getElementById('checkinReward');
+      if (rewardEl) rewardEl.innerText = '+' + formatBytes(res.rewardBytes || 0);
+      document.getElementById('checkinModal').style.display = 'flex';
+      refreshUserInfo();
+    } else {
+      showToast((res && res.error) || '签到失败，请稍后再试', 'error');
+    }
+  } catch (e) {
+    showToast('签到失败: ' + e.message, 'error');
+  }
+}
+
+function closeCheckinModal() {
+  document.getElementById('checkinModal').style.display = 'none';
+}
+
+let selectedRechargeAmount = null;
+
+function selectRecharge(amount, el) {
+  selectedRechargeAmount = amount;
+  document.querySelectorAll('#rechargeModal .recharge-opt').forEach(o => o.classList.remove('selected'));
+  if (el) el.classList.add('selected');
+}
+
+function openRechargeModal() {
+  if (!currentUser || !currentUser.token) {
+    showToast('请先登录账户', 'error');
+    switchTab('profile-tab');
+    return;
+  }
+  document.getElementById('rechargeModal').style.display = 'flex';
+}
+
+function closeRechargeModal() {
+  document.getElementById('rechargeModal').style.display = 'none';
+  selectedRechargeAmount = null;
+  document.querySelectorAll('#rechargeModal .recharge-opt').forEach(o => o.classList.remove('selected'));
+  document.getElementById('customRechargeInput').value = '';
+}
+
+async function doRecharge() {
+  if (!currentUser || !currentUser.token) return;
+  let amount = selectedRechargeAmount;
+  const custom = parseFloat(document.getElementById('customRechargeInput').value);
+  if (custom && custom >= 1) amount = custom;
+  if (!amount || amount < 1) return showToast('请选择或输入充值金额', 'error');
+  if (amount > 1000) return showToast('单次充值最高 ¥1000', 'error');
+  try {
+    showToast('正在创建充值订单...');
+    const res = await window.api.balanceRecharge(currentUser.token, amount);
+    if (res && res.checkoutUrl) {
+      document.getElementById('checkoutLink').href = res.checkoutUrl;
+      document.getElementById('payModal').style.display = 'flex';
+      document.getElementById('modalTitle').innerText = `余额充值 ¥${Number(amount).toFixed(2)}`;
+      closeRechargeModal();
+      startRechargeArrivalPoll();
+    } else {
+      showToast((res && res.error) || '下单异常', 'error');
+    }
+  } catch (e) {
+    showToast('充值下单失败: ' + e.message, 'error');
+  }
+}
+
+let rechargePollTimer = null;
+let rechargeBaselineBalance = 0;
+function startRechargeArrivalPoll() {
+  rechargeBaselineBalance = currentUser ? (Number(currentUser.balance) || 0) : 0;
+  stopRechargeArrivalPoll();
+  rechargePollTimer = setInterval(async () => {
+    await refreshUserInfo();
+    if (currentUser && (Number(currentUser.balance) || 0) > rechargeBaselineBalance) {
+      stopRechargeArrivalPoll();
+      closePayModal();
+      showToast('余额已到账！', 'success');
+    }
+  }, 5000);
+}
+function stopRechargeArrivalPoll() {
+  if (rechargePollTimer) { clearInterval(rechargePollTimer); rechargePollTimer = null; }
+}
+
+// ---- 订单历史 ----
+let ordersFilter = 'all';
+let allOrdersCache = [];
+
+function openOrdersModal() {
+  if (!currentUser || !currentUser.token) {
+    showToast('请先登录账户', 'error');
+    switchTab('profile-tab');
+    return;
+  }
+  document.getElementById('ordersModal').style.display = 'flex';
+  loadOrders();
+}
+
+function closeOrdersModal() {
+  document.getElementById('ordersModal').style.display = 'none';
+}
+
+function switchOrdersFilter(filter, el) {
+  ordersFilter = filter;
+  const btnMap = { all: 'ordTabAll', pending: 'ordTabPending', paid: 'ordTabPaid' };
+  Object.keys(btnMap).forEach(k => {
+    const b = document.getElementById(btnMap[k]);
+    if (!b) return;
+    if (k === filter) {
+      b.className = 'btn btn-primary btn-sm';
+    } else {
+      b.className = 'btn btn-secondary btn-sm';
+    }
+  });
+  renderOrdersList();
+}
+
+async function loadOrders() {
+  const body = document.getElementById('ordersListBody');
+  if (!body) return;
+  body.innerHTML = '加载中...';
+  try {
+    const res = await window.api.getOrders(currentUser.token);
+    allOrdersCache = (res && res.orders) || [];
+    renderOrdersList();
+  } catch (e) {
+    body.innerHTML = '<p style="color:var(--text-muted);">订单加载失败</p>';
+  }
+}
+
+function renderOrdersList() {
+  const body = document.getElementById('ordersListBody');
+  if (!body) return;
+  let orders = allOrdersCache;
+  if (ordersFilter === 'pending') orders = orders.filter(o => o.status === 'pending');
+  if (ordersFilter === 'paid') orders = orders.filter(o => o.status === 'paid');
+  if (!orders.length) {
+    body.innerHTML = '<p style="color:var(--text-muted);">暂无订单。</p>';
+    return;
+  }
+  body.innerHTML = orders.map(o => `
+    <div class="order-row">
+      <div style="flex:1; min-width:0;">
+        <div style="font-weight:600;">${escapeHtml(o.name || '订单')}</div>
+        <div style="font-size:0.75rem; color:var(--text-muted);">${new Date(o.createdAt).toLocaleString()} · ${o.orderType === 'balance_recharge' ? '余额充值' : (o.permanent ? '永久流量' : '套餐')} · ${o.payType === 'balance' ? '余额支付' : '支付宝'}</div>
+      </div>
+      <div style="text-align:right; flex-shrink:0;">
+        <div style="font-weight:700;">¥${(o.amount || 0).toFixed(2)}</div>
+        <div style="font-size:0.75rem; color:${o.status === 'paid' ? '#10b981' : '#f59e0b'};">${o.status === 'paid' ? '✓ 已支付' : '待支付'}</div>
+        ${o.status === 'pending' && o.checkoutUrl ? `<button class="btn btn-primary btn-sm" style="margin-top:4px;" onclick="reopenOrderPayment('${o.checkoutUrl}')">去支付</button>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+async function reopenOrderPayment(checkoutUrl) {
+  if (!checkoutUrl) return;
+  document.getElementById('checkoutLink').href = checkoutUrl;
+  document.getElementById('payModal').style.display = 'flex';
+  document.getElementById('modalTitle').innerText = '继续支付';
+  closeOrdersModal();
+  startPayArrivalPoll();
+}
+
+// ---- 设备管理 ----
+function openDevicesModal() {
+  if (!currentUser || !currentUser.token) {
+    showToast('请先登录账户', 'error');
+    switchTab('profile-tab');
+    return;
+  }
+  document.getElementById('devicesModal').style.display = 'flex';
+  loadDevices();
+}
+
+function closeDevicesModal() {
+  document.getElementById('devicesModal').style.display = 'none';
+}
+
+async function loadDevices() {
+  const body = document.getElementById('devicesListBody');
+  if (!body) return;
+  body.innerHTML = '加载中...';
+  try {
+    const res = await window.api.getDevices(currentUser.token);
+    const devices = (res && res.devices) || [];
+    const max = (res && res.maxDevices) || 2;
+    document.getElementById('devCountText').textContent = devices.length;
+    document.getElementById('devMaxText').textContent = max;
+    if (!devices.length) {
+      body.innerHTML = '<p style="color:var(--text-muted);">暂无在线设备。当前设备将在下次启动后自动上报。</p>';
+      return;
+    }
+    body.innerHTML = devices.map(d => `
+      <div class="device-row-item">
+        <div>
+          <div style="font-weight:600;">${escapeHtml(d.deviceName || '未知设备')}</div>
+          <div style="font-size:0.75rem; color:var(--text-muted);">最后在线：${new Date(d.lastSeen).toLocaleString()}</div>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    body.innerHTML = '<p style="color:var(--text-muted);">设备列表加载失败</p>';
+  }
+}
+
+// ---- 重置 Token ----
+async function handleResetToken() {
+  if (!currentUser || !currentUser.token) {
+    showToast('请先登录账户', 'error');
+    switchTab('profile-tab');
+    return;
+  }
+  if (!confirm('确定要重置 Token 吗？\n重置后旧 Token 将立即失效，所有已登录设备需要重新登录。')) return;
+  try {
+    showToast('正在重置 Token...');
+    const res = await window.api.resetToken(currentUser.token);
+    if (res && res.success) {
+      await window.api.saveSettings({ token: res.token });
+      await verifyToken(res.token);
+      showToast('Token 已重置，请在其他设备重新登录', 'success');
+    } else {
+      showToast((res && res.error) || '重置失败', 'error');
+    }
+  } catch (e) {
+    showToast('重置 Token 失败: ' + e.message, 'error');
+  }
+}
+
+// 复制订阅链接
+async function copySubLink() {
+  const el = document.getElementById('profSubLink');
+  if (!el || !el.value) {
+    showToast('暂无订阅链接', 'error');
+    return;
+  }
+  const ok = copyText(el.value);
+  showToast(ok ? '订阅链接已复制！' : '复制失败', ok ? 'success' : 'error');
+  if (currentUser && currentUser.token) {
+    window.api.recordInviteCopy(currentUser.token).catch(() => {});
+  }
+}
+
+window.handleCheckin = handleCheckin;
+window.closeCheckinModal = closeCheckinModal;
+window.openRechargeModal = openRechargeModal;
+window.closeRechargeModal = closeRechargeModal;
+window.selectRecharge = selectRecharge;
+window.doRecharge = doRecharge;
+window.openOrdersModal = openOrdersModal;
+window.closeOrdersModal = closeOrdersModal;
+window.switchOrdersFilter = switchOrdersFilter;
+window.reopenOrderPayment = reopenOrderPayment;
+window.openDevicesModal = openDevicesModal;
+window.closeDevicesModal = closeDevicesModal;
+window.handleResetToken = handleResetToken;
+window.copySubLink = copySubLink;
 
 // ==========================================
 // 【系统设置管理】

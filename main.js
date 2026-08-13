@@ -931,6 +931,41 @@ ipcMain.handle('api-create-order', async (event, { token, packageId, payType, qu
   return res.data;
 });
 
+ipcMain.handle('api-checkin', async (event, { token }) => {
+  const res = await axios.post(`${BACKEND_BASE_URL}/api/user/checkin`, { token });
+  return res.data;
+});
+
+ipcMain.handle('api-balance-recharge', async (event, { token, amount }) => {
+  const res = await axios.post(`${BACKEND_BASE_URL}/api/balance/recharge`, { token, amount });
+  return res.data;
+});
+
+ipcMain.handle('api-get-orders', async (event, { token }) => {
+  const res = await axios.get(`${BACKEND_BASE_URL}/api/user/orders?token=${encodeURIComponent(token)}`);
+  return res.data;
+});
+
+ipcMain.handle('api-get-devices', async (event, { token }) => {
+  const res = await axios.get(`${BACKEND_BASE_URL}/api/user/device?token=${encodeURIComponent(token)}`);
+  return res.data;
+});
+
+ipcMain.handle('api-reset-token', async (event, { token }) => {
+  const res = await axios.post(`${BACKEND_BASE_URL}/api/user/token/reset`, { token });
+  return res.data;
+});
+
+ipcMain.handle('api-report-device', async (event, { token, deviceId, deviceName }) => {
+  const res = await axios.post(`${BACKEND_BASE_URL}/api/user/device`, { token, deviceId, deviceName });
+  return res.data;
+});
+
+ipcMain.handle('api-invite-copy', async (event, { token }) => {
+  const res = await axios.post(`${BACKEND_BASE_URL}/api/user/invite/copy`, { token });
+  return res.data;
+});
+
 // --- Clash 控制 ---
 ipcMain.handle('clash-start', async (event, { token }) => {
   await startClash(token);

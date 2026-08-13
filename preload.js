@@ -20,6 +20,13 @@ contextBridge.exposeInMainWorld('api', {
   // 支付计费
   getPackages: () => ipcRenderer.invoke('api-get-packages'),
   createOrder: (token, packageId, payType, quantity) => ipcRenderer.invoke('api-create-order', { token, packageId, payType, quantity }),
+  checkin: (token) => ipcRenderer.invoke('api-checkin', { token }),
+  balanceRecharge: (token, amount) => ipcRenderer.invoke('api-balance-recharge', { token, amount }),
+  getOrders: (token) => ipcRenderer.invoke('api-get-orders', { token }),
+  getDevices: (token) => ipcRenderer.invoke('api-get-devices', { token }),
+  resetToken: (token) => ipcRenderer.invoke('api-reset-token', { token }),
+  reportDevice: (token, deviceId, deviceName) => ipcRenderer.invoke('api-report-device', { token, deviceId, deviceName }),
+  recordInviteCopy: (token) => ipcRenderer.invoke('api-invite-copy', { token }),
 
   // Clash 代理内核控制
   startClash: (token) => ipcRenderer.invoke('clash-start', { token }),
