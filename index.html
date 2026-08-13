@@ -1409,14 +1409,14 @@
     <!-- VIEW: 流量商店 -->
     <div class="tab-view" id="store-tab">
       <div class="card" style="max-width: 800px; margin: 0 auto; width: 100%;">
-        <h3 style="color:#38bdf8; margin-bottom: 0.5rem; text-align: center;">流量充值套餐 <small style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">有效期 30 天</small></h3>
+        <h3 style="color:#38bdf8; margin-bottom: 0.5rem; text-align: center;">流量套餐 <small style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">有效期 30 天</small></h3>
         <div class="package-grid" id="packageList">
           <!-- 动态载入限时充值包 -->
         </div>
       </div>
 
       <div class="card" style="max-width: 800px; margin: 1.5rem auto 0 auto; width: 100%;">
-        <h3 style="color:#10b981; margin-bottom: 0.5rem; text-align: center;">永久流量包 <small style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">永不过期</small></h3>
+        <h3 style="color:#10b981; margin-bottom: 0.5rem; text-align: center;">永久流量 <small style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">永不过期</small></h3>
         <div class="package-grid" id="packageListPerm">
           <!-- 动态载入永久流量包 -->
         </div>
@@ -1845,7 +1845,12 @@
   <div class="modal-overlay" id="devicesModal">
     <div class="modal" style="max-width: 640px; width: 92%; text-align:left;">
       <h3 style="text-align:center;">📱 设备管理 <small style="font-size:0.8rem; color:var(--text-muted);">(<span id="devCountText">0</span>/<span id="devMaxText">2</span>)</small></h3>
-      <div id="devicesListBody" style="max-height: 300px; overflow-y:auto; background:rgba(0,0,0,0.2); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem; font-size:0.85rem;">
+      <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.8rem;">设备数仅统计下载客户端（网页登录不计入设备数）。</p>
+      <div id="devicesListBody" style="max-height: 240px; overflow-y:auto; background:rgba(0,0,0,0.2); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem; font-size:0.85rem;">
+        加载中...
+      </div>
+      <div style="font-size:0.82rem; color:var(--text-muted); font-weight:600; margin:0.9rem 0 0.35rem;">登录记录（不计入设备数）</div>
+      <div id="loginLogListBody" style="max-height: 160px; overflow-y:auto; background:rgba(0,0,0,0.15); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem; font-size:0.82rem;">
         加载中...
       </div>
       <div style="display:flex; justify-content:flex-end; margin-top:0.9rem;">

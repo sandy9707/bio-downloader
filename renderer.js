@@ -1709,17 +1709,42 @@ async function loadDevices() {
     document.getElementById('devMaxText').textContent = max;
     if (!devices.length) {
       body.innerHTML = '<p style="color:var(--text-muted);">暂无在线设备。当前设备将在下次启动后自动上报。</p>';
+    } else {
+      body.innerHTML = devices.map(d => `
+        <div class="device-row-item">
+          <div>
+            <div style="font-weight:600;">${escapeHtml(d.deviceName || '未知设备')}</div>
+            <div style="font-size:0.75rem; color:var(--text-muted);">最后在线：${new Date(d.lastSeen).toLocaleString()}</div>
+          </div>
+        </div>`).join('');
+    }
+  } catch (e) {
+    body.innerHTML = '<p style="color:var(--text-muted);">设备列表加载失败</p>';
+  }
+  loadLoginLog();
+}
+
+// 加载登录记录(网页/客户端登录, 不计入设备数)
+async function loadLoginLog() {
+  const body = document.getElementById('loginLogListBody');
+  if (!body || !currentUser || !currentUser.token) return;
+  body.innerHTML = '加载中...';
+  try {
+    const res = await window.api.getLoginLog(currentUser.token);
+    const records = (res && res.records) || [];
+    if (!records.length) {
+      body.innerHTML = '<p style="color:var(--text-muted);">暂无登录记录。</p>';
       return;
     }
-    body.innerHTML = devices.map(d => `
+    body.innerHTML = records.map(r => `
       <div class="device-row-item">
-        <div>
-          <div style="font-weight:600;">${escapeHtml(d.deviceName || '未知设备')}</div>
-          <div style="font-size:0.75rem; color:var(--text-muted);">最后在线：${new Date(d.lastSeen).toLocaleString()}</div>
+        <div style="flex:1; min-width:0;">
+          <div style="font-weight:600;">${escapeHtml(r.source || '未知')}</div>
+          <div style="font-size:0.75rem; color:var(--text-muted);">${new Date(r.time).toLocaleString()}${r.ip ? ' · ' + escapeHtml(r.ip) : ''}</div>
         </div>
       </div>`).join('');
   } catch (e) {
-    body.innerHTML = '<p style="color:var(--text-muted);">设备列表加载失败</p>';
+    body.innerHTML = '<p style="color:var(--text-muted);">登录记录加载失败</p>';
   }
 }
 

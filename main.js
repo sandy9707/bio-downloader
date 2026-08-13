@@ -880,13 +880,13 @@ ipcMain.handle('select-directory', async () => {
 
 // --- 用户与支付 ---
 ipcMain.handle('api-register', async (event, { username, password, email, inviteCode }) => {
-  const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/register`, { username, password, email, inviteCode });
+  const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/register`, { username, password, email, inviteCode, source: 'desktop' });
   return res.data;
 });
 
 ipcMain.handle('api-login', async (event, { username, password }) => {
   try {
-    const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/login`, { username, password }, { timeout: 10000 });
+    const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/login`, { username, password, source: 'desktop' }, { timeout: 10000 });
     return res.data;
   } catch (err) {
     if (err.response && err.response.data) {
@@ -948,6 +948,11 @@ ipcMain.handle('api-get-orders', async (event, { token }) => {
 
 ipcMain.handle('api-get-devices', async (event, { token }) => {
   const res = await axios.get(`${BACKEND_BASE_URL}/api/user/device?token=${encodeURIComponent(token)}`);
+  return res.data;
+});
+
+ipcMain.handle('api-get-login-log', async (event, { token }) => {
+  const res = await axios.get(`${BACKEND_BASE_URL}/api/user/login-log?token=${encodeURIComponent(token)}`);
   return res.data;
 });
 

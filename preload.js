@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('api', {
   balanceRecharge: (token, amount) => ipcRenderer.invoke('api-balance-recharge', { token, amount }),
   getOrders: (token) => ipcRenderer.invoke('api-get-orders', { token }),
   getDevices: (token) => ipcRenderer.invoke('api-get-devices', { token }),
+  getLoginLog: (token) => ipcRenderer.invoke('api-get-login-log', { token }),
   resetToken: (token) => ipcRenderer.invoke('api-reset-token', { token }),
   reportDevice: (token, deviceId, deviceName) => ipcRenderer.invoke('api-report-device', { token, deviceId, deviceName }),
   recordInviteCopy: (token) => ipcRenderer.invoke('api-invite-copy', { token }),
