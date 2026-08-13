@@ -1176,6 +1176,23 @@ ipcMain.handle('check-for-updates', async (event, { advancedMode } = {}) => {
     const minClientVersion = res.data.minClientVersion || '1.0.0';
     const forceUpdate = compareVersions(currentVersion, minClientVersion) < 0;
 
+    // 当前客户端是否为预览版(版本含 -preview)
+    const isPreviewClient = /preview/i.test(String(currentVersion));
+
+    // 【预览版回滚正式版】当前客户端是预览版且开启高级模式时,即使正式版版本低于当前预览版,
+    // 也把正式版清单作为"稳定版可回滚选项"返回,供用户随时回滚到正式版。
+    // 普通(非高级模式)预览版用户仍只跟随预览版,不显示回滚(避免打扰)。
+    let stableRollback = null;
+    if (isPreviewClient && advancedMode && res.data && res.data.patchUrl) {
+      stableRollback = {
+        version: latestVersion,
+        releaseNotes: res.data.releaseNotes || '正式稳定版',
+        patchUrl: String(res.data.patchUrl).startsWith('http') ? res.data.patchUrl : `${BACKEND_BASE_URL}${res.data.patchUrl}`,
+        winUrl: res.data.winUrl ? `${BACKEND_BASE_URL}${res.data.winUrl}` : null,
+        macUrl: res.data.macUrl ? `${BACKEND_BASE_URL}${res.data.macUrl}` : null
+      };
+    }
+
     // 2.x 升级桥接(可选):1.x 清单若含 upgrade2x 且可热更新,则在常规更新之后额外展示"升级到 2.x"卡片
     let upgrade2x = null;
     const u = res.data.upgrade2x;
@@ -1191,7 +1208,6 @@ ipcMain.handle('check-for-updates', async (event, { advancedMode } = {}) => {
     //   - 高级模式(advancedMode)开启:正式版用户也能看到预览版(双选)
     //   - 当前客户端本身是预览版(版本含 -preview):自动跟随预览版通道(无需手动开高级模式)
     // 正式版客户端未开高级模式 → 不请求 P2,预览版更新对其完全不可见(不污染正式版)
-    const isPreviewClient = /preview/i.test(String(currentVersion));
     let preview = null;
     if (advancedMode || isPreviewClient) {
       try {
@@ -1227,7 +1243,8 @@ ipcMain.handle('check-for-updates', async (event, { advancedMode } = {}) => {
       macUrl: res.data.macUrl ? `${BACKEND_BASE_URL}${res.data.macUrl}` : null,
       releaseNotes: res.data.releaseNotes,
       upgrade2x,
-      preview
+      preview,
+      stableRollback
     };
   } catch (err) {
     console.error('Check for updates failed:', err.message);

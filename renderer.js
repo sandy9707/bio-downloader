@@ -424,22 +424,33 @@ async function triggerCheckForUpdates() {
     const advancedMode = await isAdvancedModeEnabled();
     const res = await window.api.checkForUpdates(advancedMode);
     if (res.success) {
-      if (res.hasUpdate) {
+      // 正式版更新卡片:有正式版新版本 或 有稳定版回滚选项(预览版用户开高级模式回滚到正式版)时显示
+      const stableRollback = res.stableRollback;
+      if (res.hasUpdate || stableRollback) {
         updateInfoGlobal = res;
-        document.getElementById('updateLatestVersion').innerText = res.latestVersion;
-        document.getElementById('updateReleaseNotes').innerText = res.releaseNotes;
+        const stableVersion = res.hasUpdate ? res.latestVersion : stableRollback.version;
+        const stableNotes = res.hasUpdate ? res.releaseNotes : stableRollback.releaseNotes;
+        document.getElementById('updateLatestVersion').innerText = stableVersion;
+        document.getElementById('updateReleaseNotes').innerText = stableNotes;
 
         const btnHot = document.getElementById('btnHotPatchUpdate');
         if (btnHot) {
           if (res.patchUrl) {
             btnHot.style.display = 'inline-block';
+            btnHot.innerText = res.hasUpdate ? '⚡ 极速平滑热更新 (仅 3MB)' : '⚡ 回滚到正式版 (热更新)';
           } else {
             btnHot.style.display = 'none';
           }
         }
 
         document.getElementById('updateCard').style.display = 'block';
-        showToast('检测到新版本，请及时更新', 'success');
+        const cardTitle = document.querySelector('#updateCard span');
+        if (cardTitle) {
+          cardTitle.innerHTML = res.hasUpdate
+            ? `🎁 检测到新版本 v<span id="updateLatestVersion">${stableVersion}</span>`
+            : `🔄 正式版 v<span id="updateLatestVersion">${stableVersion}</span> 可回滚`;
+        }
+        showToast(res.hasUpdate ? '检测到新版本，请及时更新' : '检测到正式版可回滚', res.hasUpdate ? 'success' : 'info');
       } else {
         // 正式版通道已是最新,但预览版通道可能仍有新版本:避免误导提示
         // (预览版客户端自动跟随 P2 通道;正式版用户需开启高级模式才能看到预览版)
@@ -1489,20 +1500,24 @@ async function checkPayArrival() {
 let checkinToday = false;
 
 function updateCheckinButton() {
-  const btn = document.getElementById('btnDailyCheckin');
-  if (!btn) return;
   const today = new Date().toISOString().slice(0, 10);
   const signed = localStorage.getItem('bd_checkin_' + today);
   checkinToday = !!signed;
-  if (signed) {
-    btn.innerText = '📅 明日再来';
-    btn.disabled = true;
-    btn.style.opacity = '0.6';
-  } else {
-    btn.innerText = '📅 每日签到';
-    btn.disabled = false;
-    btn.style.opacity = '1';
-  }
+  const setBtn = (id, signedText, unsigText) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    if (signed) {
+      btn.innerText = signedText;
+      btn.disabled = true;
+      btn.style.opacity = '0.6';
+    } else {
+      btn.innerText = unsigText;
+      btn.disabled = false;
+      btn.style.opacity = '1';
+    }
+  };
+  setBtn('btnDailyCheckin', '📅 明日再来', '📅 每日签到');
+  setBtn('btnHeaderCheckin', '📅 明日再来', '📅 签到');
 }
 
 async function handleCheckin() {
