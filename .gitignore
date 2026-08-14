@@ -19,6 +19,7 @@ config.json
 03_desktop_app/
 04_password_reset_email_service/
 05_logo/
+06_cloud_download/
 scratch/
 参考/
 需求.md
