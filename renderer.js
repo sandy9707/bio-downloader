@@ -1319,6 +1319,25 @@ async function refreshUserInfo() {
   }
 }
 
+async function handleClientRedeem() {
+  const input = document.getElementById('clientRedeemCode');
+  const code = (input ? input.value : '').trim();
+  if (!code) { showToast('请输入兑换码', 'error'); return; }
+  if (!currentUser || !currentUser.token) { showToast('请先登录账户', 'error'); return; }
+  try {
+    const res = await window.api.redeemCode(currentUser.token, code);
+    if (res && res.success) {
+      showToast(res.message || '兑换成功', 'success');
+      if (input) input.value = '';
+      await verifyToken(currentUser.token); // 刷新账户信息
+    } else {
+      showToast((res && res.error) || '兑换失败', 'error');
+    }
+  } catch (e) {
+    showToast('兑换请求失败: ' + e.message, 'error');
+  }
+}
+
 function updateTrafficProgressBar(consumed, limit) {
   const textEl = document.getElementById('headerTrafficText');
   const fillEl = document.getElementById('headerTrafficFill') || document.getElementById('headerTrafficProgress');

@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('api', {
   register: (username, password, email, inviteCode) => ipcRenderer.invoke('api-register', { username, password, email, inviteCode }),
   login: (username, password) => ipcRenderer.invoke('api-login', { username, password }),
   getUserInfo: (token) => ipcRenderer.invoke('api-get-user-info', { token }),
+  redeemCode: (token, code) => ipcRenderer.invoke('api-redeem', { token, code }),
   requestEmailBindCode: (token, email) => ipcRenderer.invoke('api-request-email-bind-code', { token, email }),
   confirmEmailBind: (token, email, code) => ipcRenderer.invoke('api-confirm-email-bind', { token, email, code }),
   requestPasswordReset: (email) => ipcRenderer.invoke('api-request-password-reset', { email }),

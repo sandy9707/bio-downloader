@@ -901,6 +901,16 @@ ipcMain.handle('api-get-user-info', async (event, { token }) => {
   return res.data;
 });
 
+ipcMain.handle('api-redeem', async (event, { token, code }) => {
+  try {
+    const res = await axios.post(`${BACKEND_BASE_URL}/api/user/redeem`, { token, code }, { timeout: 15000 });
+    return res.data;
+  } catch (err) {
+    if (err.response && err.response.data) return err.response.data;
+    return { error: `兑换请求失败: ${err.message}` };
+  }
+});
+
 ipcMain.handle('api-request-email-bind-code', async (event, { token, email }) => {
   const res = await axios.post(`${BACKEND_BASE_URL}/api/user/email/request-code`, { token, email });
   return res.data;
