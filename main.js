@@ -1840,7 +1840,38 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
   return files;
 });
 
-// --- 下载调度引擎 (支持多任务并行调度) ---
+// --- BioSample 查询: 输入 SAMN 编号 → 返回关联 SRA run (SRR) 列表 ---
+ipcMain.handle('query-biosample', async (event, { biosample }) => {
+  const acc = String(biosample || '').trim();
+  if (!acc) throw new Error('请输入 BioSample 编号 (SAMN...)');
+  const proxyOpts = clashProcess ? { proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 } } : false;
+
+  // 1. esearch: SAMN → SRA 记录 uid 列表
+  const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=sra&term=${encodeURIComponent(acc)}&retmode=json&retmax=200`;
+  const searchRes = await axios.get(searchUrl, { timeout: 20000, ...(proxyOpts ? { proxy: proxyOpts.proxy } : {}) });
+  const idList = (searchRes.data?.esearchresult?.idlist) || [];
+  if (idList.length === 0) throw new Error(`未找到 BioSample ${acc} 关联的 SRA 记录`);
+
+  // 2. esummary: 拿每个 SRA 记录的 runs (SRR)
+  const runs = [];
+  const batchSize = 50;
+  for (let i = 0; i < idList.length; i += batchSize) {
+    const batch = idList.slice(i, i + batchSize);
+    const sumUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=sra&id=${batch.join(',')}&retmode=json`;
+    const sumRes = await axios.get(sumUrl, { timeout: 20000, ...(proxyOpts ? { proxy: proxyOpts.proxy } : {}) });
+    const result = sumRes.data?.result || {};
+    for (const uid of (result.uids || [])) {
+      const rec = result[uid];
+      if (!rec || !rec.runs) continue;
+      // 解析 runs XML: <Run acc="SRR..." .../>
+      const runMatches = String(rec.runs).matchAll(/<Run\s+acc="([^"]+)"/g);
+      for (const m of runMatches) runs.push(m[1]);
+    }
+  }
+
+  if (runs.length === 0) throw new Error(`BioSample ${acc} 未找到可下载的 SRA run`);
+  return { biosample: acc, runs: [...new Set(runs)], count: new Set(runs).size };
+});
 ipcMain.handle('start-download', async (event, { files, targetDir, token, maxConcurrent }) => {
   if (!fs.existsSync(targetDir)) {
     fs.mkdirSync(targetDir, { recursive: true });

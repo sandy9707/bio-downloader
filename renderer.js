@@ -134,6 +134,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // 加载并渲染版本号
   try {
     const version = await window.api.getAppVersion();
+    window.__APP_VERSION__ = version;
     const logoEl = document.querySelector('.logo');
     if (logoEl) {
       logoEl.innerHTML = `BioDownloader Pro <span style="font-size: 0.7rem; vertical-align: middle; opacity: 0.75; font-weight: normal; margin-left: 0.25rem;">v${version}</span>`;
@@ -142,6 +143,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (versionEl) versionEl.innerText = 'v' + version;
     const sidebarVerEl = document.getElementById('sidebarVersion');
     if (sidebarVerEl) sidebarVerEl.innerText = 'v' + version;
+    // 预览版(含 -preview)才显示 BioSample 查询按钮(抢先体验功能)
+    const biosampleBtn = document.getElementById('biosampleBtn');
+    if (biosampleBtn) biosampleBtn.style.display = /preview/i.test(String(version)) ? 'inline-block' : 'none';
   } catch (e) {
     console.error('获取版本号失败:', e);
   }
@@ -307,6 +311,7 @@ function switchTab(tabId) {
     'extraction-tab': '引导式提取',
     'transfers-tab': '传输列表',
     'store-tab': '流量商店',
+    'cloud-tab': '云下载',
     'profile-tab': '个人中心',
     'settings-tab': '全局设置'
   };
@@ -806,8 +811,32 @@ async function openReleasePage() {
 // ==========================================
 // 【文件大小校验与渲染】
 // ==========================================
-async function checkSizes() {
-  const inputVal = document.getElementById('accInput-' + currentDownloadType).value.trim();
+// BioSample 查询: SAMN → SRA run 列表, 填入 SRA 输入框并核验大小
+async function queryBioSample() {
+  const biosample = prompt('请输入 BioSample 编号 (如 SAMN03174610):');
+  if (!biosample || !biosample.trim()) return;
+  const resultEl = document.getElementById('biosampleResult');
+  if (resultEl) { resultEl.style.display = 'block'; resultEl.textContent = '正在查询 ' + biosample.trim() + ' 的 SRA run...'; }
+  try {
+    const res = await window.api.queryBioSample(biosample.trim());
+    const sraInput = document.getElementById('accInput-sra_raw');
+    if (!sraInput) return;
+    // 填入输入框(追加, 保留已有编号), 用换行分隔
+    const existing = sraInput.value.trim().split(/[\s\n,;]+/).filter(Boolean);
+    const merged = [...new Set([...existing, ...res.runs])];
+    sraInput.value = merged.join('\n');
+    if (resultEl) resultEl.textContent = `✅ 已添加 ${res.count} 个 SRA run (${res.biosample})，正在核验大小...`;
+    // 自动触发核验显示总大小
+    await checkSizes();
+    if (resultEl) resultEl.textContent = `✅ ${res.biosample} 已解析 ${res.count} 个 SRA run 并加入输入框。如需删除部分编号，可直接在输入框编辑。`;
+    showToast(`已添加 ${res.count} 个 SRA run`, 'success');
+  } catch (e) {
+    if (resultEl) resultEl.textContent = '❌ 查询失败: ' + e.message;
+    showToast('BioSample 查询失败: ' + e.message, 'error');
+  }
+}
+
+async function checkSizes() {  const inputVal = document.getElementById('accInput-' + currentDownloadType).value.trim();
   if (!inputVal) {
     showToast('请输入有效的原始编号或下载链接', 'error');
     return;

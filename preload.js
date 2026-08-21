@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // 下载管理
   checkSize: (type, inputVal) => ipcRenderer.invoke('check-download-size', { type, inputVal }),
+  queryBioSample: (biosample) => ipcRenderer.invoke('query-biosample', { biosample }),
   startDownload: (files, targetDir, token, maxConcurrent) => ipcRenderer.invoke('start-download', { files, targetDir, token, maxConcurrent }),
   cancelDownload: (fileIndex) => ipcRenderer.invoke('cancel-download', fileIndex),
   pauseDownload: (fileIndex) => ipcRenderer.invoke('pause-download', fileIndex),
