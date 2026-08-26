@@ -828,6 +828,50 @@ async function openReleasePage() {
 // ==========================================
 // 【文件大小校验与渲染】
 // ==========================================
+// BioProject 查询: PRJNA/PRJEB/PRJDB → Run 列表，可明确采用为 SRA 或 EBI 下载
+async function queryBioProject() {
+  const input = document.getElementById('bioProjectInput');
+  const queryBtn = document.getElementById('bioProjectQueryBtn');
+  const resultEl = document.getElementById('bioProjectResult');
+  const project = String(input?.value || '').trim().toUpperCase();
+  if (!project) {
+    showToast('请输入 BioProject 编号', 'error');
+    return;
+  }
+  if (input) input.value = project;
+  if (queryBtn) queryBtn.disabled = true;
+  if (resultEl) resultEl.textContent = `正在解析 ${project}...`;
+  try {
+    const res = await window.api.queryBioProject(project);
+    window.bioProjectRuns = res.runs;
+    if (resultEl) resultEl.textContent = `已解析 ${res.count} 个 Run。请选择采用为 SRA 或 EBI，随后可继续编辑编号并校验大小。`;
+    document.getElementById('bioProjectAdoptActions').style.display = 'flex';
+    showToast(`${project} 已解析 ${res.count} 个 Run`, 'success');
+  } catch (e) {
+    window.bioProjectRuns = [];
+    document.getElementById('bioProjectAdoptActions').style.display = 'none';
+    if (resultEl) resultEl.textContent = '查询失败：' + e.message;
+    showToast('BioProject 查询失败：' + e.message, 'error');
+  } finally {
+    if (queryBtn) queryBtn.disabled = false;
+  }
+}
+
+function adoptBioProjectRuns(targetType) {
+  const runs = Array.isArray(window.bioProjectRuns) ? window.bioProjectRuns : [];
+  if (!runs.length) {
+    showToast('请先查询 BioProject', 'warning');
+    return;
+  }
+  const target = document.getElementById('accInput-' + targetType);
+  const pill = document.querySelector(`.pill-btn[data-download-type="${targetType}"]`);
+  if (!target || !pill) return;
+  const existing = target.value.trim().split(/[\s,;]+/).filter(Boolean);
+  target.value = [...new Set([...existing, ...runs])].join('\n');
+  switchDownloadType(pill, targetType);
+  showToast(`已采用 ${runs.length} 个 Run 为 ${targetType === 'ebi_raw' ? 'EBI' : 'SRA'} 下载`, 'success');
+}
+
 // BioSample 查询: SAMN → SRA run 列表, 填入 SRA 输入框并核验大小
 async function queryBioSample() {
   const biosample = prompt('请输入 BioSample 编号 (如 SAMN03174610):');

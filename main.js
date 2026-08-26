@@ -1840,6 +1840,37 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
   return files;
 });
 
+// --- BioProject 查询: 输入 PRJNA/PRJEB/PRJDB → 返回关联 Run 列表 ---
+ipcMain.handle('query-bioproject', async (event, { project }) => {
+  const acc = String(project || '').trim().toUpperCase();
+  if (!/^(PRJNA|PRJEB|PRJDB)\d+$/.test(acc)) {
+    throw new Error('请输入有效的 BioProject 编号，例如 PRJNA727404');
+  }
+  const params = new URLSearchParams({
+    result: 'read_run',
+    query: `study_accession="${acc}"`,
+    fields: 'run_accession',
+    format: 'json',
+    limit: '0'
+  });
+  const url = `https://www.ebi.ac.uk/ena/portal/api/search?${params.toString()}`;
+  const request = (useProxy) => axios.get(url, {
+    timeout: 30000,
+    ...(useProxy ? { proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 } } : {})
+  });
+  let response;
+  try {
+    response = await request(Boolean(clashProcess));
+  } catch (firstError) {
+    if (!clashProcess) throw firstError;
+    response = await request(false);
+  }
+  const rows = Array.isArray(response.data) ? response.data : [];
+  const runs = [...new Set(rows.map(row => String(row.run_accession || '').trim()).filter(Boolean))];
+  if (!runs.length) throw new Error(`未找到 BioProject ${acc} 关联的可下载 Run`);
+  return { project: acc, runs, count: runs.length };
+});
+
 // --- BioSample 查询: 输入 SAMN 编号 → 返回关联 SRA run (SRR) 列表 ---
 ipcMain.handle('query-biosample', async (event, { biosample }) => {
   const acc = String(biosample || '').trim();

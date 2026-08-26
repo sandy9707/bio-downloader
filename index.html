@@ -1275,8 +1275,8 @@
     <div class="tab-view active" id="download-hub">
       <div class="hub-top-row">
       <div class="btn-group" style="position: relative;">
-        <button class="pill-btn active" onclick="switchDownloadType(this, 'sra_raw')">SRA Raw</button>
-        <button class="pill-btn" onclick="switchDownloadType(this, 'ebi_raw')">EBI Raw</button>
+        <button class="pill-btn active" data-download-type="sra_raw" onclick="switchDownloadType(this, 'sra_raw')">SRA Raw</button>
+        <button class="pill-btn" data-download-type="ebi_raw" onclick="switchDownloadType(this, 'ebi_raw')">EBI Raw</button>
         <button class="pill-btn" onclick="switchDownloadType(this, 'geo_suppl')">GEO Suppl</button>
         <button class="pill-btn" onclick="switchDownloadType(this, 'links')">Target Links</button>
 
@@ -1307,6 +1307,18 @@
       </div>
 
       <div class="card">
+        <div class="form-group" style="padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-secondary);">
+          <label for="bioProjectInput">BioProject 查询 Run 编号</label>
+          <div class="dir-select-group" style="margin-top: 0.5rem; flex-wrap: wrap;">
+            <input type="text" id="bioProjectInput" placeholder="例如: PRJNA727404" value="PRJNA727404" oninput="this.value=this.value.toUpperCase()">
+            <button class="btn btn-secondary" id="bioProjectQueryBtn" onclick="queryBioProject()">查询 Project</button>
+          </div>
+          <div id="bioProjectResult" style="margin-top:0.6rem; font-size:0.82rem; color:var(--text-muted);">查询后可将全部 Run 采用为 SRA 或 EBI 下载。</div>
+          <div id="bioProjectAdoptActions" style="display:none; gap:0.6rem; flex-wrap:wrap; margin-top:0.75rem;">
+            <button class="btn btn-primary btn-sm" onclick="adoptBioProjectRuns('sra_raw')">全部采用为 SRA</button>
+            <button class="btn btn-secondary btn-sm" onclick="adoptBioProjectRuns('ebi_raw')">全部采用为 EBI</button>
+          </div>
+        </div>
         <div class="form-group" id="group-sra_raw">
           <label>请输入 SRA 原始数据编号 (多项使用换行或空格分隔)
             <button class="btn btn-secondary btn-sm" id="biosampleBtn" style="margin-left: 8px; padding: 0.15rem 0.6rem; font-size: 0.78rem; display:none;" onclick="queryBioSample()">🔍 用 BioSample 查询编号</button>
