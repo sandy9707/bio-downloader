@@ -316,7 +316,24 @@ function switchTab(tabId) {
     'settings-tab': '全局设置'
   };
   document.getElementById('tabTitle').innerText = titles[tabId] || '下载中心';
+  if (tabId === 'cloud-tab') syncCloudWorkspaceLogin();
 }
+
+// 云下载只维护网页端一套实现；桌面端将当前登录令牌同步到隔离的官方同源 webview。
+async function syncCloudWorkspaceLogin() {
+  const webview = document.getElementById('cloudWorkspaceWebview');
+  if (!webview || !currentUser?.token || typeof webview.executeJavaScript !== 'function') return;
+  const token = JSON.stringify(currentUser.token);
+  try {
+    const changed = await webview.executeJavaScript(`(() => { const next=${token}; if (localStorage.getItem('bd_token') === next) return false; localStorage.setItem('bd_token', next); return true; })()`);
+    if (changed) webview.reload();
+  } catch (e) { console.warn('云下载登录状态同步失败:', e.message); }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const webview = document.getElementById('cloudWorkspaceWebview');
+  if (webview) webview.addEventListener('dom-ready', syncCloudWorkspaceLogin);
+});
 
 function toggleMoreMenu(e) {
   if (e) e.stopPropagation();

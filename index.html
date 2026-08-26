@@ -1451,20 +1451,9 @@
       </div>
     </div>
 
-    <!-- VIEW: 云下载 (测试功能提示页) -->
+    <!-- VIEW: 云下载（复用线上同一套模块，避免桌面端/网页端双份维护） -->
     <div class="tab-view" id="cloud-tab">
-      <div class="card" style="max-width: 620px; margin: 0 auto; width: 100%; text-align: center; padding: 2.5rem 2rem;">
-        <div style="font-size: 3rem; margin-bottom: 1rem;">☁️</div>
-        <h3 style="font-weight: 800; color: var(--accent, #6366f1); margin-bottom: 0.5rem;">云下载 · 测试功能</h3>
-        <p style="font-size: 0.9rem; color: var(--text-muted); line-height: 1.8;">
-          云下载目前在云端服务器上运行，将您提交的编号（SRA/EBI/GEO/直链）下载到服务器后上传至百度网盘。<br>
-          <strong style="color: var(--accent, #6366f1);">流量按双倍计费</strong>（下载 1× + 上传 1×），提交时冻结，按实际进展扣减，任务结束后剩余自动返还。
-        </p>
-        <div style="margin-top: 1.5rem;">
-          <a class="btn btn-primary" style="text-decoration: none;" href="https://biodown.yeyeziblog.eu.org/user" target="_blank">前往网页用户中心使用云下载 →</a>
-        </div>
-        <p style="font-size: 0.78rem; color: var(--text-muted); margin-top: 1rem;">功能稳定后本页面将替换为客户端内置的完整云下载界面。</p>
-      </div>
+      <webview id="cloudWorkspaceWebview" src="https://biodown.ye.aimeals.cn/user/cloud?embed=cloud" partition="persist:biodl-cloud" style="width:100%;height:calc(100vh - 115px);border:0;border-radius:12px;background:#f7f8fc;"></webview>
     </div>
 
     <!-- VIEW: 我的 (个人中心与设置) -->
