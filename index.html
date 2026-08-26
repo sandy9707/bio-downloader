@@ -1274,43 +1274,16 @@
     <!-- VIEW: 下载中心 -->
     <div class="tab-view active" id="download-hub">
       <div class="hub-top-row">
-      <div class="btn-group" style="position: relative;">
-        <button class="pill-btn active" data-download-type="sra_raw" onclick="switchDownloadType(this, 'sra_raw')">SRA Raw</button>
-        <button class="pill-btn" data-download-type="ebi_raw" onclick="switchDownloadType(this, 'ebi_raw')">EBI Raw</button>
-        <button class="pill-btn" onclick="switchDownloadType(this, 'geo_suppl')">GEO Suppl</button>
-        <button class="pill-btn" onclick="switchDownloadType(this, 'links')">Target Links</button>
-
-        <!-- 更多扩展数据源下拉菜单 -->
-        <div class="more-dropdown-wrapper" style="position: relative; display: inline-block;">
-          <button class="pill-btn" id="moreDropdownBtn" onclick="toggleMoreMenu(event)">
-            <span id="moreDropdownText">更多数据源 ✨</span>
-            <span style="font-size: 0.65rem; margin-left: 3px;">▼</span>
-          </button>
-          <div class="more-dropdown-menu" id="moreDropdownMenu" style="display: none; position: absolute; top: calc(100% + 6px); left: 0; background: var(--modal-bg); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.25); z-index: 100; min-width: 150px; overflow: hidden; padding: 4px 0;">
-            <div class="dropdown-item" onclick="selectMoreType(this, 'zenodo', 'Zenodo')" style="padding: 8px 14px; font-size: 0.85rem; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 8px; transition: background 0.2s;">
-              <span style="font-size: 0.9rem;">📦</span>
-              <span>Zenodo</span>
-            </div>
-            <div class="dropdown-item" onclick="selectMoreType(this, 'huggingface', 'Hugging Face')" style="padding: 8px 14px; font-size: 0.85rem; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 8px; transition: background 0.2s;">
-              <span style="font-size: 0.9rem;">🤗</span>
-              <span>Hugging Face</span>
-            </div>
-            <div style="height:1px; background:var(--border-color); margin:4px 0;"></div>
-            <div class="dropdown-item" onclick="openCurlModal()" style="padding: 8px 14px; font-size: 0.85rem; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 8px; transition: background 0.2s;">
-              <span style="font-size: 0.9rem;">📋</span>
-              <span>粘贴 cURL 下载</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      <div class="btn-group" id="localSourceGrid" style="position: relative;"></div>
+      <div id="localOtherSources" style="display:none; gap:0.5rem; flex-wrap:wrap;"></div>
       <div class="extraction-entry" onclick="openExtraction()" title="打开内置浏览器：拦截下载 / 嗅探资源 / 代码框"><span class="ex-ico">🧭</span><span>引导式提取</span></div>
       </div>
 
       <div class="card">
-        <div class="form-group" style="padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-secondary);">
+        <div class="form-group" id="bioProjectPanel" style="padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-secondary);">
           <label for="bioProjectInput">BioProject 查询 Run 编号</label>
           <div class="dir-select-group" style="margin-top: 0.5rem; flex-wrap: wrap;">
-            <input type="text" id="bioProjectInput" placeholder="例如: PRJNA727404" value="PRJNA727404" oninput="this.value=this.value.toUpperCase()">
+            <input type="text" id="bioProjectInput" placeholder="例如: PRJNA727404" value="PRJNA727404" oninput="this.value=BioDownloadSources.normalizeValue('bioproject',this.value)">
             <button class="btn btn-secondary" id="bioProjectQueryBtn" onclick="queryBioProject()">查询 Project</button>
           </div>
           <div id="bioProjectResult" style="margin-top:0.6rem; font-size:0.82rem; color:var(--text-muted);">查询后可将全部 Run 采用为 SRA 或 EBI 下载。</div>
@@ -1323,28 +1296,32 @@
           <label>请输入 SRA 原始数据编号 (多项使用换行或空格分隔)
             <button class="btn btn-secondary btn-sm" id="biosampleBtn" style="margin-left: 8px; padding: 0.15rem 0.6rem; font-size: 0.78rem; display:none;" onclick="queryBioSample()">🔍 用 BioSample 查询编号</button>
           </label>
-          <textarea id="accInput-sra_raw" rows="4" placeholder="例如: SRR15438848">SRR15438848</textarea>
+          <textarea id="accInput-sra_raw" rows="6"></textarea>
           <div id="biosampleResult" style="display:none; margin-top:0.5rem; font-size:0.82rem; color:var(--text-muted);"></div>
         </div>
         <div class="form-group" id="group-ebi_raw" style="display:none;">
           <label>请输入 EBI 原始数据编号 (优先拉取 EBI 高速 Fastq，无则回退 SRA)</label>
-          <textarea id="accInput-ebi_raw" rows="4" placeholder="例如: SRR15438848">SRR15438848</textarea>
+          <textarea id="accInput-ebi_raw" rows="6"></textarea>
+        </div>
+        <div class="form-group" id="group-ena_raw" style="display:none;">
+          <label>请输入 ENA Run 编号（下载公开 FASTQ 文件）</label>
+          <textarea id="accInput-ena_raw" rows="6"></textarea>
         </div>
         <div class="form-group" id="group-geo_suppl" style="display:none;">
           <label>请输入 GEO 系列号 (将自动提取页面下的全部补充文件)</label>
-          <textarea id="accInput-geo_suppl" rows="4" placeholder="例如: GSE153781">GSE153781</textarea>
+          <textarea id="accInput-geo_suppl" rows="6"></textarea>
         </div>
         <div class="form-group" id="group-links" style="display:none;">
           <label>请输入直接下载链接 (多项使用换行分隔)</label>
-          <textarea id="accInput-links" rows="4" placeholder="例如: https://example.com/file.fq.gz">https://ftp.ncbi.nlm.nih.gov/geo/series/GSE153nnn/GSE153781/suppl/GSE153781_Annotated_lncRNA_FPKM.txt.gz</textarea>
+          <textarea id="accInput-links" rows="6"></textarea>
         </div>
         <div class="form-group" id="group-zenodo" style="display:none;">
           <label>请输入 Zenodo 记录编号或链接 (将自动解析并提取全量附件数据)</label>
-          <textarea id="accInput-zenodo" rows="4" placeholder="例如: 10808269 或 https://zenodo.org/records/10808269">10808269</textarea>
+          <textarea id="accInput-zenodo" rows="6"></textarea>
         </div>
         <div class="form-group" id="group-huggingface" style="display:none;">
           <label>请输入 Hugging Face 数据集/模型 ID 或文件直链 (多项使用换行分隔)</label>
-          <textarea id="accInput-huggingface" rows="4" placeholder="例如: tatsu-lab/alpaca 或 Qwen/Qwen2.5-0.5B">tatsu-lab/alpaca</textarea>
+          <textarea id="accInput-huggingface" rows="6"></textarea>
         </div>
 
         <div class="form-group">
@@ -1974,6 +1951,8 @@
   <div class="notification" id="notificationToast">提示信息</div>
 
   <!-- 载入渲染器逻辑 -->
+  <script src="shared/download-sources.js"></script>
+  <script src="shared/download-sources.js"></script>
   <script src="renderer.js"></script>
   <script>
     function openQrLightbox(imgSrc) {

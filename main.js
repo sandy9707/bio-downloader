@@ -1611,7 +1611,7 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
     });
     const results = await Promise.all(promises);
     files.push(...results);
-  } else if (type === 'ebi_raw') {
+  } else if (type === 'ebi_raw' || type === 'ena_raw') {
     const promises = ids.map(async (acc) => {
       try {
         const enaUrl = `https://www.ebi.ac.uk/ena/portal/api/filereport?accession=${acc}&result=read_run&fields=fastq_ftp&format=json`;

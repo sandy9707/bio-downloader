@@ -5,6 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node scripts/check-shared-sources.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder"
   },
@@ -37,6 +38,7 @@
       "logo.png",
       "img/group_qrcode.jpg",
       "speedtest.html",
+      "shared/**/*",
       "package.json",
       "icons/**/*"
     ],

@@ -2,7 +2,7 @@
 // 【全局状态管理】
 // ==========================================
 let currentTab = 'download-hub';
-let currentDownloadType = 'sra_raw';
+let currentDownloadType = 'bioproject';
 let currentUser = null;
 let clashToggleBusy = false; // 手动切换加速器期间,阻止 3s 轮询覆盖开关状态
 let currentQueue = [];
@@ -18,6 +18,8 @@ function escapeHtml(s) {
 
 // 队列空态提示文案(随数据源切换,避免 Zenodo/HuggingFace/直链 下仍提示 SRA/EBI/GEO)
 function getQueueEmptyHint() {
+  const sharedSource = window.BioDownloadSources?.byId?.[currentDownloadType];
+  if (sharedSource) return `${sharedSource.placeholder}，点击“检验下载大小”后生成下载队列`;
   const hints = {
     sra_raw: '请输入 SRA 编号(如 SRR1234567),点击"检验下载大小"后自动生成下载队列',
     ebi_raw: '请输入 EBI / ENA 编号,点击"检验下载大小"后自动生成下载队列',
@@ -41,7 +43,9 @@ let maxConcurrentDownloadsSetting = 3;
 
 // 存储下载中心不同 Tab 的独立状态，防止切换时状态丢失与互相覆盖
 const tabStates = {
+  bioproject: { queue: [], checkSizeBtnDisabled: true, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
   sra_raw: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
+  ena_raw: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
   ebi_raw: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
   geo_suppl: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
   zenodo: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
@@ -125,6 +129,7 @@ document.addEventListener('keydown', (e) => {
 
 // 初始化加载 settings 和验证登录
 window.addEventListener('DOMContentLoaded', async () => {
+  renderLocalDownloadSources();
   // 初始化登录/注册表单显示状态
   switchAuthTab('login');
 
@@ -362,6 +367,31 @@ function selectMoreType(el, type, labelName) {
   switchDownloadType(btn, type);
 }
 
+function selectLocalSource(type, btn) {
+  if (type === 'other') {
+    document.getElementById('localOtherSources').style.display = 'flex';
+    document.querySelectorAll('#localSourceGrid .pill-btn').forEach(b => b.classList.toggle('active', b.dataset.type === 'other'));
+    return;
+  }
+  document.getElementById('localOtherSources').style.display = BioDownloadSources.extras.some(s => s.id === type) ? 'flex' : 'none';
+  switchDownloadType(btn, type);
+}
+
+function renderLocalDownloadSources() {
+  const grid = document.getElementById('localSourceGrid');
+  if (!grid || !window.BioDownloadSources) return;
+  grid.innerHTML = BioDownloadSources.renderPrimaryButtons('selectLocalSource', 'pill-btn');
+  document.getElementById('localOtherSources').innerHTML = BioDownloadSources.extras.map(s => `<button class="pill-btn" onclick="selectLocalSource('${s.id}',this)">${s.label}</button>`).join('');
+  BioDownloadSources.all.filter(s => !s.project).forEach((source) => {
+    const input = document.getElementById('accInput-' + source.id);
+    if (!input) return;
+    input.placeholder = source.placeholder;
+    input.value = source.example;
+  });
+  const first = grid.querySelector('[data-type="bioproject"]');
+  if (first) switchDownloadType(first, 'bioproject');
+}
+
 function switchDownloadType(btn, type) {
   if (isDownloading) {
     showToast('下载正在进行中，请先取消当前下载或等待其完成再切换', 'warning');
@@ -386,11 +416,13 @@ function switchDownloadType(btn, type) {
   }
 
   currentDownloadType = type;
+  const checkBtn = document.getElementById('checkSizeBtn');
+  if (checkBtn) checkBtn.style.display = type === 'bioproject' ? 'none' : 'block';
 
   // 3. 切换输入框的可见性
-  const types = ['sra_raw', 'ebi_raw', 'geo_suppl', 'links', 'zenodo', 'huggingface'];
+  const types = ['bioproject', 'sra_raw', 'ena_raw', 'ebi_raw', 'geo_suppl', 'links', 'zenodo', 'huggingface'];
   types.forEach(t => {
-    const el = document.getElementById('group-' + t);
+    const el = t === 'bioproject' ? document.getElementById('bioProjectPanel') : document.getElementById('group-' + t);
     if (el) el.style.display = t === type ? 'flex' : 'none';
   });
   
@@ -897,7 +929,9 @@ async function queryBioSample() {
   }
 }
 
-async function checkSizes() {  const inputVal = document.getElementById('accInput-' + currentDownloadType).value.trim();
+async function checkSizes() {  const input = document.getElementById('accInput-' + currentDownloadType);
+  if (input && window.BioDownloadSources) input.value = BioDownloadSources.normalizeList(currentDownloadType, input.value).join('\n');
+  const inputVal = input?.value.trim() || '';
   if (!inputVal) {
     showToast('请输入有效的原始编号或下载链接', 'error');
     return;
