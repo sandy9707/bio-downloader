@@ -40,12 +40,12 @@ function updateEmptyQueueHint() {
 let activeDownloads = [];
 let completedDownloads = [];
 let maxConcurrentDownloadsSetting = 3;
+let lowPowerModeSetting = false;
 
 // 存储下载中心不同 Tab 的独立状态，防止切换时状态丢失与互相覆盖
 const tabStates = {
   bioproject: { queue: [], checkSizeBtnDisabled: true, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
   sra_raw: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
-  ena_raw: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
   ebi_raw: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
   geo_suppl: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
   zenodo: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
@@ -420,7 +420,7 @@ function switchDownloadType(btn, type) {
   if (checkBtn) checkBtn.style.display = type === 'bioproject' ? 'none' : 'block';
 
   // 3. 切换输入框的可见性
-  const types = ['bioproject', 'sra_raw', 'ena_raw', 'ebi_raw', 'geo_suppl', 'links', 'zenodo', 'huggingface'];
+  const types = ['bioproject', 'sra_raw', 'ebi_raw', 'geo_suppl', 'links', 'zenodo', 'huggingface'];
   types.forEach(t => {
     const el = t === 'bioproject' ? document.getElementById('bioProjectPanel') : document.getElementById('group-' + t);
     if (el) el.style.display = t === type ? 'flex' : 'none';
@@ -865,6 +865,7 @@ async function queryBioProject() {
   const input = document.getElementById('bioProjectInput');
   const queryBtn = document.getElementById('bioProjectQueryBtn');
   const resultEl = document.getElementById('bioProjectResult');
+  const runsInput = document.getElementById('bioProjectRunsInput');
   const project = String(input?.value || '').trim().toUpperCase();
   if (!project) {
     showToast('请输入 BioProject 编号', 'error');
@@ -875,12 +876,14 @@ async function queryBioProject() {
   if (resultEl) resultEl.textContent = `正在解析 ${project}...`;
   try {
     const res = await window.api.queryBioProject(project);
-    window.bioProjectRuns = res.runs;
+    window.bioProjectRuns = BioDownloadSources.applyRuns(runsInput, res.runs);
+    if (runsInput) runsInput.style.display = 'block';
     if (resultEl) resultEl.textContent = `已解析 ${res.count} 个 Run。请选择采用为 SRA 或 EBI，随后可继续编辑编号并校验大小。`;
     document.getElementById('bioProjectAdoptActions').style.display = 'flex';
     showToast(`${project} 已解析 ${res.count} 个 Run`, 'success');
   } catch (e) {
     window.bioProjectRuns = [];
+    if (runsInput) { runsInput.value = ''; runsInput.style.display = 'none'; }
     document.getElementById('bioProjectAdoptActions').style.display = 'none';
     if (resultEl) resultEl.textContent = '查询失败：' + e.message;
     showToast('BioProject 查询失败：' + e.message, 'error');
@@ -889,8 +892,9 @@ async function queryBioProject() {
   }
 }
 
-function adoptBioProjectRuns(targetType) {
-  const runs = Array.isArray(window.bioProjectRuns) ? window.bioProjectRuns : [];
+async function adoptBioProjectRuns(targetType) {
+  const runsInput = document.getElementById('bioProjectRunsInput');
+  const runs = BioDownloadSources.normalizeList('sra_raw', runsInput?.value || '');
   if (!runs.length) {
     showToast('请先查询 BioProject', 'warning');
     return;
@@ -898,10 +902,10 @@ function adoptBioProjectRuns(targetType) {
   const target = document.getElementById('accInput-' + targetType);
   const pill = document.querySelector(`.pill-btn[data-download-type="${targetType}"]`);
   if (!target || !pill) return;
-  const existing = target.value.trim().split(/[\s,;]+/).filter(Boolean);
-  target.value = [...new Set([...existing, ...runs])].join('\n');
+  BioDownloadSources.applyRuns(target, runs);
   switchDownloadType(pill, targetType);
-  showToast(`已采用 ${runs.length} 个 Run 为 ${targetType === 'ebi_raw' ? 'EBI' : 'SRA'} 下载`, 'success');
+  showToast(`已采用 ${runs.length} 个 Run，正在校验 ${targetType === 'ebi_raw' ? 'EBI' : 'SRA'} 文件`, 'success');
+  await checkSizes();
 }
 
 // BioSample 查询: SAMN → SRA run 列表, 填入 SRA 输入框并核验大小
@@ -1008,8 +1012,15 @@ function renderQueue() {
         threads = 4;
       } else if (file.size < 50 * 1024 * 1024) {
         threads = 8;
+      } else if (file.size < 500 * 1024 * 1024) {
+        threads = 16;
+      } else if (file.size < 2 * 1024 * 1024 * 1024) {
+        threads = 24;
+      } else {
+        threads = 32;
       }
     }
+    if (lowPowerModeSetting) threads = Math.min(threads, 16);
 
     itemEl.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -2938,6 +2949,10 @@ function initTransfersAndSettings(settings) {
     if (select) select.value = maxConcurrentDownloadsSetting;
   }
 
+  lowPowerModeSetting = Boolean(settings && settings.lowPowerMode);
+  const lowPowerToggle = document.getElementById('settingsLowPowerToggle');
+  if (lowPowerToggle) lowPowerToggle.checked = lowPowerModeSetting;
+
   // 3. 载入诊断日志开关设置
   const toggle = document.getElementById('settingsLoggingToggle');
   if (toggle) {
@@ -3192,6 +3207,19 @@ async function toggleLogging(checked) {
     showToast(checked ? '已启用详细下载诊断日志' : '已关闭下载诊断日志');
   } catch (err) {
     console.error('Failed to toggle logging settings:', err);
+  }
+}
+
+async function toggleLowPowerMode(checked) {
+  try {
+    lowPowerModeSetting = Boolean(checked);
+    await window.api.saveSettings({ lowPowerMode: lowPowerModeSetting });
+    showToast(lowPowerModeSetting
+      ? '已开启低功耗模式：单文件最多16线程、全任务最多32连接'
+      : '已恢复正常模式：单文件最高32线程、全任务最高64连接');
+    if (currentQueue.length) renderQueue();
+  } catch (err) {
+    console.error('Failed to toggle low power mode:', err);
   }
 }
 

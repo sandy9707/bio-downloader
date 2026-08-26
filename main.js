@@ -1930,6 +1930,8 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
 
   const MAX_RETRIES = 3;
   const maxConcurrentCount = parseInt(maxConcurrent, 10) || 3;
+  const actualConcurrentCount = Math.max(1, Math.min(maxConcurrentCount, files.length));
+  const lowPowerMode = Boolean(getSettings().lowPowerMode);
 
   let activeCount = 0;
   let fileIndexInQueue = 0;
@@ -2191,11 +2193,14 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
         } else if (file.size < 2 * 1024 * 1024 * 1024) {
           threads = 24;
         } else {
-          threads = 32; // 超大文件用更多连接,尽量跑满多个快节点
+          threads = 32;
         }
       }
-      // 总连接封顶:避免 并发文件数 × 单文件线程数 压垮 mihomo 与节点池
-      threads = Math.max(1, Math.min(threads, Math.floor(64 / Math.max(1, maxConcurrentCount))));
+      // 正常模式追求速度：单文件可到32线程、全任务合计64连接。
+      // 低功耗模式优先温度与响应：单文件最多16线程、全任务合计32连接。
+      const perFileLimit = lowPowerMode ? 16 : 32;
+      const totalConnectionLimit = lowPowerMode ? 32 : 64;
+      threads = Math.max(1, Math.min(threads, perFileLimit, Math.floor(totalConnectionLimit / actualConcurrentCount)));
 
       const args = ['-n', threads.toString(), '-T', '20', '-U', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', '-k', '-o', savePath, file.url];
       console.log(`Running Axel (Attempt ${attempt}): ${axelBin} ${args.join(' ')}`);
@@ -2265,37 +2270,46 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
             reject(err);
           });
 
-          const lastProgressEmitMap = new Map();
+          let lastProgressHandledAt = 0;
+          let lastProgressLoggedAt = 0;
 
-          proc.stdout.on('data', (data) => {
+          const handleAxelProgress = (data, streamName) => {
             const output = data.toString();
-            if (logStream) {
-              logStream.write(`[STDOUT] ${output}`);
-            }
-            const pctMatch = output.match(/\[\s*(\d+)%\]/);
-            const speedMatch = output.match(/\[\s*([\d\.]+\s*[KMGT]*B\/s)\]/);
+            const now = Date.now();
+            const isTerminalMessage = /error|failed|cannot|denied|not found/i.test(output);
+            // Axel 可每秒输出数百次回车进度；所有模式统一最多 1Hz 解析和刷新。
+            if (!isTerminalMessage && now - lastProgressHandledAt < 1000) return;
+            lastProgressHandledAt = now;
+            const pctMatches = [...output.matchAll(/\[\s*(\d+)%\]/g)];
+            const speedMatches = [...output.matchAll(/\[\s*([\d\.]+\s*[KMGT]*B\/s)\]/g)];
+            const pctMatch = pctMatches[pctMatches.length - 1];
+            const speedMatch = speedMatches[speedMatches.length - 1];
 
             let percentage = pctMatch ? parseInt(pctMatch[1]) : null;
             let speed = speedMatch ? speedMatch[1] : null;
 
             if (percentage !== null || speed !== null) {
-              const now = Date.now();
-              const lastTime = lastProgressEmitMap.get(fileIndex) || 0;
-              // 节流处理: 限制最多 250ms (4Hz) 向渲染进程推送一次进度，降低 Mac CPU 重绘开销与发热
-              if (percentage === 100 || (now - lastTime >= 250)) {
-                lastProgressEmitMap.set(fileIndex, now);
-                 let axelReceivedBytes = null;
-                  try { axelReceivedBytes = fs.statSync(savePath).size; } catch (e) { axelReceivedBytes = null; }
-                  mainWindow.webContents.send('download-progress', {
-                    index: fileIndex,
-                    percentage,
-                    speed,
-                    receivedBytes: axelReceivedBytes,
-                    totalBytes: file.size || null
-                  });
+              if (logStream && (percentage === 100 || now - lastProgressLoggedAt >= 5000)) {
+                lastProgressLoggedAt = now;
+                logStream.write(`[${streamName}] progress=${percentage ?? '-'} speed=${speed || '-'}\n`);
               }
+              let axelReceivedBytes = null;
+              try { axelReceivedBytes = fs.statSync(savePath).size; } catch (e) { axelReceivedBytes = null; }
+              mainWindow.webContents.send('download-progress', {
+                index: fileIndex,
+                percentage,
+                speed,
+                receivedBytes: axelReceivedBytes,
+                totalBytes: file.size || null
+              });
+            } else if (logStream && isTerminalMessage) {
+              logStream.write(`[${streamName}] ${output}`);
             }
-          });
+          };
+
+          // macOS Axel 通常把进度写到 stdout，Windows/MSYS2 构建可能写到 stderr。
+          // 两边都解析，否则 Windows 会一直停在“正在高速下载”，实际已下载却没有速度与百分比。
+          proc.stdout.on('data', (data) => handleAxelProgress(data, 'STDOUT'));
 
           let axelHasDyldError = false;
 
@@ -2304,9 +2318,7 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
             if (output.includes('Library not loaded') || output.includes('dyld')) {
               axelHasDyldError = true;
             }
-            if (logStream) {
-              logStream.write(`[STDERR] ${output}`);
-            }
+            handleAxelProgress(data, 'STDERR');
           });
 
           proc.on('close', (code) => {

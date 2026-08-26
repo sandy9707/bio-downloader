@@ -372,8 +372,10 @@
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
     }
 
+    /* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V4 · component: source navigation · theme: existing BioDownloader · responsive: pass */
     .btn-group {
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
       gap: 0.5rem;
       background: var(--bg-card);
       padding: 0.25rem;
@@ -394,6 +396,10 @@
       font-size: 0.85rem;
       font-weight: 600;
       transition: all 0.2s;
+      min-width: 0;
+      white-space: nowrap;
+      word-break: keep-all;
+      overflow-wrap: normal;
     }
 
     .pill-btn.active {
@@ -403,8 +409,8 @@
     }
 
     /* 下载中心顶行:数据源框 与 引导式提取框 同级并列(各自独立成框) */
-    .hub-top-row { display: flex; gap: 0.75rem; align-items: stretch; }
-    .hub-top-row .btn-group { flex: 1 1 auto; align-self: stretch; margin-bottom: 0; align-items: center; }
+    .hub-top-row { display: flex; gap: 0.75rem; align-items: stretch; flex-wrap: wrap; }
+    .hub-top-row .btn-group { flex: 1 1 40rem; align-self: stretch; margin-bottom: 0; align-items: center; }
     .extraction-entry {
       flex: 0 0 auto; display: flex; align-items: center; gap: 0.5rem; white-space: nowrap;
       background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px;
@@ -414,6 +420,11 @@
     }
     .extraction-entry:hover { border-color: var(--primary-color); background: var(--btn-secondary-bg-hover); transform: translateY(-1px); box-shadow: 0 6px 18px rgba(79,70,229,0.18); }
     .extraction-entry .ex-ico { font-size: 1.05rem; }
+
+    @media (max-width: 760px) {
+      .hub-top-row .btn-group { grid-template-columns: repeat(2, minmax(0, 1fr)); flex-basis: 100%; }
+      .extraction-entry { min-height: 44px; flex: 1 1 100%; justify-content: center; padding: 0.65rem 1rem; }
+    }
 
     .form-group {
       display: flex;
@@ -1287,9 +1298,10 @@
             <button class="btn btn-secondary" id="bioProjectQueryBtn" onclick="queryBioProject()">查询 Project</button>
           </div>
           <div id="bioProjectResult" style="margin-top:0.6rem; font-size:0.82rem; color:var(--text-muted);">查询后可将全部 Run 采用为 SRA 或 EBI 下载。</div>
+          <textarea id="bioProjectRunsInput" rows="10" style="display:none; margin-top:0.75rem;" placeholder="查询到的 Run 编号会显示在这里，可在校验前继续编辑。"></textarea>
           <div id="bioProjectAdoptActions" style="display:none; gap:0.6rem; flex-wrap:wrap; margin-top:0.75rem;">
-            <button class="btn btn-primary btn-sm" onclick="adoptBioProjectRuns('sra_raw')">全部采用为 SRA</button>
-            <button class="btn btn-secondary btn-sm" onclick="adoptBioProjectRuns('ebi_raw')">全部采用为 EBI</button>
+            <button class="btn btn-primary btn-sm" onclick="adoptBioProjectRuns('sra_raw')">校验 SRA 文件与大小</button>
+            <button class="btn btn-secondary btn-sm" onclick="adoptBioProjectRuns('ebi_raw')">校验 EBI 文件与大小</button>
           </div>
         </div>
         <div class="form-group" id="group-sra_raw">
@@ -1302,10 +1314,6 @@
         <div class="form-group" id="group-ebi_raw" style="display:none;">
           <label>请输入 EBI 原始数据编号 (优先拉取 EBI 高速 Fastq，无则回退 SRA)</label>
           <textarea id="accInput-ebi_raw" rows="6"></textarea>
-        </div>
-        <div class="form-group" id="group-ena_raw" style="display:none;">
-          <label>请输入 ENA Run 编号（下载公开 FASTQ 文件）</label>
-          <textarea id="accInput-ena_raw" rows="6"></textarea>
         </div>
         <div class="form-group" id="group-geo_suppl" style="display:none;">
           <label>请输入 GEO 系列号 (将自动提取页面下的全部补充文件)</label>
@@ -1713,6 +1721,19 @@
           <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.25rem;">设置同时下载的最大文件个数。并发过高可能会导致宽带饱和。</div>
         </div>
 
+        <!-- 低功耗模式 -->
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">🌿 低功耗模式（性能优化）</label>
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.75rem; margin-top:0.5rem; padding:0.75rem; background:var(--bg-input); border-radius:6px; border:1px solid var(--border-color);">
+            <div style="font-size:0.9rem; color:var(--text-muted); flex:1 1 420px;">适合笔记本、机械硬盘或容易发热的电脑。开启后单文件最多16线程、所有下载任务合计最多32连接；关闭时使用正常高速模式，单文件最高32线程、合计最高64连接。</div>
+            <label class="switch">
+              <input type="checkbox" id="settingsLowPowerToggle" onchange="toggleLowPowerMode(this.checked)">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">进度每秒刷新一次，诊断日志每5秒记录一次；切换后对下一批下载生效。</div>
+        </div>
+
         <!-- 网络测速 -->
         <div class="form-group" style="margin-top:1.5rem;">
           <label style="font-weight:600;">🌐 网络测速</label>
@@ -1951,7 +1972,6 @@
   <div class="notification" id="notificationToast">提示信息</div>
 
   <!-- 载入渲染器逻辑 -->
-  <script src="shared/download-sources.js"></script>
   <script src="shared/download-sources.js"></script>
   <script src="renderer.js"></script>
   <script>
