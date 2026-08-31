@@ -2931,7 +2931,15 @@ function openExtractionWindow() {
   extractionBrowserView.setBounds({ x: 0, y: 0, width: Math.max(100, sw - 320), height: Math.max(100, sh) });
 
   const bv = extractionBrowserView.webContents;
-  bv.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // 接管 target="_blank" 或 window.open 弹窗请求：阻止打开独立窗口，改为在当前内嵌视图直接导航
+  bv.setWindowOpenHandler((details) => {
+    if (details.url && details.url !== 'about:blank') {
+      setImmediate(() => {
+        try { bv.loadURL(details.url); } catch (e) {}
+      });
+    }
+    return { action: 'deny' };
+  });
 
   // 4. 同步导航/加载状态回壳窗口(渲染进程经 IPC 查询或事件推送)
   const emitNav = () => {
