@@ -280,6 +280,85 @@ function getAxelBinaryPath() {
 }
 
 // ==========================================
+// 【按需轻量插件管理器 (Plugin Manager)】
+// 不将大体积第三方工具打包入基础 asar/安装包,零增加主程序体积。
+// 当用户触发 FTP/SFTP 等协议时,按需自动拉取轻量单文件二进制插件。
+// ==========================================
+const PLUGIN_DIR = path.join(app.getPath('userData'), 'plugins');
+if (!fs.existsSync(PLUGIN_DIR)) {
+  fs.mkdirSync(PLUGIN_DIR, { recursive: true });
+}
+
+function getAria2BinaryPath() {
+  const platform = os.platform();
+  const isWin = platform === 'win32';
+  const binName = isWin ? 'aria2c.exe' : 'aria2c';
+  const pluginBin = path.join(PLUGIN_DIR, 'aria2', binName);
+  if (fs.existsSync(pluginBin)) {
+    ensureExecutable(pluginBin);
+    return pluginBin;
+  }
+  return null;
+}
+
+async function ensureAria2Plugin() {
+  const existing = getAria2BinaryPath();
+  if (existing) return existing;
+
+  const platform = os.platform();
+  const arch = os.arch();
+  const isWin = platform === 'win32';
+  const binName = isWin ? 'aria2c.exe' : 'aria2c';
+  const aria2Dir = path.join(PLUGIN_DIR, 'aria2');
+  if (!fs.existsSync(aria2Dir)) {
+    fs.mkdirSync(aria2Dir, { recursive: true });
+  }
+  const destBin = path.join(aria2Dir, binName);
+
+  let remoteArchive = '';
+  if (platform === 'darwin') {
+    remoteArchive = arch === 'arm64' ? 'aria2c-darwin-arm64.gz' : 'aria2c-darwin-arm64.gz';
+  } else if (platform === 'win32') {
+    remoteArchive = 'aria2c-win-x64.exe.gz';
+  } else {
+    throw new Error('当前系统平台不支持该插件: ' + platform);
+  }
+
+  const downloadUrl = `${BACKEND_BASE_URL}/downloads/plugins/${remoteArchive}`;
+  console.log(`[Plugin] 正在按需拉取 FTP/SFTP 加速引擎插件: ${downloadUrl}`);
+  
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('toast-message', { message: '正在自动下载 FTP/SFTP 加速引擎插件 (约 1MB)...', type: 'info' });
+  }
+
+  const response = await axios({
+    method: 'GET',
+    url: downloadUrl,
+    responseType: 'stream',
+    timeout: 30000
+  });
+
+  const zlib = require('zlib');
+  const gunzip = zlib.createGunzip();
+  const outWriter = fs.createWriteStream(destBin);
+
+  await new Promise((resolve, reject) => {
+    response.data
+      .pipe(gunzip)
+      .pipe(outWriter)
+      .on('finish', resolve)
+      .on('error', reject);
+  });
+
+  ensureExecutable(destBin);
+  console.log(`[Plugin] 插件安装就绪: ${destBin}`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('toast-message', { message: 'FTP/SFTP 加速引擎插件已就绪！', type: 'success' });
+  }
+  return destBin;
+}
+
+// ==========================================
 // 【本地配置管理与日志系统】
 // ==========================================
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
@@ -797,6 +876,28 @@ function parseCurlCommand(text) {
 }
 
 async function headRequestSize(url) {
+  // 针对 FTP 与 SFTP 协议,使用 curl 探测远程文件大小 (Content-Length)
+  if (typeof url === 'string') {
+    const isFtp = url.startsWith('ftp://') || url.startsWith('ftps://');
+    const isSftp = url.startsWith('sftp://');
+    if (isFtp || isSftp) {
+      return new Promise((resolve) => {
+        const cmd = isFtp
+          ? `curl --noproxy "*" -sIL --max-time 12 "${url}"`
+          : `curl --insecure -sIL --max-time 15 "${url}"`;
+        exec(cmd, (err, stdout) => {
+          if (!err && stdout) {
+            const match = stdout.match(/(?:Content-Length|content-length):\s*(\d+)/i);
+            if (match && parseInt(match[1], 10) > 0) {
+              return resolve(parseInt(match[1], 10));
+            }
+          }
+          resolve(0);
+        });
+      });
+    }
+  }
+
   const tryGetSizeFromHeaders = (headers) => {
     if (!headers) return 0;
     // 优先 content-range(Range 请求会带 /总大小,content-length 此时只是分段长度,如 2B)
@@ -880,8 +981,15 @@ ipcMain.handle('select-directory', async () => {
 
 // --- 用户与支付 ---
 ipcMain.handle('api-register', async (event, { username, password, email, inviteCode }) => {
-  const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/register`, { username, password, email, inviteCode, source: 'desktop' });
-  return res.data;
+  try {
+    const res = await axios.post(`${BACKEND_BASE_URL}/api/auth/register`, { username, password, email, inviteCode, source: 'desktop' }, { timeout: 10000 });
+    return res.data;
+  } catch (err) {
+    if (err.response && err.response.data) {
+      return err.response.data;
+    }
+    return { error: `连接服务器失败: ${err.message}` };
+  }
 });
 
 ipcMain.handle('api-login', async (event, { username, password }) => {
@@ -1818,6 +1926,16 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
         throw new Error(`获取 Hugging Face 存储库 [${item}] 失败: ` + err.message);
       }
     }
+  } else if (type === 'ftp' || type === 'sftp') {
+    const promises = ids.map(async (link) => {
+      const size = await headRequestSize(link);
+      const name = fileNameFromUrl(link) || (`${type}_file_` + Date.now());
+      const isFtp = type === 'ftp' || link.startsWith('ftp://') || link.startsWith('ftps://');
+      const isSftp = type === 'sftp' || link.startsWith('sftp://');
+      return { name, url: link, size, isFtp, isSftp };
+    });
+    const results = await Promise.all(promises);
+    files.push(...results);
   } else if (type === 'links') {
     const promises = ids.map(async (link) => {
       // NCBI 动态导出链接依赖浏览器会话(Cookie),独立下载器拿不到,标记 blocked 交由前端弹窗说明,不入队
@@ -1831,7 +1949,9 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
       }
       const size = await headRequestSize(link);
       const name = fileNameFromUrl(link) || ('file_' + Date.now());
-      return { name, url: link, size };
+      const isFtp = link.startsWith('ftp://') || link.startsWith('ftps://');
+      const isSftp = link.startsWith('sftp://');
+      return { name, url: link, size, isFtp, isSftp };
     });
     const results = await Promise.all(promises);
     files.push(...results);
@@ -2155,6 +2275,166 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
   });
 }
 
+// ==========================================
+// 【插件化 FTP / SFTP 协议下载引擎】
+// 优先使用 aria2c 插件进行多连接加速下载，未就绪时自动拉取插件或使用 curl 兜底
+// ==========================================
+async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStream, fileDestFolder, safeName, threads }) {
+  let aria2Bin = null;
+  try {
+    aria2Bin = await ensureAria2Plugin();
+  } catch (err) {
+    console.warn('[Plugin] 获取 aria2 插件未成功，降级使用 curl 兜底:', err.message);
+  }
+
+  if (aria2Bin && fs.existsSync(aria2Bin)) {
+    return new Promise((resolve, reject) => {
+      if (cancelled) return reject(new Error('Cancelled'));
+      const ariaArgs = [
+        '-x', String(Math.min(16, threads || 8)),
+        '-s', String(Math.min(16, threads || 8)),
+        '-k', '1M',
+        '--file-allocation=none',
+        '--summary-interval=1',
+        '--console-log-level=warn',
+        '--auto-file-renaming=false',
+        '--allow-overwrite=true',
+        '-d', fileDestFolder,
+        '-o', safeName,
+        file.url
+      ];
+
+      console.log(`[Plugin] Running aria2c: ${aria2Bin} ${ariaArgs.join(' ')}`);
+      if (logStream) {
+        logStream.write(`=== 启动 aria2c 插件加速下载 ===\n命令: ${aria2Bin} ${ariaArgs.join(' ')}\n\n`);
+      }
+
+      const proc = spawn(aria2Bin, ariaArgs, { env });
+      activeAxelProcesses.set(fileIndex, proc);
+
+      cancelTokens.set(fileIndex, () => {
+        try { killProcess(proc); } catch (e) {}
+        activeAxelProcesses.delete(fileIndex);
+        reject(new Error('Cancelled'));
+      });
+
+      proc.stdout.on('data', (data) => {
+        const output = data.toString();
+        const pctMatch = output.match(/\((\d+)%\)/);
+        const speedMatch = output.match(/DL:([\d.]+[KMGT]?i?B(?:\/s)?)/i);
+
+        let receivedBytes = null;
+        try { receivedBytes = fs.statSync(savePath).size; } catch (e) {}
+
+        const percentage = pctMatch ? parseInt(pctMatch[1], 10) : (file.size > 0 && receivedBytes ? Math.min(99, Math.floor((receivedBytes / file.size) * 100)) : null);
+        const speed = speedMatch ? (speedMatch[1].endsWith('/s') ? speedMatch[1] : speedMatch[1] + '/s') : null;
+
+        if (percentage !== null || speed !== null) {
+          mainWindow.webContents.send('download-progress', {
+            index: fileIndex,
+            percentage,
+            speed,
+            receivedBytes,
+            totalBytes: file.size || null
+          });
+        }
+      });
+
+      proc.stderr.on('data', (data) => {
+        if (logStream) logStream.write(`[aria2c stderr] ${data.toString()}`);
+      });
+
+      proc.on('close', (code) => {
+        activeAxelProcesses.delete(fileIndex);
+        if (code === 0) {
+          mainWindow.webContents.send('download-progress', {
+            index: fileIndex,
+            percentage: 100,
+            speed: '0 B/s',
+            receivedBytes: file.size || (fs.existsSync(savePath) ? fs.statSync(savePath).size : null),
+            totalBytes: file.size || null
+          });
+          if (logStream) {
+            logStream.write(`\n=== aria2c 插件下载成功 ===\n`);
+            logStream.end();
+          }
+          resolve();
+        } else {
+          reject(new Error(`aria2c 退出码 ${code}`));
+        }
+      });
+
+      proc.on('error', (err) => {
+        activeAxelProcesses.delete(fileIndex);
+        reject(err);
+      });
+    });
+  }
+
+  // 降级使用 curl 兜底
+  return new Promise((resolve, reject) => {
+    if (cancelled) return reject(new Error('Cancelled'));
+    const curlArgs = ['--noproxy', '*', '-sL', '-C', '-', '--insecure', '-o', savePath, file.url];
+    console.log(`[Plugin] Fallback to curl: curl ${curlArgs.join(' ')}`);
+    const proc = spawn('curl', curlArgs);
+    activeAxelProcesses.set(fileIndex, proc);
+
+    cancelTokens.set(fileIndex, () => {
+      try { killProcess(proc); } catch (e) {}
+      activeAxelProcesses.delete(fileIndex);
+      reject(new Error('Cancelled'));
+    });
+
+    let lastBytes = 0;
+    let lastTime = Date.now();
+    const timer = setInterval(() => {
+      let curBytes = 0;
+      try { curBytes = fs.statSync(savePath).size; } catch (e) {}
+      const now = Date.now();
+      const diff = curBytes - lastBytes;
+      lastBytes = curBytes;
+      const speedBps = diff / ((now - lastTime || 1000) / 1000);
+      lastTime = now;
+      let speedStr = '0 B/s';
+      if (speedBps > 1024 * 1024) speedStr = (speedBps / (1024 * 1024)).toFixed(2) + ' MB/s';
+      else if (speedBps > 1024) speedStr = (speedBps / 1024).toFixed(1) + ' KB/s';
+      else speedStr = Math.round(speedBps) + ' B/s';
+
+      const pct = file.size > 0 ? Math.min(99, Math.floor((curBytes / file.size) * 100)) : 50;
+      mainWindow.webContents.send('download-progress', {
+        index: fileIndex,
+        percentage: pct,
+        speed: speedStr,
+        receivedBytes: curBytes,
+        totalBytes: file.size || null
+      });
+    }, 1000);
+
+    proc.on('close', (code) => {
+      clearInterval(timer);
+      activeAxelProcesses.delete(fileIndex);
+      if (code === 0) {
+        mainWindow.webContents.send('download-progress', {
+          index: fileIndex,
+          percentage: 100,
+          speed: '0 B/s',
+          receivedBytes: file.size || (fs.existsSync(savePath) ? fs.statSync(savePath).size : null),
+          totalBytes: file.size || null
+        });
+        resolve();
+      } else {
+        reject(new Error(`curl 退出码 ${code}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      clearInterval(timer);
+      activeAxelProcesses.delete(fileIndex);
+      reject(err);
+    });
+  });
+}
+
       mainWindow.webContents.send('download-status', {
         index: fileIndex,
         fileName: file.name,
@@ -2227,7 +2507,14 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
       }
 
       try {
-        await new Promise((resolve, reject) => {
+        const isFtpProtocol = file.isFtp || String(file.url).startsWith('ftp://') || String(file.url).startsWith('ftps://');
+        const isSftpProtocol = file.isSftp || String(file.url).startsWith('sftp://');
+
+        if (isFtpProtocol || isSftpProtocol) {
+          // FTP / SFTP 协议走插件化加速引擎 (支持 aria2c 多连接加速与 curl 断点续传)
+          await downloadFileWithPlugin({ file, fileIndex, savePath, env, logStream, fileDestFolder, safeName, threads });
+        } else {
+          await new Promise((resolve, reject) => {
           if (cancelled) {
             if (logStream) {
               logStream.write(`\n=== 任务启动前已被取消 ===\n`);
@@ -2358,6 +2645,7 @@ async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, tot
             }
           });
         });
+        }
 
         downloadSuccess = true;
       } catch (err) {

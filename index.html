@@ -1331,6 +1331,14 @@
           <label>请输入 Hugging Face 数据集/模型 ID 或文件直链 (多项使用换行分隔)</label>
           <textarea id="accInput-huggingface" rows="6"></textarea>
         </div>
+        <div class="form-group" id="group-ftp" style="display:none;">
+          <label>请输入 FTP 下载链接 (多项使用换行分隔，支持 ftp://[user:pass@]host[:port]/path)</label>
+          <textarea id="accInput-ftp" rows="6"></textarea>
+        </div>
+        <div class="form-group" id="group-sftp" style="display:none;">
+          <label>请输入 SFTP 安全传输链接 (多项使用换行分隔，格式: sftp://[user:pass@]host[:port]/path)</label>
+          <textarea id="accInput-sftp" rows="6"></textarea>
+        </div>
 
         <div class="form-group">
           <label>下载目标位置</label>

@@ -410,7 +410,7 @@ function switchDownloadType(btn, type) {
   btn.classList.add('active');
 
   // 如果选的不是更多菜单里的项，恢复更多按钮默认字样
-  if (type !== 'zenodo' && type !== 'huggingface') {
+  if (!['zenodo', 'huggingface', 'ftp', 'sftp'].includes(type)) {
     const textEl = document.getElementById('moreDropdownText');
     if (textEl) textEl.innerText = '更多数据源 ✨';
   }
@@ -420,7 +420,7 @@ function switchDownloadType(btn, type) {
   if (checkBtn) checkBtn.style.display = type === 'bioproject' ? 'none' : 'block';
 
   // 3. 切换输入框的可见性
-  const types = ['bioproject', 'sra_raw', 'ebi_raw', 'geo_suppl', 'links', 'zenodo', 'huggingface'];
+  const types = ['bioproject', 'sra_raw', 'ebi_raw', 'geo_suppl', 'links', 'zenodo', 'huggingface', 'ftp', 'sftp'];
   types.forEach(t => {
     const el = t === 'bioproject' ? document.getElementById('bioProjectPanel') : document.getElementById('group-' + t);
     if (el) el.style.display = t === type ? 'flex' : 'none';
@@ -1281,10 +1281,12 @@ async function handleLogin() {
 
   try {
     const res = await window.api.login(user, pass);
-    if (res.success) {
+    if (res && res.success) {
       showToast('账户登录成功', 'success');
       await window.api.saveSettings({ token: res.token });
       await verifyToken(res.token);
+    } else {
+      showToast('登录失败: ' + ((res && res.error) || '用户名或密码错误'), 'error');
     }
   } catch (err) {
     showToast('登录失败: ' + (err.response?.data?.error || err.message), 'error');
@@ -1306,10 +1308,12 @@ async function handleRegister() {
 
   try {
     const res = await window.api.register(user, pass, email, inviteCode);
-    if (res.success) {
+    if (res && res.success) {
       showToast('账户秒速注册成功', 'success');
       await window.api.saveSettings({ token: res.token });
       await verifyToken(res.token);
+    } else {
+      showToast('注册失败: ' + ((res && res.error) || '未知错误'), 'error');
     }
   } catch (err) {
     showToast('注册失败: ' + (err.response?.data?.error || err.message), 'error');

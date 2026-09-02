@@ -9,11 +9,13 @@
     { id:'ebi_raw', label:'EBI', example:'ERR164407', exampleText:'ERR164407', placeholder:'每行一个，例如 ERR164407' },
     { id:'geo_suppl', label:'GEO', example:'GSE13575', exampleText:'GSE13575', placeholder:'每行一个，例如 GSE13575' },
     { id:'links', label:'直链下载', example:'https://raw.githubusercontent.com/sandy9707/bio-downloader/main/README.md', exampleText:'项目 README.md', placeholder:'每行一个完整 HTTP(S) 下载链接' },
-    { id:'other', label:'其他数据源', children:['zenodo','huggingface'] }
+    { id:'other', label:'其他数据源', children:['zenodo','huggingface','ftp','sftp'] }
   ];
   const extras = [
     { id:'zenodo', label:'Zenodo', example:'10.5281/zenodo.22080384', exampleText:'10.5281/zenodo.22080384（约 12 KB）', placeholder:'每行一个 Record ID、DOI 或链接' },
-    { id:'huggingface', label:'Hugging Face', example:'lhoestq/demo1', exampleText:'lhoestq/demo1（小型示例）', placeholder:'每行一个，例如 lhoestq/demo1' }
+    { id:'huggingface', label:'Hugging Face', example:'lhoestq/demo1', exampleText:'lhoestq/demo1（小型示例）', placeholder:'每行一个，例如 lhoestq/demo1' },
+    { id:'ftp', label:'FTP 资源', example:'ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE13nnn/GSE13575/suppl/GSE13575_RAW.tar', exampleText:'NCBI FTP 补充数据示例', placeholder:'每行一个 FTP 下载链接，支持 ftp://[user:pass@]host[:port]/path' },
+    { id:'sftp', label:'SFTP 传输', example:'sftp://demo:password@test.rebex.net:22/readme.txt', exampleText:'测序机构/云主机 SFTP 链接示例', placeholder:'每行一个 SFTP 下载链接，格式: sftp://[user:pass@]host[:port]/path' }
   ];
   const all = [...sources.filter(s => s.id !== 'other'), ...extras];
   const byId = Object.fromEntries(all.map(s => [s.id, s]));
