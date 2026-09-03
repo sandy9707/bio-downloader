@@ -295,13 +295,6 @@ function getAria2BinaryPath() {
   const binName = isWin ? 'aria2c.exe' : 'aria2c';
   const pluginBin = path.join(PLUGIN_DIR, 'aria2', binName);
   if (fs.existsSync(pluginBin)) {
-    // 针对 macOS: 检查是否具备配套的独立动态库, 避免旧版依赖缺失报错
-    if (platform === 'darwin') {
-      const ssh2Lib = path.join(PLUGIN_DIR, 'aria2', 'libssh2.1.dylib');
-      if (!fs.existsSync(ssh2Lib)) {
-        return null;
-      }
-    }
     ensureExecutable(pluginBin);
     return pluginBin;
   }
@@ -323,14 +316,17 @@ async function ensureAria2Plugin(forceReinstall = false) {
   }
   const destBin = path.join(aria2Dir, binName);
 
-  // 若强制重装或存在损坏的旧文件，先清理旧文件
+  // 若强制重装或存在损坏的旧文件，清理整个 aria2 插件目录及旧 dylib
   try {
-    if (fs.existsSync(destBin)) fs.unlinkSync(destBin);
+    const oldFiles = fs.readdirSync(aria2Dir);
+    for (const f of oldFiles) {
+      try { fs.unlinkSync(path.join(aria2Dir, f)); } catch(e){}
+    }
   } catch (e) {}
 
   let remoteArchive = '';
   if (platform === 'darwin') {
-    remoteArchive = 'aria2-darwin-arm64.tar.gz';
+    remoteArchive = 'aria2c-darwin-arm64.gz';
   } else if (platform === 'win32') {
     remoteArchive = 'aria2c-win-x64.exe.gz';
   } else {
@@ -344,58 +340,29 @@ async function ensureAria2Plugin(forceReinstall = false) {
     mainWindow.webContents.send('toast-message', { message: '正在下载 FTP/SFTP 加速引擎插件...', type: 'info' });
   }
 
+  const response = await axios({
+    method: 'GET',
+    url: downloadUrl,
+    responseType: 'stream',
+    timeout: 60000
+  });
+
+  const zlib = require('zlib');
+  const gunzip = zlib.createGunzip();
+  const outWriter = fs.createWriteStream(destBin);
+
+  await new Promise((resolve, reject) => {
+    response.data
+      .pipe(gunzip)
+      .pipe(outWriter)
+      .on('finish', resolve)
+      .on('error', reject);
+  });
+
   if (platform === 'darwin') {
-    const tempTar = path.join(aria2Dir, 'aria2_temp.tar.gz');
-    const response = await axios({
-      method: 'GET',
-      url: downloadUrl,
-      responseType: 'stream',
-      timeout: 60000
-    });
-    const writer = fs.createWriteStream(tempTar);
-    await new Promise((resolve, reject) => {
-      response.data.pipe(writer).on('finish', resolve).on('error', reject);
-    });
-
-    await new Promise((resolve, reject) => {
-      exec(`tar -xzf "${tempTar}" -C "${aria2Dir}"`, (err, stdout, stderr) => {
-        try { fs.unlinkSync(tempTar); } catch (e) {}
-        if (err) reject(new Error('解压 aria2 插件失败: ' + (stderr || err.message)));
-        else resolve();
-      });
-    });
-
-    // 针对 macOS: 彻底清除 Gatekeeper 隔离属性(com.apple.quarantine)，防止 Apple 安全机制拦截本地加载动态库
     try {
-      exec(`xattr -rd com.apple.quarantine "${aria2Dir}" 2>/dev/null`, () => {});
+      exec(`xattr -rd com.apple.quarantine "${destBin}" 2>/dev/null`, () => {});
     } catch (e) {}
-
-    // 确保解压出来的所有 dylib 及可执行文件都具备执行权限，避免权限缺失无法加载
-    try {
-      const files = fs.readdirSync(aria2Dir);
-      for (const f of files) {
-        ensureExecutable(path.join(aria2Dir, f));
-      }
-    } catch (e) {}
-  } else {
-    const response = await axios({
-      method: 'GET',
-      url: downloadUrl,
-      responseType: 'stream',
-      timeout: 60000
-    });
-
-    const zlib = require('zlib');
-    const gunzip = zlib.createGunzip();
-    const outWriter = fs.createWriteStream(destBin);
-
-    await new Promise((resolve, reject) => {
-      response.data
-        .pipe(gunzip)
-        .pipe(outWriter)
-        .on('finish', resolve)
-        .on('error', reject);
-    });
   }
 
   ensureExecutable(destBin);
