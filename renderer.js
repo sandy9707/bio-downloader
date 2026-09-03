@@ -370,12 +370,14 @@ function selectMoreType(el, type, labelName) {
 }
 
 function selectLocalSource(type, btn) {
+  const otherContainer = document.getElementById('localOtherSources');
   if (type === 'other') {
-    document.getElementById('localOtherSources').style.display = 'flex';
+    const isShown = otherContainer.style.display === 'inline-flex';
+    otherContainer.style.display = isShown ? 'none' : 'inline-flex';
     document.querySelectorAll('#localSourceGrid .pill-btn').forEach(b => b.classList.toggle('active', b.dataset.type === 'other'));
     return;
   }
-  document.getElementById('localOtherSources').style.display = BioDownloadSources.extras.some(s => s.id === type) ? 'flex' : 'none';
+  otherContainer.style.display = BioDownloadSources.extras.some(s => s.id === type) ? 'inline-flex' : 'none';
   switchDownloadType(btn, type);
 }
 
@@ -383,6 +385,7 @@ function renderLocalDownloadSources() {
   const grid = document.getElementById('localSourceGrid');
   if (!grid || !window.BioDownloadSources) return;
   grid.innerHTML = BioDownloadSources.renderPrimaryButtons('selectLocalSource', 'pill-btn');
+  document.getElementById('localOtherSources').className = 'btn-group hub-secondary-row';
   document.getElementById('localOtherSources').innerHTML = BioDownloadSources.extras.map(s => `<button class="pill-btn" onclick="selectLocalSource('${s.id}',this)">${s.label}</button>`).join('');
   BioDownloadSources.all.filter(s => !s.project).forEach((source) => {
     const input = document.getElementById('accInput-' + source.id);

@@ -2446,9 +2446,9 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
   delete cleanEnv.HTTPS_PROXY;
   delete cleanEnv.ALL_PROXY;
 
-  // 1) 优先使用 aria2c 多连接下载 (SFTP 支持通过 HTTP 代理隧道，FTP 支持原生多连接直连下载)
+  // 1) 优先使用 aria2c 多连接下载
   if (aria2Bin && fs.existsSync(aria2Bin)) {
-    return new Promise((resolve, reject) => {
+    const runAria2 = (useProxy) => new Promise((resolve, reject) => {
       if (cancelled) return reject(new Error('Cancelled'));
       const ariaArgs = [
         '-x', String(Math.min(16, threads || 8)),
@@ -2463,20 +2463,19 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         '-o', safeName
       ];
 
-      if (isSftp && clashProcess) {
-        // SFTP 通过 HTTP CONNECT 代理隧道加速
+      if (useProxy) {
         ariaArgs.push('--all-proxy=http://127.0.0.1:43289');
       }
 
       ariaArgs.push(file.url);
 
       const protoName = isSftp ? 'SFTP' : 'FTP';
-      console.log(`[Plugin] Running aria2c (${protoName}): ${aria2Bin} ${ariaArgs.join(' ')}`);
+      console.log(`[Plugin] Running aria2c (${protoName}, proxy=${useProxy}): ${aria2Bin} ${ariaArgs.join(' ')}`);
       if (logStream) {
-        logStream.write(`=== 启动 aria2c 插件加速下载 (${protoName}) ===\n命令: ${aria2Bin} ${ariaArgs.join(' ')}\n\n`);
+        logStream.write(`=== 启动 aria2c 插件下载 (${protoName}, 代理=${useProxy ? 'http://127.0.0.1:43289' : '直连'}) ===\n命令: ${aria2Bin} ${ariaArgs.join(' ')}\n\n`);
       }
 
-      const proc = spawn(aria2Bin, ariaArgs, { env: (isSftp && clashProcess) ? env : cleanEnv });
+      const proc = spawn(aria2Bin, ariaArgs, { env: useProxy ? env : cleanEnv });
       activeAxelProcesses.set(fileIndex, proc);
 
       cancelTokens.set(fileIndex, () => {
@@ -2507,8 +2506,11 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         }
       });
 
+      let errOutput = '';
       proc.stderr.on('data', (data) => {
-        if (logStream) logStream.write(`[aria2c stderr] ${data.toString()}`);
+        const str = data.toString();
+        errOutput += str;
+        if (logStream) logStream.write(`[aria2c stderr] ${str}`);
       });
 
       proc.on('close', (code) => {
@@ -2527,7 +2529,9 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           }
           resolve();
         } else {
-          reject(new Error(`aria2c 退出码 ${code}`));
+          const err = new Error(`aria2c 退出码 ${code}${errOutput ? ': ' + errOutput.slice(0, 150) : ''}`);
+          err.rawOutput = errOutput;
+          reject(err);
         }
       });
 
@@ -2536,18 +2540,28 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         reject(err);
       });
     });
+
+    try {
+      // 代理模式 (若为 SFTP 且开启了加速器优先走代理尝试)
+      const shouldTryProxy = isSftp && !!clashProcess;
+      return await runAria2(shouldTryProxy);
+    } catch (ariaErr) {
+      // 若走代理连接失败(例如 SSH handshake failure: Failed getting banner)，自动直连重试
+      if (isSftp && clashProcess && !cancelled && !pausedAxelFiles.has(fileIndex) && !cancelledFiles.has(fileIndex)) {
+        console.warn(`[Plugin] aria2c proxy mode failed, retrying directly: ${ariaErr.message}`);
+        if (logStream) {
+          logStream.write(`\n=== 代理握手异常，自动切换为直连多连接模式重试... ===\n\n`);
+        }
+        return await runAria2(false);
+      }
+      throw ariaErr;
+    }
   }
 
   // 2) 针对 aria2 未就绪时，降级使用 curl 兜底断点续传
   return new Promise((resolve, reject) => {
     if (cancelled) return reject(new Error('Cancelled'));
-    const curlArgs = ['-sL', '-C', '-', '--insecure'];
-    
-    if (isSftp && clashProcess) {
-      curlArgs.push('--proxy', 'http://127.0.0.1:43289');
-    } else {
-      curlArgs.push('--noproxy', '*');
-    }
+    const curlArgs = ['-sL', '-C', '-', '--insecure', '--noproxy', '*'];
 
     curlArgs.push('-o', savePath, file.url);
     console.log(`[Plugin] Downloading via curl: curl ${curlArgs.join(' ')}`);
@@ -2555,7 +2569,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       logStream.write(`=== 启动 curl 下载引擎 ===\n命令: curl ${curlArgs.join(' ')}\n\n`);
     }
 
-    const proc = spawn('curl', curlArgs, { env: (isSftp && clashProcess) ? env : cleanEnv });
+    const proc = spawn('curl', curlArgs, { env: cleanEnv });
     activeAxelProcesses.set(fileIndex, proc);
 
     cancelTokens.set(fileIndex, () => {
