@@ -299,7 +299,6 @@ function getAria2BinaryPath() {
     if (platform === 'darwin') {
       const ssh2Lib = path.join(PLUGIN_DIR, 'aria2', 'libssh2.1.dylib');
       if (!fs.existsSync(ssh2Lib)) {
-        console.warn('[Plugin] 检测到缺少独立运行库的 aria2c, 准备重新拉取自包含包...');
         return null;
       }
     }
@@ -309,9 +308,11 @@ function getAria2BinaryPath() {
   return null;
 }
 
-async function ensureAria2Plugin() {
-  const existing = getAria2BinaryPath();
-  if (existing) return existing;
+async function ensureAria2Plugin(forceReinstall = false) {
+  if (!forceReinstall) {
+    const existing = getAria2BinaryPath();
+    if (existing) return existing;
+  }
 
   const platform = os.platform();
   const isWin = platform === 'win32';
@@ -321,6 +322,11 @@ async function ensureAria2Plugin() {
     fs.mkdirSync(aria2Dir, { recursive: true });
   }
   const destBin = path.join(aria2Dir, binName);
+
+  // 若强制重装或存在损坏的旧文件，先清理旧文件
+  try {
+    if (fs.existsSync(destBin)) fs.unlinkSync(destBin);
+  } catch (e) {}
 
   let remoteArchive = '';
   if (platform === 'darwin') {
@@ -335,7 +341,7 @@ async function ensureAria2Plugin() {
   console.log(`[Plugin] 正在按需拉取 FTP/SFTP 加速引擎插件: ${downloadUrl}`);
   
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('toast-message', { message: '正在自动下载 FTP/SFTP 加速引擎插件...', type: 'info' });
+    mainWindow.webContents.send('toast-message', { message: '正在下载 FTP/SFTP 加速引擎插件...', type: 'info' });
   }
 
   if (platform === 'darwin') {
@@ -1230,7 +1236,7 @@ ipcMain.handle('plugin-get-status', async () => {
 // 手动触发插件安装/重装
 ipcMain.handle('plugin-install', async (event, { pluginId }) => {
   if (pluginId === 'aria2') {
-    const binPath = await ensureAria2Plugin();
+    const binPath = await ensureAria2Plugin(true);
     return { success: true, path: binPath };
   }
   throw new Error('未知的插件 ID: ' + pluginId);

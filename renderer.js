@@ -3793,7 +3793,9 @@ async function refreshPluginsList() {
 
       const actionBtn = isOk
         ? `<button class="btn btn-secondary" onclick="handleInstallPlugin('${escapeHtml(p.id)}', this)" style="font-size:0.8rem; padding:0.35rem 0.8rem;">🔄 重新校验 / 覆盖更新</button>`
-        : `<button class="btn btn-primary" onclick="handleInstallPlugin('${escapeHtml(p.id)}', this)" style="font-size:0.8rem; padding:0.35rem 0.8rem;">📥 立即下载并安装</button>`;
+        : (p.installed
+            ? `<button class="btn btn-primary" onclick="handleInstallPlugin('${escapeHtml(p.id)}', this)" style="font-size:0.8rem; padding:0.35rem 0.8rem; background:linear-gradient(135deg, #f59e0b, #d97706); border:none;">🛠️ 修复并覆盖更新</button>`
+            : `<button class="btn btn-primary" onclick="handleInstallPlugin('${escapeHtml(p.id)}', this)" style="font-size:0.8rem; padding:0.35rem 0.8rem;">📥 立即下载并安装</button>`);
 
       return `
         <div style="background:var(--bg-input); border:1px solid var(--border-color); border-radius:10px; padding:1.1rem 1.25rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
