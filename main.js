@@ -567,6 +567,33 @@ function checkPortBusy(port) {
   });
 }
 
+function waitForPortReady(port, host = '127.0.0.1', timeoutMs = 4000) {
+  const start = Date.now();
+  return new Promise((resolve, reject) => {
+    const tryConnect = () => {
+      if (Date.now() - start > timeoutMs) {
+        return reject(new Error(`加速核心端口 ${port} 启动超时，可能被安全软件拦截或端口冲突`));
+      }
+      const sock = new net.Socket();
+      sock.setTimeout(400);
+      sock.once('connect', () => {
+        sock.destroy();
+        resolve();
+      });
+      sock.once('error', () => {
+        sock.destroy();
+        setTimeout(tryConnect, 100);
+      });
+      sock.once('timeout', () => {
+        sock.destroy();
+        setTimeout(tryConnect, 100);
+      });
+      sock.connect(port, host);
+    };
+    tryConnect();
+  });
+}
+
 // 【2.0.3 诊断】加速器日志:写入 LOG_DIR(即 设置→诊断日志 可查看/上传),便于回溯
 const CLASH_LOG_FILE = path.join(LOG_DIR, 'clash.log');
 function writeClashLog(msg) {
@@ -695,20 +722,37 @@ async function startClash(token) {
       clashProcess = null;
     });
 
-    // 延迟等待启动完成，并在此期间捕获可能发生的启动错误
+    // 主动探测端口 43289 是否真正就绪，并严格监听进程退出事件
     await new Promise((resolve, reject) => {
-      const startTimeout = setTimeout(() => {
-        if (spawnError) {
-          reject(spawnError);
-        } else {
-          resolve();
+      let settled = false;
+      const onProcClose = (code) => {
+        if (!settled) {
+          settled = true;
+          reject(new Error(`加速核心异常退出(退出码 ${code})，可能被杀毒软件拦截或配置异常`));
         }
-      }, 2000);
-
+      };
+      clashProcess.once('close', onProcClose);
       clashProcess.once('error', (err) => {
-        clearTimeout(startTimeout);
-        reject(err);
+        if (!settled) {
+          settled = true;
+          reject(err);
+        }
       });
+
+      waitForPortReady(43289, '127.0.0.1', 4000)
+        .then(() => {
+          if (!settled) {
+            settled = true;
+            clashProcess.removeListener('close', onProcClose);
+            resolve();
+          }
+        })
+        .catch((err) => {
+          if (!settled) {
+            settled = true;
+            reject(err);
+          }
+        });
     });
     return true;
   } catch (err) {
@@ -2827,6 +2871,8 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           failReason = '该 NCBI 动态导出链接(viewer.cgi?query_key)依赖浏览器检索会话,独立下载无法获取。建议改用 accession 编号(如 NM_007482.3)经 EFetch 下载,或在浏览器 Network 中 Copy as cURL 提取直链。';
         } else if (/返回网页|错误页|需登录/i.test(lastErrorMsg)) {
           failReason = '服务器返回网页而非文件(链接可能需登录/已失效/为动态地址)。';
+        } else if (/ECONNREFUSED/i.test(lastErrorMsg) && /43289/.test(lastErrorMsg)) {
+          failReason = '本地加速内核连接中断(可能被360/火绒/Defender拦截)，请在设置中重新开启加速器或添加杀软信任。';
         } else if (/status code 4\d\d|Bad Request|Forbidden|Not Found/i.test(lastErrorMsg)) {
           const code = (lastErrorMsg.match(/status code (\d+)/) || [])[1] || '4xx';
           failReason = `服务器拒绝该链接(HTTP ${code}):链接可能已失效、需登录或为动态生成地址。`;
