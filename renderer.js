@@ -401,13 +401,15 @@ function switchDownloadType(btn, type) {
   // 1. 保存当前 Tab 状态
   saveCurrentTabState();
 
-  // 2. 切换按钮激活样式
-  const btnGroup = btn.closest('.btn-group');
-  if (btnGroup) {
-    const buttons = btnGroup.querySelectorAll('.pill-btn');
-    buttons.forEach(b => b.classList.remove('active'));
+  // 2. 切换按钮激活样式：清除所有数据源按钮的 active，仅激活当前被点击的按钮
+  document.querySelectorAll('#localSourceGrid .pill-btn, #localOtherSources .pill-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+
+  // 如果选的是子数据源，同时高亮父级「其他数据源」主按钮
+  if (BioDownloadSources.extras.some(s => s.id === type)) {
+    const parentBtn = document.querySelector('#localSourceGrid [data-type="other"]');
+    if (parentBtn) parentBtn.classList.add('active');
   }
-  btn.classList.add('active');
 
   // 如果选的不是更多菜单里的项，恢复更多按钮默认字样
   if (!['zenodo', 'huggingface', 'ftp', 'sftp'].includes(type)) {

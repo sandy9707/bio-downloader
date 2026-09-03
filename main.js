@@ -882,9 +882,13 @@ async function headRequestSize(url) {
     const isSftp = url.startsWith('sftp://');
     if (isFtp || isSftp) {
       return new Promise((resolve) => {
+        // 重要：Mihomo 的 HTTP 端口(43289)对 FTP 代理不支持(返回 502);必须使用 SOCKS5 端口(43290)代理!
+        const proxyArg = clashProcess
+          ? (isFtp ? '--proxy "socks5://127.0.0.1:43290"' : '--proxy "http://127.0.0.1:43289"')
+          : '--noproxy "*"';
         const cmd = isFtp
-          ? `curl --noproxy "*" -sIL --max-time 12 "${url}"`
-          : `curl --insecure -sIL --max-time 15 "${url}"`;
+          ? `curl ${proxyArg} -sIL --max-time 15 "${url}"`
+          : `curl ${proxyArg} --insecure -sIL --max-time 20 "${url}"`;
         exec(cmd, (err, stdout) => {
           if (!err && stdout) {
             const match = stdout.match(/(?:Content-Length|content-length):\s*(\d+)/i);
@@ -892,7 +896,20 @@ async function headRequestSize(url) {
               return resolve(parseInt(match[1], 10));
             }
           }
-          resolve(0);
+          // 代理失败时尝试直连兜底一次
+          if (clashProcess) {
+            exec(`curl --noproxy "*" -sIL --max-time 10 "${url}"`, (e2, out2) => {
+              if (!e2 && out2) {
+                const match2 = out2.match(/(?:Content-Length|content-length):\s*(\d+)/i);
+                if (match2 && parseInt(match2[1], 10) > 0) {
+                  return resolve(parseInt(match2[1], 10));
+                }
+              }
+              resolve(0);
+            });
+          } else {
+            resolve(0);
+          }
         });
       });
     }
@@ -2287,17 +2304,15 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
     console.warn('[Plugin] 获取 aria2 插件未成功，降级使用 curl 兜底:', err.message);
   }
 
-  // 关键修复：针对 FTP / SFTP 协议，axel 与 aria2c 对 HTTP 代理的 FTP CONNECT 握手通常不兼容（返回 502），
-  // 必须净化子进程环境变量，剔除 http_proxy / all_proxy，使其直连传输。
-  const cleanEnv = { ...env };
-  delete cleanEnv.http_proxy;
-  delete cleanEnv.https_proxy;
-  delete cleanEnv.all_proxy;
-  delete cleanEnv.HTTP_PROXY;
-  delete cleanEnv.HTTPS_PROXY;
-  delete cleanEnv.ALL_PROXY;
+  const isFtp = file.isFtp || String(file.url).startsWith('ftp://') || String(file.url).startsWith('ftps://');
+  const isSftp = file.isSftp || String(file.url).startsWith('sftp://');
 
-  if (aria2Bin && fs.existsSync(aria2Bin)) {
+  // 环境代理适配：
+  // 1) FTP 协议：aria2 不支持 socks5:// 代理参数，且 HTTP 代理的 FTP 握手会 502；
+  //    因此 FTP 的最优加速方案是：优先使用支持 socks5 的 curl 经本地 Mihomo SOCKS5 端口(43290)高速代理传输，
+  //    若加速器未开则直连下载；
+  // 2) SFTP 协议：aria2c 原生支持通过 HTTP CONNECT 代理下载 SFTP (--all-proxy=http://127.0.0.1:43289)。
+  if (aria2Bin && fs.existsSync(aria2Bin) && isSftp) {
     return new Promise((resolve, reject) => {
       if (cancelled) return reject(new Error('Cancelled'));
       const ariaArgs = [
@@ -2310,16 +2325,21 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         '--auto-file-renaming=false',
         '--allow-overwrite=true',
         '-d', fileDestFolder,
-        '-o', safeName,
-        file.url
+        '-o', safeName
       ];
 
-      console.log(`[Plugin] Running aria2c: ${aria2Bin} ${ariaArgs.join(' ')}`);
-      if (logStream) {
-        logStream.write(`=== 启动 aria2c 插件加速下载 ===\n命令: ${aria2Bin} ${ariaArgs.join(' ')}\n\n`);
+      if (clashProcess) {
+        ariaArgs.push('--all-proxy=http://127.0.0.1:43289');
       }
 
-      const proc = spawn(aria2Bin, ariaArgs, { env: cleanEnv });
+      ariaArgs.push(file.url);
+
+      console.log(`[Plugin] Running aria2c (SFTP): ${aria2Bin} ${ariaArgs.join(' ')}`);
+      if (logStream) {
+        logStream.write(`=== 启动 aria2c 插件加速下载 (SFTP) ===\n命令: ${aria2Bin} ${ariaArgs.join(' ')}\n\n`);
+      }
+
+      const proc = spawn(aria2Bin, ariaArgs);
       activeAxelProcesses.set(fileIndex, proc);
 
       cancelTokens.set(fileIndex, () => {
@@ -2381,12 +2401,29 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
     });
   }
 
-  // 降级使用 curl 兜底
+  // 针对 FTP (支持 socks5 代理传输) 及未就绪降级使用 curl
   return new Promise((resolve, reject) => {
     if (cancelled) return reject(new Error('Cancelled'));
-    const curlArgs = ['--noproxy', '*', '-sL', '-C', '-', '--insecure', '-o', savePath, file.url];
-    console.log(`[Plugin] Fallback to curl: curl ${curlArgs.join(' ')}`);
-    const proc = spawn('curl', curlArgs, { env: cleanEnv });
+    const curlArgs = ['-sL', '-C', '-', '--insecure'];
+    
+    // 代理挂载：若是 FTP 且加速器开启，走 Mihomo socks5 端口；若是 SFTP 走 http 代理
+    if (clashProcess) {
+      if (isFtp) {
+        curlArgs.push('--proxy', 'socks5://127.0.0.1:43290');
+      } else {
+        curlArgs.push('--proxy', 'http://127.0.0.1:43289');
+      }
+    } else {
+      curlArgs.push('--noproxy', '*');
+    }
+
+    curlArgs.push('-o', savePath, file.url);
+    console.log(`[Plugin] Downloading via curl: curl ${curlArgs.join(' ')}`);
+    if (logStream) {
+      logStream.write(`=== 启动 curl 下载引擎 ===\n命令: curl ${curlArgs.join(' ')}\n\n`);
+    }
+
+    const proc = spawn('curl', curlArgs);
     activeAxelProcesses.set(fileIndex, proc);
 
     cancelTokens.set(fileIndex, () => {
@@ -2444,7 +2481,6 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
     });
   });
 }
-
       mainWindow.webContents.send('download-status', {
         index: fileIndex,
         fileName: file.name,
