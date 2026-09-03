@@ -318,10 +318,12 @@ function switchTab(tabId) {
     'store-tab': '流量商店',
     'cloud-tab': '云下载',
     'profile-tab': '个人中心',
+    'plugins-tab': '扩展插件',
     'settings-tab': '全局设置'
   };
   document.getElementById('tabTitle').innerText = titles[tabId] || '下载中心';
   if (tabId === 'cloud-tab') syncCloudWorkspaceLogin();
+  if (tabId === 'plugins-tab') refreshPluginsList();
 }
 
 // 云下载只维护网页端一套实现；桌面端将当前登录令牌同步到隔离的官方同源 webview。
@@ -3755,6 +3757,99 @@ window.extractionReload = extractionReload;
 window.extractionClearCookies = extractionClearCookies;
 window.pauseExtractionDownload = pauseExtractionDownload;
 window.resumeExtractionDownload = resumeExtractionDownload;
+
+// ==========================================
+// 【扩展插件生态管理】
+// ==========================================
+async function refreshPluginsList() {
+  const container = document.getElementById('pluginsListContainer');
+  if (!container || !window.api || !window.api.getPluginStatus) return;
+
+  container.innerHTML = `
+    <div style="text-align:center; padding:2rem; color:var(--text-muted);">
+      <div style="display:inline-block; animation:spin 1s linear infinite; font-size:1.5rem; margin-bottom:0.5rem;">⏳</div>
+      <div>正在检测插件运行环境与依赖完整性...</div>
+    </div>
+  `;
+
+  try {
+    const res = await window.api.getPluginStatus();
+    const plugins = (res && res.plugins) || [];
+    if (plugins.length === 0) {
+      container.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:1.5rem;">暂无可用的扩展插件</div>';
+      return;
+    }
+
+    container.innerHTML = plugins.map(p => {
+      const isOk = p.installed && p.usable;
+      const statusBadge = isOk
+        ? `<span style="background:rgba(16, 185, 129, 0.15); color:#10b981; border:1px solid rgba(16, 185, 129, 0.3); padding:0.25rem 0.6rem; border-radius:6px; font-size:0.8rem; font-weight:700; display:flex; align-items:center; gap:0.25rem;">✅ 已就绪 (v${escapeHtml(p.version)})</span>`
+        : (p.installed
+            ? `<span style="background:rgba(239, 68, 68, 0.15); color:#ef4444; border:1px solid rgba(239, 68, 68, 0.3); padding:0.25rem 0.6rem; border-radius:6px; font-size:0.8rem; font-weight:700; display:flex; align-items:center; gap:0.25rem;">⚠️ 依赖缺失或异常</span>`
+            : `<span style="background:rgba(156, 163, 175, 0.15); color:var(--text-muted); border:1px solid var(--border-color); padding:0.25rem 0.6rem; border-radius:6px; font-size:0.8rem; font-weight:600; display:flex; align-items:center; gap:0.25rem;">⭕ 未安装</span>`);
+
+      const actionBtn = isOk
+        ? `<button class="btn btn-secondary" onclick="handleInstallPlugin('${escapeHtml(p.id)}', this)" style="font-size:0.8rem; padding:0.35rem 0.8rem;">🔄 重新校验 / 覆盖更新</button>`
+        : `<button class="btn btn-primary" onclick="handleInstallPlugin('${escapeHtml(p.id)}', this)" style="font-size:0.8rem; padding:0.35rem 0.8rem;">📥 立即下载并安装</button>`;
+
+      return `
+        <div style="background:var(--bg-input); border:1px solid var(--border-color); border-radius:10px; padding:1.1rem 1.25rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+          <div style="flex:1; min-width:240px;">
+            <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.4rem; flex-wrap:wrap;">
+              <span style="font-weight:700; font-size:0.95rem; color:var(--text-primary);">${escapeHtml(p.name)}</span>
+              ${statusBadge}
+            </div>
+            <div style="font-size:0.82rem; color:var(--text-muted); line-height:1.45; margin-bottom:0.4rem;">${escapeHtml(p.description)}</div>
+            <div style="font-size:0.75rem; color:var(--text-muted); font-family:monospace;">
+              <span>平台: ${escapeHtml(p.platform)}</span>
+              ${p.path ? `<span style="margin-left:0.8rem;">路径: ${escapeHtml(p.path)}</span>` : ''}
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            ${actionBtn}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+  } catch (err) {
+    container.innerHTML = `
+      <div style="padding:1.5rem; text-align:center; color:#ef4444; background:rgba(239, 68, 68, 0.08); border-radius:8px;">
+        <div>❌ 获取插件状态失败: ${escapeHtml(err.message)}</div>
+        <button class="btn btn-secondary" onclick="refreshPluginsList()" style="margin-top:0.75rem; font-size:0.8rem;">重试</button>
+      </div>
+    `;
+  }
+}
+
+async function handleInstallPlugin(pluginId, btnEl) {
+  if (!window.api || !window.api.installPlugin) return;
+  const originalText = btnEl ? btnEl.innerHTML : '';
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.innerHTML = '⏳ 正在下载安装...';
+  }
+  showToast('正在下载并配置插件...', 'info');
+  try {
+    const res = await window.api.installPlugin(pluginId);
+    if (res && res.success) {
+      showToast('插件安装就绪并校验通过！', 'success');
+      await refreshPluginsList();
+    } else {
+      showToast('安装失败', 'error');
+    }
+  } catch (e) {
+    showToast('插件安装出错: ' + e.message, 'error');
+  } finally {
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.innerHTML = originalText;
+    }
+  }
+}
+
+window.refreshPluginsList = refreshPluginsList;
+window.handleInstallPlugin = handleInstallPlugin;
 window.cancelExtractionDownload = cancelExtractionDownload;
 window.extractionRunCode = extractionRunCode;
 window.extractionDownloadResource = extractionDownloadResource;

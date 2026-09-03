@@ -1182,6 +1182,60 @@ ipcMain.handle('api-invite-copy', async (event, { token }) => {
   return res.data;
 });
 
+// 获取插件状态及安装情况
+ipcMain.handle('plugin-get-status', async () => {
+  const platform = os.platform();
+  const isWin = platform === 'win32';
+  const aria2Bin = getAria2BinaryPath();
+  const installed = !!(aria2Bin && fs.existsSync(aria2Bin));
+  
+  let version = null;
+  let usable = false;
+
+  if (installed) {
+    try {
+      const verOut = await new Promise((resolve, reject) => {
+        exec(`"${aria2Bin}" -v`, { timeout: 3000 }, (err, stdout) => {
+          if (err) return reject(err);
+          resolve(stdout);
+        });
+      });
+      const match = verOut.match(/aria2\s+version\s+([\d.]+)/i);
+      if (match) {
+        version = match[1];
+        usable = true;
+      }
+    } catch (e) {
+      console.warn('[Plugin] aria2c 检测执行异常:', e.message);
+      usable = false;
+    }
+  }
+
+  return {
+    plugins: [
+      {
+        id: 'aria2',
+        name: 'FTP / SFTP 高速下载插件 (aria2)',
+        description: '支持 FTP 原生多连接并发与 SFTP 隧道代理加速传输，断点续传。',
+        platform: isWin ? 'Windows x64' : 'macOS Apple Silicon',
+        installed,
+        usable,
+        version: version || '1.37.0',
+        path: aria2Bin || ''
+      }
+    ]
+  };
+});
+
+// 手动触发插件安装/重装
+ipcMain.handle('plugin-install', async (event, { pluginId }) => {
+  if (pluginId === 'aria2') {
+    const binPath = await ensureAria2Plugin();
+    return { success: true, path: binPath };
+  }
+  throw new Error('未知的插件 ID: ' + pluginId);
+});
+
 // --- Clash 控制 ---
 ipcMain.handle('clash-start', async (event, { token }) => {
   await startClash(token);

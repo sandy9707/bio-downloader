@@ -83,6 +83,10 @@ contextBridge.exposeInMainWorld('api', {
   deleteLog: (filename) => ipcRenderer.invoke('delete-log', filename),
   uploadLogContent: (token, filename, content) => ipcRenderer.invoke('upload-log-content', { token, filename, content }),
 
+  // 扩展插件生态 (FTP / SFTP 等)
+  getPluginStatus: () => ipcRenderer.invoke('plugin-get-status'),
+  installPlugin: (pluginId) => ipcRenderer.invoke('plugin-install', { pluginId }),
+
   // 事件监听器
   onDownloadStatus: (callback) => {
     ipcRenderer.removeAllListeners('download-status');
