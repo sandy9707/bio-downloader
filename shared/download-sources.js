@@ -15,7 +15,7 @@
     { id:'zenodo', label:'Zenodo', example:'10.5281/zenodo.22080384', exampleText:'10.5281/zenodo.22080384（约 12 KB）', placeholder:'每行一个 Record ID、DOI 或链接' },
     { id:'huggingface', label:'Hugging Face', example:'lhoestq/demo1', exampleText:'lhoestq/demo1（小型示例）', placeholder:'每行一个，例如 lhoestq/demo1' },
     { id:'ftp', label:'FTP 资源', example:'ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE13nnn/GSE13575/suppl/GSE13575_RAW.tar', exampleText:'NCBI FTP 补充数据示例', placeholder:'每行一个 FTP 下载链接，支持 ftp://[user:pass@]host[:port]/path' },
-    { id:'sftp', label:'SFTP 传输', example:'sftp://demo:password@test.rebex.net:22/readme.txt', exampleText:'测序机构/云主机 SFTP 链接示例', placeholder:'每行一个 SFTP 下载链接，格式: sftp://[user:pass@]host[:port]/path' }
+    { id:'sftp', label:'SFTP 传输', example:'sftp://demo:password@test.rebex.net/readme.txt', exampleText:'公网 SFTP 测试文件示例', placeholder:'每行一个 SFTP 下载链接，格式: sftp://[user:pass@]host[:port]/path' }
   ];
   const all = [...sources.filter(s => s.id !== 'other'), ...extras];
   const byId = Object.fromEntries(all.map(s => [s.id, s]));

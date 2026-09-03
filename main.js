@@ -2287,6 +2287,16 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
     console.warn('[Plugin] 获取 aria2 插件未成功，降级使用 curl 兜底:', err.message);
   }
 
+  // 关键修复：针对 FTP / SFTP 协议，axel 与 aria2c 对 HTTP 代理的 FTP CONNECT 握手通常不兼容（返回 502），
+  // 必须净化子进程环境变量，剔除 http_proxy / all_proxy，使其直连传输。
+  const cleanEnv = { ...env };
+  delete cleanEnv.http_proxy;
+  delete cleanEnv.https_proxy;
+  delete cleanEnv.all_proxy;
+  delete cleanEnv.HTTP_PROXY;
+  delete cleanEnv.HTTPS_PROXY;
+  delete cleanEnv.ALL_PROXY;
+
   if (aria2Bin && fs.existsSync(aria2Bin)) {
     return new Promise((resolve, reject) => {
       if (cancelled) return reject(new Error('Cancelled'));
@@ -2309,7 +2319,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         logStream.write(`=== 启动 aria2c 插件加速下载 ===\n命令: ${aria2Bin} ${ariaArgs.join(' ')}\n\n`);
       }
 
-      const proc = spawn(aria2Bin, ariaArgs, { env });
+      const proc = spawn(aria2Bin, ariaArgs, { env: cleanEnv });
       activeAxelProcesses.set(fileIndex, proc);
 
       cancelTokens.set(fileIndex, () => {
@@ -2376,7 +2386,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
     if (cancelled) return reject(new Error('Cancelled'));
     const curlArgs = ['--noproxy', '*', '-sL', '-C', '-', '--insecure', '-o', savePath, file.url];
     console.log(`[Plugin] Fallback to curl: curl ${curlArgs.join(' ')}`);
-    const proc = spawn('curl', curlArgs);
+    const proc = spawn('curl', curlArgs, { env: cleanEnv });
     activeAxelProcesses.set(fileIndex, proc);
 
     cancelTokens.set(fileIndex, () => {
