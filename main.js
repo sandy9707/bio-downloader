@@ -169,6 +169,44 @@ function ensureExecutable(filePath) {
   }
 }
 
+const TRANSFERS_FILE = path.join(app.getPath('userData'), 'transfers.json');
+
+function getTransfersData() {
+  try {
+    if (fs.existsSync(TRANSFERS_FILE)) {
+      return JSON.parse(fs.readFileSync(TRANSFERS_FILE, 'utf8'));
+    }
+  } catch (e) {
+    console.error('Failed to read transfers.json:', e.message);
+  }
+  return { completed: [], failed: [] };
+}
+
+function saveTransfersData(data) {
+  try {
+    const current = getTransfersData();
+    const updated = {
+      completed: Array.isArray(data?.completed) ? data.completed : current.completed,
+      failed: Array.isArray(data?.failed) ? data.failed : current.failed
+    };
+    const tmp = TRANSFERS_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(updated, null, 2), 'utf8');
+    fs.renameSync(tmp, TRANSFERS_FILE);
+    return updated;
+  } catch (e) {
+    console.error('Failed to save transfers.json:', e.message);
+    return { completed: [], failed: [] };
+  }
+}
+
+ipcMain.handle('get-transfers-history', () => {
+  return getTransfersData();
+});
+
+ipcMain.handle('save-transfers-history', (event, data) => {
+  return saveTransfersData(data);
+});
+
 // ==========================================
 // 【文件路径管理】
 // ==========================================
@@ -464,8 +502,29 @@ function createWindow() {
 
 function checkPendingAsarUpdates() {
   try {
-    const updateAsar = path.join(process.resourcesPath, 'update.asar');
+    // 检查持久化存储目录中是否存在已校验的热更新包
+    const persistentAsar = path.join(app.getPath('userData'), 'app.asar');
     const targetAsar = path.join(process.resourcesPath, 'app.asar');
+
+    // 若持久化存储目录中有更新的 asar，自动覆盖当前临时运行目录的 app.asar
+    if (fs.existsSync(persistentAsar) && fs.existsSync(targetAsar)) {
+      try {
+        const persistStat = fs.statSync(persistentAsar);
+        const targetStat = fs.statSync(targetAsar);
+        if (persistStat.size !== targetStat.size || persistStat.mtimeMs > targetStat.mtimeMs) {
+          console.log('[HotPatch] 从用户持久化目录加载最新 app.asar 核心...');
+          const backupAsar = path.join(process.resourcesPath, 'app.asar.old');
+          try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
+          fs.renameSync(targetAsar, backupAsar);
+          fs.copyFileSync(persistentAsar, targetAsar);
+          try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
+        }
+      } catch (e) {
+        console.warn('[HotPatch] 同步持久化 app.asar 提示:', e.message);
+      }
+    }
+
+    const updateAsar = path.join(process.resourcesPath, 'update.asar');
     if (fs.existsSync(updateAsar)) {
       const manifestPath = updateAsar + '.manifest';
       let manifest = null;
@@ -1379,28 +1438,37 @@ async function applyHotPatch(patchUrl) {
   }
   console.log('[HotPatch] 补丁签名校验通过');
 
-  // 5) 替换 app.asar(失败则连清单一起暂存 update.asar,下次启动二次校验后应用)
-  const targetAsar = path.join(process.resourcesPath, 'app.asar');
-  let successDirect = false;
+    // 5) 替换 app.asar 并写入持久化挂载目录(确保便携版与热更新均永久生效)
+    const targetAsar = path.join(process.resourcesPath, 'app.asar');
+    let successDirect = false;
 
-  try {
-    if (fs.existsSync(targetAsar)) {
-      const backupAsar = path.join(process.resourcesPath, 'app.asar.old');
-      try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
-      fs.renameSync(targetAsar, backupAsar);
-      fs.renameSync(tempPatchPath, targetAsar);
-      try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
-      successDirect = true;
-    }
-  } catch (err) {
-    console.warn('Direct replace app.asar failed, staging update.asar for next launch:', err.message);
-    const updateAsar = path.join(process.resourcesPath, 'update.asar');
-    fs.copyFileSync(tempPatchPath, updateAsar);
+    // 优先写入永久数据目录中的 app.asar，实现便携单文件 EXE 任意重解压均可优先挂载
+    const persistentAsar = path.join(app.getPath('userData'), 'app.asar');
     try {
-      fs.writeFileSync(updateAsar + '.manifest', JSON.stringify({ sha256: manifest.sha256, signature: manifest.signature }));
-    } catch(e){}
-    try { fs.unlinkSync(tempPatchPath); } catch(e){}
-  }
+      fs.copyFileSync(tempPatchPath, persistentAsar);
+      console.log('[HotPatch] 补丁已持久化写入用户数据目录:', persistentAsar);
+    } catch (persistErr) {
+      console.warn('[HotPatch] 写入用户目录 asar 提示:', persistErr.message);
+    }
+
+    try {
+      if (fs.existsSync(targetAsar)) {
+        const backupAsar = path.join(process.resourcesPath, 'app.asar.old');
+        try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
+        fs.renameSync(targetAsar, backupAsar);
+        fs.renameSync(tempPatchPath, targetAsar);
+        try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
+        successDirect = true;
+      }
+    } catch (err) {
+      console.warn('Direct replace app.asar failed, staging update.asar for next launch:', err.message);
+      const updateAsar = path.join(process.resourcesPath, 'update.asar');
+      try { fs.copyFileSync(persistentAsar, updateAsar); } catch(e) {}
+      try {
+        fs.writeFileSync(updateAsar + '.manifest', JSON.stringify({ sha256: manifest.sha256, signature: manifest.signature }));
+      } catch(e){}
+    }
+    try { if (fs.existsSync(tempPatchPath)) fs.unlinkSync(tempPatchPath); } catch(e){}
 
   return { success: true, direct: successDirect, message: '代码热更新补丁已就绪！应用即将重启...' };
 }
@@ -1408,6 +1476,15 @@ async function applyHotPatch(patchUrl) {
 ipcMain.handle('apply-hot-patch', async (event, { patchUrl }) => {
   const res = await applyHotPatch(patchUrl);
   setTimeout(() => {
+    // 针对便携版 Windows: 如果存在 PORTABLE_EXECUTABLE_FILE 则精准唤醒原便携 EXE
+    if (process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_FILE && fs.existsSync(process.env.PORTABLE_EXECUTABLE_FILE)) {
+      try {
+        const { spawn } = require('child_process');
+        spawn(process.env.PORTABLE_EXECUTABLE_FILE, [], { detached: true, stdio: 'ignore' }).unref();
+        app.exit(0);
+        return;
+      } catch (e) {}
+    }
     app.relaunch();
     app.exit(0);
   }, 1200);

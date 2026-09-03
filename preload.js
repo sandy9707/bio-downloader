@@ -87,6 +87,10 @@ contextBridge.exposeInMainWorld('api', {
   getPluginStatus: () => ipcRenderer.invoke('plugin-get-status'),
   installPlugin: (pluginId) => ipcRenderer.invoke('plugin-install', { pluginId }),
 
+  // 传输记录物理文件持久化 (防止重启/便携版解压后丢记录)
+  getTransfersHistory: () => ipcRenderer.invoke('get-transfers-history'),
+  saveTransfersHistory: (data) => ipcRenderer.invoke('save-transfers-history', data),
+
   // 事件监听器
   onDownloadStatus: (callback) => {
     ipcRenderer.removeAllListeners('download-status');

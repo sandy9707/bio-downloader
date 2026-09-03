@@ -183,7 +183,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   updateCheckinButton();
 
   // 4. 初始化传输中心历史记录与并发限制
-  initTransfersAndSettings(settings);
+  await initTransfersAndSettings(settings);
 
   // 4.5 恢复高级模式开关状态
   const advToggle = document.getElementById('settingsAdvancedModeToggle');
@@ -2695,28 +2695,28 @@ function openCompletedFile(savePath) {
 
 function deleteCompletedRecord(index) {
   completedDownloads.splice(index, 1);
-  localStorage.setItem('completed_downloads', JSON.stringify(completedDownloads));
+  syncTransfersToStorage();
   renderCompletedList();
   updateTransferCounts();
 }
 
 function deleteFailedRecord(index) {
   failedDownloads.splice(index, 1);
-  localStorage.setItem('failed_downloads', JSON.stringify(failedDownloads));
+  syncTransfersToStorage();
   renderFailedList();
   updateTransferCounts();
 }
 
 function clearCompletedDownloads() {
   completedDownloads = [];
-  localStorage.setItem('completed_downloads', JSON.stringify([]));
+  syncTransfersToStorage();
   renderCompletedList();
   updateTransferCounts();
 }
 
 function clearFailedDownloads() {
   failedDownloads = [];
-  localStorage.setItem('failed_downloads', JSON.stringify([]));
+  syncTransfersToStorage();
   renderFailedList();
   updateTransferCounts();
 }
@@ -2726,7 +2726,7 @@ async function retryFailedDownload(index) {
   if (!item) return;
 
   failedDownloads.splice(index, 1);
-  localStorage.setItem('failed_downloads', JSON.stringify(failedDownloads));
+  syncTransfersToStorage();
   renderFailedList();
   updateTransferCounts();
 
@@ -2757,7 +2757,7 @@ async function retryAllFailedDownloads() {
   if (failedDownloads.length === 0) return;
   const listToRetry = [...failedDownloads];
   failedDownloads = [];
-  localStorage.setItem('failed_downloads', JSON.stringify([]));
+  syncTransfersToStorage();
   renderFailedList();
   updateTransferCounts();
 
@@ -2937,17 +2937,42 @@ async function changeMaxConcurrent(val) {
   }
 }
 
-// 载入已下载历史与并发数
-function initTransfersAndSettings(settings) {
-  // 1. 载入历史记录
+// 物理同步保存传输历史数据 (transfers.json)
+function syncTransfersToStorage() {
   try {
-    const storedCompleted = localStorage.getItem('completed_downloads');
-    if (storedCompleted) {
-      completedDownloads = JSON.parse(storedCompleted);
+    localStorage.setItem('completed_downloads', JSON.stringify(completedDownloads));
+    localStorage.setItem('failed_downloads', JSON.stringify(failedDownloads));
+  } catch (e) {}
+
+  if (window.api && window.api.saveTransfersHistory) {
+    window.api.saveTransfersHistory({
+      completed: completedDownloads,
+      failed: failedDownloads
+    }).catch(err => console.error('Failed to sync transfers to physical file:', err));
+  }
+}
+
+// 载入已下载历史与并发数
+async function initTransfersAndSettings(settings) {
+  // 1. 优先从主进程物理 transfers.json 载入历史记录, 兜底读取 localStorage
+  try {
+    let loadedFromDisk = false;
+    if (window.api && window.api.getTransfersHistory) {
+      const history = await window.api.getTransfersHistory();
+      if (history && (Array.isArray(history.completed) || Array.isArray(history.failed))) {
+        completedDownloads = Array.isArray(history.completed) ? history.completed : [];
+        failedDownloads = Array.isArray(history.failed) ? history.failed : [];
+        loadedFromDisk = completedDownloads.length > 0 || failedDownloads.length > 0;
+      }
     }
-    const storedFailed = localStorage.getItem('failed_downloads');
-    if (storedFailed) {
-      failedDownloads = JSON.parse(storedFailed);
+
+    if (!loadedFromDisk) {
+      const storedCompleted = localStorage.getItem('completed_downloads');
+      if (storedCompleted) completedDownloads = JSON.parse(storedCompleted);
+      const storedFailed = localStorage.getItem('failed_downloads');
+      if (storedFailed) failedDownloads = JSON.parse(storedFailed);
+      // 迁移写入物理文件
+      syncTransfersToStorage();
     }
   } catch (e) {
     console.error('Failed to load transfer histories:', e);
@@ -3035,7 +3060,7 @@ window.api.onDownloadStatus((data) => {
         fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex }
       };
       completedDownloads.unshift(completedItem);
-      localStorage.setItem('completed_downloads', JSON.stringify(completedDownloads));
+      syncTransfersToStorage();
       
       activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
       renderCompletedList();
@@ -3053,7 +3078,7 @@ window.api.onDownloadStatus((data) => {
         fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex }
       };
       failedDownloads.unshift(failedItem);
-      localStorage.setItem('failed_downloads', JSON.stringify(failedDownloads));
+      syncTransfersToStorage();
       
       activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
       renderFailedList();
@@ -3605,7 +3630,7 @@ function handleExtractionDownload(d) {
   if (d.status === 'completed') {
     const rec = { name: d.name || (j && j.name) || '下载', url: (j && j.url) || '', size: d.size || (j && j.size) || 0, savePath: d.savePath || '', completedAt: new Date().toLocaleString(), skip: false, folder: '', type: 'extraction', fileObj: {} };
     completedDownloads.unshift(rec);
-    localStorage.setItem('completed_downloads', JSON.stringify(completedDownloads));
+    syncTransfersToStorage();
     delete extractionJobs[id];
     const card = document.getElementById('ex-card-' + id); if (card) card.remove();
     renderCompletedList(); renderExtractionTransferCards(); updateTransferCounts();
@@ -3629,7 +3654,7 @@ function handleExtractionDownload(d) {
     }
     const rec = { name: (j && j.name) || '下载', url: (j && j.url) || '', size: (j && j.size) || 0, failedReason: d.message || '下载失败', failedAt: new Date().toLocaleString(), folder: '', type: 'extraction', fileObj: {} };
     failedDownloads.unshift(rec);
-    localStorage.setItem('failed_downloads', JSON.stringify(failedDownloads));
+    syncTransfersToStorage();
     delete extractionJobs[id];
     const card = document.getElementById('ex-card-' + id); if (card) card.remove();
     renderFailedList(); renderExtractionTransferCards(); updateTransferCounts();
