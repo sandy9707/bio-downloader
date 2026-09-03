@@ -3809,6 +3809,7 @@ async function refreshPluginsList() {
               <span>平台: ${escapeHtml(p.platform)}</span>
               ${p.path ? `<span style="margin-left:0.8rem;">路径: ${escapeHtml(p.path)}</span>` : ''}
             </div>
+            ${p.errorDetail ? `<div style="margin-top:0.4rem; padding:0.4rem 0.6rem; background:rgba(239, 68, 68, 0.1); border-radius:4px; font-size:0.75rem; color:#ef4444; font-family:monospace; word-break:break-all;">报错原因: ${escapeHtml(p.errorDetail)}</div>` : ''}
           </div>
           <div style="display:flex; align-items:center; gap:0.5rem;">
             ${actionBtn}

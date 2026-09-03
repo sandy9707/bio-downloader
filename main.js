@@ -358,12 +358,25 @@ async function ensureAria2Plugin(forceReinstall = false) {
     });
 
     await new Promise((resolve, reject) => {
-      exec(`tar -xzf "${tempTar}" -C "${aria2Dir}"`, (err) => {
+      exec(`tar -xzf "${tempTar}" -C "${aria2Dir}"`, (err, stdout, stderr) => {
         try { fs.unlinkSync(tempTar); } catch (e) {}
-        if (err) reject(new Error('解压 aria2 插件失败: ' + err.message));
+        if (err) reject(new Error('解压 aria2 插件失败: ' + (stderr || err.message)));
         else resolve();
       });
     });
+
+    // 针对 macOS: 彻底清除 Gatekeeper 隔离属性(com.apple.quarantine)，防止 Apple 安全机制拦截本地加载动态库
+    try {
+      exec(`xattr -rd com.apple.quarantine "${aria2Dir}" 2>/dev/null`, () => {});
+    } catch (e) {}
+
+    // 确保解压出来的所有 dylib 及可执行文件都具备执行权限，避免权限缺失无法加载
+    try {
+      const files = fs.readdirSync(aria2Dir);
+      for (const f of files) {
+        ensureExecutable(path.join(aria2Dir, f));
+      }
+    } catch (e) {}
   } else {
     const response = await axios({
       method: 'GET',
@@ -1197,12 +1210,16 @@ ipcMain.handle('plugin-get-status', async () => {
   
   let version = null;
   let usable = false;
+  let errorDetail = '';
 
   if (installed) {
     try {
       const verOut = await new Promise((resolve, reject) => {
-        exec(`"${aria2Bin}" -v`, { timeout: 3000 }, (err, stdout) => {
-          if (err) return reject(err);
+        exec(`"${aria2Bin}" -v`, { timeout: 3000 }, (err, stdout, stderr) => {
+          if (err) {
+            err.stderr = stderr;
+            return reject(err);
+          }
           resolve(stdout);
         });
       });
@@ -1212,7 +1229,8 @@ ipcMain.handle('plugin-get-status', async () => {
         usable = true;
       }
     } catch (e) {
-      console.warn('[Plugin] aria2c 检测执行异常:', e.message);
+      errorDetail = (e.stderr || e.message || '').trim();
+      console.warn('[Plugin] aria2c 检测执行异常:', errorDetail);
       usable = false;
     }
   }
@@ -1227,6 +1245,7 @@ ipcMain.handle('plugin-get-status', async () => {
         installed,
         usable,
         version: version || '1.37.0',
+        errorDetail,
         path: aria2Bin || ''
       }
     ]
