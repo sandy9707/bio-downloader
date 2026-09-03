@@ -764,7 +764,13 @@ async function downloadUpdate(platform) {
   if (!updateInfoGlobal) return;
 
   const backendUrl = platform === 'win' ? updateInfoGlobal.winUrl : updateInfoGlobal.macUrl;
-  const fileName = backendUrl.substring(backendUrl.lastIndexOf('/') + 1);
+  let fileName = 'BioDownloader-update';
+  try {
+    const rawPath = new URL(backendUrl, window.location.href).pathname;
+    fileName = rawPath.substring(rawPath.lastIndexOf('/') + 1) || fileName;
+  } catch (e) {
+    fileName = backendUrl.split('?')[0].split('#')[0].split('/').pop() || fileName;
+  }
   const btnId = platform === 'win' ? 'downloadWinUpdateBtn' : 'downloadMacUpdateBtn';
   
   const btn = document.getElementById(btnId);

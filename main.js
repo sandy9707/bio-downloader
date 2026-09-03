@@ -901,7 +901,12 @@ function fileNameFromUrl(url) {
 // 清洗路径片段(文件名/目录名):去除各平台非法字符,作为保存路径的纵深防御,杜绝 Windows 下非法名崩溃
 function sanitizePathSegment(seg) {
   if (seg === undefined || seg === null) return seg;
-  return String(seg)
+  // 若文件名末尾带有 URL 查询参数(如 .exe?v=2.0.20),剥除参数保留纯净文件名
+  let s = String(seg);
+  if (/\.(exe|dmg|tar|gz|zip|bz2|zst|sra|fastq|fq|bam|cram)\?[^/\\]+$/i.test(s)) {
+    s = s.replace(/\?[^/\\]+$/, '');
+  }
+  return s
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
     .replace(/\s+/g, ' ')
     .replace(/[. ]+$/g, '')
