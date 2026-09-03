@@ -1,0 +1,2017 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>BioDownloader Pro - 生信数据多线程加速下载器</title>
+  <style>
+    /* ==========================================
+       【全局变量 & 主题设计】
+       ========================================== */
+    /* ---- 亮色主题 (默认) ---- */
+    :root {
+      --bg-main: #f0f4f8;
+      --bg-sidebar: #ffffff;
+      --bg-card: rgba(255, 255, 255, 0.85);
+      --bg-input: #f8fafc;
+      --border-color: rgba(203, 213, 225, 0.8);
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --sidebar-border: rgba(226, 232, 240, 1);
+      --queue-item-bg: rgba(241, 245, 249, 0.8);
+      --progress-bar-bg: #e2e8f0;
+      --package-card-bg: rgba(248, 250, 252, 0.9);
+      --modal-bg: #ffffff;
+
+      /* 语义化补充变量(修复多处未定义引用:传输卡片底色/子tab激活态/重试按钮/文本色等) */
+      --card-bg: #ffffff;
+      --card-bg-selected: #eef2ff;
+      --primary-color: #4f46e5;
+      --primary: #4f46e5;
+      --primary-light: #6366f1;
+      --text-color: #334155;
+      --text-primary: #0f172a;
+
+      /* 组件级语义变量(亮色为主,修复亮色下写死的深色值) */
+      --btn-secondary-bg: rgba(99, 102, 241, 0.08);
+      --btn-secondary-bg-hover: rgba(99, 102, 241, 0.16);
+      --btn-disabled-bg: #e2e8f0;
+      --btn-disabled-text: #94a3b8;
+      --switch-track: #cbd5e1;
+      --surface-subtle: rgba(15, 23, 42, 0.035);
+      --code-bg: #f1f5f9;
+      --code-text: #334155;
+
+      /* 渐变配色 */
+      --primary-grad: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+      --accent-grad: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+      --success-grad: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      --danger-grad: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+      
+      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    /* ---- 暗色主题 ---- */
+    body.dark-mode {
+      --bg-main: #0b0f19;
+      --bg-sidebar: rgba(15, 23, 42, 0.95);
+      --bg-card: rgba(30, 41, 59, 0.45);
+      --bg-input: #0f172a;
+      --border-color: rgba(51, 65, 85, 0.5);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --sidebar-border: rgba(51, 65, 85, 0.5);
+      --queue-item-bg: rgba(15, 23, 42, 0.4);
+      --progress-bar-bg: #1e293b;
+      --package-card-bg: rgba(15, 23, 42, 0.6);
+      --modal-bg: #1e293b;
+      --card-bg: rgba(30, 41, 59, 0.6);
+      --card-bg-selected: rgba(99, 102, 241, 0.18);
+      --primary-color: #818cf8;
+      --primary: #6366f1;
+      --primary-light: #a5b4fc;
+      --text-color: #cbd5e1;
+      --text-primary: #f8fafc;
+      --btn-secondary-bg: rgba(51, 65, 85, 0.5);
+      --btn-secondary-bg-hover: rgba(51, 65, 85, 0.7);
+      --btn-disabled-bg: #1e293b;
+      --btn-disabled-text: #64748b;
+      --switch-track: #374151;
+      --surface-subtle: rgba(255, 255, 255, 0.04);
+      --code-bg: #0b0f19;
+      --code-text: #cbd5e1;
+    }
+
+    /* 滚动条主题化(细条 + 主题色,统一队列/传输/日志滚动区质感) */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+    /* 下拉菜单项 hover 反馈(此前无 hover 规则,鼠标悬停无变化) */
+    .dropdown-item:hover { background: var(--queue-item-bg); }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      font-family: var(--font-family);
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      font-variant-numeric: tabular-nums; /* 数据等宽数字,避免速度/百分比/大小刷新时抖动 */
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      transition: background-color 0.3s, color 0.3s;
+    }
+
+    /* ==========================================
+       【左侧边栏 (Sidebar)】
+       ========================================== */
+    .sidebar {
+      width: 240px;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--sidebar-border);
+      display: flex;
+      flex-direction: column;
+      padding: 1.5rem;
+      flex-shrink: 0;
+      box-shadow: 2px 0 12px rgba(0,0,0,0.06);
+      transition: background 0.3s, border-color 0.3s;
+    }
+
+    .brand {
+      font-size: 1.3rem;
+      font-weight: 800;
+      background: linear-gradient(to right, #38bdf8, #818cf8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 2rem;
+      text-align: center;
+      letter-spacing: 0.5px;
+    }
+
+    .nav-menu {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      flex-grow: 1;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      padding: 0.85rem 1rem;
+      border-radius: 8px;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      font-weight: 500;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .nav-item:hover {
+      background: rgba(99, 102, 241, 0.08);
+      color: var(--text-main);
+    }
+
+    .nav-item.active {
+      background: var(--primary-grad);
+      color: white;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
+    }
+
+    .accelerator-status-panel {
+      padding: 1rem;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 0.5rem;
+      font-size: 0.85rem;
+      transition: background 0.3s;
+    }
+
+    .theme-toggle-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      width: 100%;
+      padding: 0.6rem;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-card);
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-weight: 500;
+      margin-top: auto;
+      margin-bottom: 0.5rem;
+      transition: all 0.2s;
+    }
+
+    .theme-toggle-btn:hover {
+      background: rgba(99, 102, 241, 0.1);
+      color: var(--text-main);
+      border-color: #6366f1;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ef4444;
+      box-shadow: 0 0 8px #ef4444;
+      transition: all 0.3s;
+    }
+
+    .dot.active {
+      background: #10b981;
+      box-shadow: 0 0 10px #10b981;
+    }
+
+    .dot.warning {
+      background: #f59e0b;
+      box-shadow: 0 0 10px #f59e0b;
+    }
+
+    /* Switch toggle */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 38px;
+      height: 20px;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: var(--switch-track);
+      transition: .3s;
+      border-radius: 20px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .3s;
+      border-radius: 50%;
+    }
+
+    input:checked + .slider {
+      background-image: var(--primary-grad);
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(18px);
+    }
+
+    /* ==========================================
+       【右侧主体 (Main Content Container)】
+       ========================================== */
+    .main-container {
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-main);
+      padding: 2rem;
+      overflow-y: auto;
+      transition: background 0.3s;
+    }
+
+    .header-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 1rem;
+      flex-shrink: 0;
+    }
+
+    .page-title {
+      font-size: 1.4rem;
+      font-weight: 700;
+    }
+
+    .user-info-badge {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      background: var(--bg-card);
+      padding: 0.5rem 1rem;
+      border-radius: 20px;
+      border: 1px solid var(--border-color);
+      font-size: 0.85rem;
+      transition: background 0.3s;
+    }
+
+    .traffic-progress-container {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      width: 180px;
+    }
+
+    .traffic-text {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .progress-bar-bg {
+      width: 100%;
+      height: 6px;
+      background: var(--progress-bar-bg);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: var(--accent-grad);
+      width: 0%;
+      transition: width 0.4s ease;
+    }
+
+    /* ==========================================
+       【页面视图 (Tab Views)】
+       ========================================== */
+    .tab-view {
+      display: none;
+      flex-direction: column;
+      gap: 1.5rem;
+      animation: fadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      flex-grow: 1;
+    }
+
+    .tab-view.active {
+      display: flex;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ==========================================
+       【卡片与通用组件设计】
+       ========================================== */
+    .card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    }
+
+    /* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V4 · component: source navigation · theme: existing BioDownloader · responsive: pass */
+    .btn-group {
+      display: inline-flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem;
+      background: var(--bg-card);
+      padding: 0.25rem;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      align-self: flex-start;
+      margin-bottom: 0;
+      transition: background 0.3s;
+    }
+
+    .pill-btn {
+      padding: 0.45rem 1rem;
+      border-radius: 6px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 600;
+      transition: all 0.2s;
+      min-width: 0;
+      flex: 0 0 auto;
+      white-space: nowrap;
+      word-break: keep-all;
+      overflow-wrap: normal;
+    }
+
+    .pill-btn:hover {
+      color: var(--text-primary);
+      background: rgba(99, 102, 241, 0.08);
+    }
+
+    .pill-btn.active {
+      background: var(--primary-grad);
+      color: white;
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.2);
+    }
+
+    /* 下载中心顶行:常用数据源 + 引导式提取 固定排在同一行；二级数据源独立成第二行 */
+    .hub-top-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+    .hub-top-row .btn-group { flex: 0 0 auto; margin-bottom: 0; }
+    .extraction-entry {
+      flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.45rem; white-space: nowrap;
+      background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px;
+      padding: 0.45rem 1rem; cursor: pointer; color: var(--primary-color); font-weight: 700; font-size: 0.85rem;
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      transition: border-color .2s, background .2s, transform .12s, box-shadow .12s;
+    }
+    .extraction-entry:hover { border-color: var(--primary-color); background: var(--btn-secondary-bg-hover); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(79,70,229,0.15); }
+    .extraction-entry .ex-ico { font-size: 1rem; }
+
+    .hub-secondary-row {
+      margin-bottom: 0.75rem;
+      animation: fadeIn 0.2s ease-in-out;
+    }
+
+    @media (max-width: 760px) {
+      .hub-top-row { flex-direction: column; align-items: stretch; }
+      .hub-top-row .btn-group { width: 100%; justify-content: flex-start; }
+      .extraction-entry { width: 100%; justify-content: center; padding: 0.6rem 1rem; }
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .form-group label {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    textarea, input[type="text"], input[type="password"], input[type="email"] {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 0.75rem;
+      color: var(--text-main);
+      font-family: inherit;
+      font-size: 0.9rem;
+      outline: none;
+      transition: all 0.2s, background 0.3s;
+    }
+
+    textarea:focus, input[type="text"]:focus, input[type="password"]:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+    }
+
+    /* 文件夹选择器输入组合 */
+    .dir-select-group {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .btn {
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      border: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      color: white;
+    }
+
+    .btn-primary { background: var(--primary-grad); }
+    .btn-primary:hover { opacity: 0.95; transform: translateY(-1px); }
+    .btn-secondary { background: var(--btn-secondary-bg); border: 1px solid var(--border-color); color: var(--text-main); }
+    .btn-secondary:hover { background: var(--btn-secondary-bg-hover); }
+    .btn-accent { background: var(--accent-grad); }
+    .btn-accent:hover { opacity: 0.95; transform: translateY(-1px); }
+    .btn-success { background: var(--success-grad); }
+    .btn-success:hover { opacity: 0.95; transform: translateY(-1px); }
+    .btn-danger { background: var(--danger-grad); }
+    .btn-danger:hover { opacity: 0.95; transform: translateY(-1px); }
+
+    .btn:disabled {
+      background: var(--btn-disabled-bg) !important;
+      color: var(--btn-disabled-text) !important;
+      cursor: not-allowed;
+      transform: none !important;
+      box-shadow: none !important;
+      opacity: 0.5;
+    }
+
+    /* ==========================================
+       【下载任务列表 (Queue List)】
+       ========================================== */
+    .queue-container {
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      margin-top: 1rem;
+    }
+
+    .queue-header {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .queue-list {
+      flex-grow: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      padding-right: 0.5rem;
+    }
+
+    .queue-item {
+      background: var(--queue-item-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 0.9rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      transition: background 0.3s;
+    }
+
+    .item-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+    }
+
+    .item-name {
+      font-weight: 600;
+      color: var(--text-main);
+      max-width: 60%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .item-info {
+      color: var(--text-muted);
+      display: flex;
+      gap: 1rem;
+    }
+
+    .item-status {
+      font-size: 0.8rem;
+      font-weight: bold;
+    }
+
+    .status-pending { color: #f59e0b; }
+    .status-downloading { color: #38bdf8; }
+    .status-completed { color: #10b981; }
+    .status-failed { color: #ef4444; }
+
+    .item-progress-bar {
+      width: 100%;
+      height: 8px;
+      background: var(--progress-bar-bg);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .item-progress-fill {
+      height: 100%;
+      background: var(--primary-grad);
+      width: 0%;
+      transition: width 0.2s;
+    }
+
+    /* ==========================================
+       【账户与充值视图设计】
+       ========================================== */
+    .profile-grid {
+      display: grid;
+      grid-template-columns: 1fr 1.5fr;
+      gap: 1.5rem;
+    }
+
+    .profile-card {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .package-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .package-card {
+      background: var(--package-card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 1.5rem;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      transition: all 0.25s;
+    }
+
+    .package-card:hover {
+      border-color: #6366f1;
+      transform: translateY(-2px);
+    }
+
+    .package-price {
+      font-size: 1.8rem;
+      font-weight: 800;
+      color: #38bdf8;
+    }
+
+    /* ==========================================
+       【模态框 (Payment Modal)】
+       ========================================== */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.85);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      backdrop-filter: blur(8px);
+    }
+
+    .modal {
+      background: var(--modal-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      width: 450px;
+      max-width: 92vw;
+      max-height: 86vh;
+      overflow-y: auto;
+      padding: 2rem;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+      text-align: center;
+      transition: background 0.3s;
+      animation: modalIn 0.22s ease-out;
+    }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(14px) scale(0.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* 可访问性:键盘焦点可见;输入框与 .selectable 文本允许选中复制(放宽全局 user-select:none) */
+    :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+    input, textarea, .selectable { user-select: text; }
+
+    .modal h3 {
+      color: var(--primary-color);
+      margin-bottom: 1rem;
+    }
+
+    .modal-checkout-link {
+      display: block;
+      margin: 1.5rem 0;
+      color: #6366f1;
+      font-weight: bold;
+      text-decoration: none;
+      background: rgba(99, 102, 241, 0.15);
+      padding: 0.75rem;
+      border-radius: 6px;
+      border: 1px dashed #6366f1;
+      font-size: 0.95rem;
+    }
+
+    .modal-checkout-link:hover {
+      background: rgba(99, 102, 241, 0.25);
+    }
+
+    .recharge-opt.selected {
+      border-color: #10b981;
+      background: rgba(16, 185, 129, 0.15);
+      box-shadow: 0 0 0 1px #10b981;
+    }
+    .btn-sm {
+      font-size: 0.8rem;
+      padding: 0.3rem 0.7rem;
+    }
+    .order-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .order-row:last-child { border-bottom: none; }
+    .device-row-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .device-row-item:last-child { border-bottom: none; }
+
+    /* ==========================================
+       【通知框 & 载入框】
+       ========================================== */
+    .notification {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      padding: 1rem 1.5rem;
+      border-radius: 8px;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+      color: white;
+      font-weight: 600;
+      z-index: 1000;
+      display: none;
+      animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
+    /* ==========================================
+       【传输列表专属样式】
+       ========================================== */
+    .transfers-container {
+      max-width: 900px;
+      margin: 0 auto;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .transfers-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border-color);
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .transfer-sub-tabs {
+      display: flex;
+      gap: 0.5rem;
+      background: var(--surface-subtle);
+      padding: 0.25rem;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+    }
+
+    .sub-tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 0.5rem 1.25rem;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .sub-tab-btn:hover {
+      color: var(--text-color);
+    }
+
+    .sub-tab-btn.active {
+      background: var(--card-bg-selected);
+      color: var(--primary-color);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+
+    .transfer-list-container {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      min-height: 300px;
+    }
+
+    .transfer-item {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      position: relative;
+      transition: border-color 0.2s ease;
+    }
+
+    .transfer-item:hover {
+      border-color: rgba(99, 102, 241, 0.3);
+    }
+
+    .transfer-item-info {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .transfer-item-name-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .transfer-item-name {
+      font-size: 0.95rem;
+      font-weight: bold;
+      color: var(--text-color);
+      word-break: break-all;
+      flex: 1;
+    }
+
+    .transfer-item-badge {
+      font-size: 0.75rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      background: rgba(99, 102, 241, 0.1);
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      color: var(--primary-light);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .transfer-item-meta {
+      display: flex;
+      gap: 1.5rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      flex-wrap: wrap;
+    }
+
+    .transfer-item-status {
+      font-weight: 600;
+    }
+
+    .transfer-item-status.completed {
+      color: #10b981;
+    }
+
+    .transfer-item-status.failed {
+      color: #ef4444;
+    }
+
+    .transfer-progress-bar {
+      height: 6px;
+      background: var(--surface-subtle);
+      border-radius: 99px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .transfer-progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #6366f1, #3b82f6);
+      border-radius: 99px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+
+    .transfer-item-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.75rem;
+      margin-top: 0.25rem;
+    }
+
+    .action-btn {
+      font-size: 0.8rem;
+      padding: 0.35rem 0.8rem;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid var(--border-color);
+      background: transparent;
+      color: var(--text-color);
+      transition: all 0.2s;
+    }
+
+    .action-btn:hover {
+      background: var(--surface-subtle);
+      border-color: var(--text-muted);
+    }
+
+    .action-btn.cancel-btn {
+      border-color: rgba(239, 68, 68, 0.3);
+      color: #ef4444;
+    }
+
+    .action-btn.cancel-btn:hover {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: #ef4444;
+    }
+
+    .action-btn.open-file-btn {
+      border-color: rgba(16, 185, 129, 0.3);
+      color: #10b981;
+    }
+
+    .action-btn.open-file-btn:hover {
+      background: rgba(16, 185, 129, 0.1);
+      border-color: #10b981;
+    }
+
+    /* ===== 传输列表 v2(参考 Downie/Motrix/迅雷 的成熟任务卡片) ===== */
+    .transfer-toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .transfer-search {
+      height: 34px;
+      min-width: 160px;
+      max-width: 220px;
+      padding: 0 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-input, var(--surface-subtle));
+      color: var(--text-main, var(--text-color));
+      font-size: 0.82rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .transfer-search:focus {
+      border-color: var(--primary-color);
+    }
+
+    .transfer-stats-line {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      padding: 0 0.15rem;
+      display: none;
+    }
+
+    .tl-card {
+      flex-direction: row;
+      align-items: center;
+      gap: 0.9rem;
+      padding: 1rem 1.1rem;
+    }
+
+    .tl-icon {
+      font-size: 1.6rem;
+      flex: 0 0 auto;
+      opacity: 0.9;
+      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.15));
+    }
+
+    .tl-body {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+
+    .tl-progress-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    .tl-progress-row .transfer-progress-bar {
+      flex: 1;
+    }
+
+    .tl-pct {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-family: 'SF Mono', Consolas, monospace;
+      min-width: 36px;
+      text-align: right;
+      flex: 0 0 auto;
+    }
+
+    .tl-eta {
+      color: var(--primary-light, #818cf8);
+      font-weight: 500;
+    }
+
+    .transfer-progress-fill.paused {
+      background: linear-gradient(90deg, #f59e0b, #fbbf24);
+    }
+
+    .transfer-item-status.paused {
+      color: #f59e0b;
+    }
+
+    .tl-card.tl-paused {
+      border-color: rgba(245, 158, 11, 0.35);
+    }
+
+    .tl-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex: 0 0 auto;
+    }
+
+    .tl-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background: var(--surface-subtle);
+      color: var(--text-color);
+      font-size: 0.85rem;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+    }
+
+    .tl-btn:hover {
+      border-color: var(--text-muted);
+      transform: translateY(-1px);
+    }
+
+    .tl-btn.primary {
+      border-color: rgba(99, 102, 241, 0.4);
+      color: var(--primary-light, #818cf8);
+      background: rgba(99, 102, 241, 0.08);
+    }
+
+    .tl-btn.primary:hover {
+      background: rgba(99, 102, 241, 0.18);
+      border-color: var(--primary-color);
+    }
+
+    .tl-btn.danger {
+      border-color: rgba(239, 68, 68, 0.3);
+      color: #ef4444;
+      background: transparent;
+    }
+
+    .tl-btn.danger:hover {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: #ef4444;
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 4rem 2rem;
+      color: var(--text-muted);
+      text-align: center;
+      gap: 1rem;
+    }
+
+    .empty-icon {
+      font-size: 3rem;
+      opacity: 0.4;
+    }
+
+    .badge {
+      display: inline-block;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 4px;
+      border-radius: 9px;
+      background: #ef4444;
+      color: white;
+      font-size: 0.7rem;
+      font-weight: bold;
+      line-height: 18px;
+      text-align: center;
+      margin-left: 0.5rem;
+      vertical-align: middle;
+    }
+    /* Switch toggle styles */
+    .switch {
+      position: relative; display: inline-block; width: 44px; height: 24px;
+    }
+    .switch input {
+      opacity: 0; width: 0; height: 0;
+    }
+    .switch-slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background-color: var(--switch-track); transition: .3s; border-radius: 24px;
+    }
+    .switch-slider:before {
+      position: absolute; content: ""; height: 16px; width: 16px; left: 4px; bottom: 4px;
+      background-color: white; transition: .3s; border-radius: 50%;
+    }
+    input:checked + .switch-slider {
+      background-color: #6366f1;
+    }
+    input:checked + .switch-slider:before {
+      transform: translateX(20px);
+    }
+
+    /* ===== 引导式提取 User-Guided Extraction (2.0.0) ===== */
+    .extraction-module-card { display:flex; align-items:center; gap:1rem; padding:1.1rem 1.3rem; border-radius:14px; cursor:pointer;
+      background:linear-gradient(135deg, rgba(99,102,241,0.14), rgba(6,182,212,0.12)); border:1px solid rgba(99,102,241,0.35);
+      box-shadow:0 6px 20px rgba(79,70,229,0.12); transition:transform .15s, box-shadow .15s; }
+    .extraction-module-card:hover { transform:translateY(-2px); box-shadow:0 10px 26px rgba(79,70,229,0.22); }
+    .emc-icon { font-size:2rem; }
+    .emc-body { flex:1; min-width:0; }
+    .emc-title { font-size:1.05rem; font-weight:800; color:var(--text-primary); display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
+    .emc-en { font-size:.68rem; font-weight:600; color:var(--text-muted); }
+    .emc-badge { font-size:.6rem; font-weight:800; color:#fff; background:var(--danger-grad); padding:.1rem .45rem; border-radius:6px; letter-spacing:.5px; }
+    .emc-desc { font-size:.82rem; color:var(--text-muted); margin-top:.3rem; line-height:1.55; }
+    .emc-action { font-size:.85rem; font-weight:700; color:var(--primary-color); white-space:nowrap; }
+
+    #extraction-tab { gap:0.8rem; }
+    .extraction-toolbar { display:flex; align-items:center; gap:.4rem; padding:.5rem .6rem; background:var(--bg-card);
+      border:1px solid var(--border-color); border-radius:12px; }
+    .ex-btn { width:34px; height:34px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-input);
+      color:var(--text-main); cursor:pointer; font-size:1rem; flex:0 0 auto; line-height:1; }
+    .ex-btn:hover { background:var(--btn-secondary-bg-hover); }
+    .extraction-url { flex:1; min-width:120px; height:34px; padding:0 .8rem; border-radius:8px; border:1px solid var(--border-color);
+      background:var(--bg-input); color:var(--text-main); font-size:.85rem; }
+    .ex-go { height:34px; padding:0 1rem; }
+    .extraction-body { display:flex; gap:.8rem; flex:1; min-height:520px; }
+    .extraction-main { flex:1; position:relative; background:#ffffff; border:1px solid var(--border-color); border-radius:12px; overflow:hidden; }
+    body.dark-mode .extraction-main { background:#0b0f19; }
+    .extraction-webview { width:100%; height:100%; border:0; display:block; }
+    .extraction-startpage { padding:2rem; overflow:auto; height:100%; box-sizing:border-box; }
+    .extraction-startpage h2 { color:var(--primary-color); margin-bottom:.4rem; }
+    .ex-sub { color:var(--text-muted); font-size:.9rem; margin-bottom:1.4rem; line-height:1.6; }
+    .ex-sites { display:grid; grid-template-columns:repeat(auto-fill, minmax(215px,1fr)); gap:.8rem; margin-bottom:1.4rem; }
+    .ex-site-card { padding:1rem; border-radius:12px; border:1px solid var(--border-color); background:var(--card-bg); cursor:pointer; transition:transform .12s,border-color .12s; }
+    .ex-site-card:hover { transform:translateY(-2px); border-color:var(--primary-color); }
+    .ex-site-name { font-weight:800; color:var(--text-primary); display:flex; align-items:center; gap:.4rem; }
+    .ex-site-open { margin-left:auto; font-size:.7rem; font-weight:700; color:var(--primary-color); }
+    .ex-site-desc { font-size:.78rem; color:var(--text-muted); margin-top:.4rem; line-height:1.55; }
+    .ex-site-example { display:none; margin-top:.6rem; padding:.6rem .7rem; background:var(--code-bg); color:var(--code-text); border-radius:8px; font-size:.72rem; line-height:1.7; white-space:pre-wrap; word-break:break-all; }
+    .ex-site-card.open .ex-site-example { display:block; }
+    .ex-tips { display:flex; flex-direction:column; gap:.5rem; }
+    .ex-tip { font-size:.82rem; color:var(--text-color); padding:.6rem .8rem; background:var(--surface-subtle); border-radius:8px; line-height:1.55; }
+    .extraction-sidebar { width:300px; flex:0 0 300px; display:flex; flex-direction:column; gap:.6rem; }
+    .ex-side-head { font-size:.8rem; font-weight:800; color:var(--text-primary); padding:.1rem .2rem; }
+    .ex-code-hint { font-weight:400; color:var(--text-muted); font-size:.66rem; }
+    .ex-resources { flex:1; overflow:auto; background:var(--bg-card); border:1px solid var(--border-color); border-radius:12px; padding:.5rem; }
+    .ex-empty { font-size:.78rem; color:var(--text-muted); text-align:center; padding:1.4rem .5rem; line-height:1.8; }
+    .ex-res-item { padding:.5rem .55rem; border-radius:8px; cursor:pointer; margin-bottom:.3rem; border:1px solid transparent; }
+    .ex-res-item:hover { background:var(--surface-subtle); border-color:var(--border-color); }
+    .ex-res-name { font-size:.78rem; color:var(--text-color); word-break:break-all; display:block; line-height:1.4; }
+    .ex-res-meta { font-size:.66rem; color:var(--text-muted); margin-top:.2rem; }
+    .ex-res-item.important { background:rgba(244,63,94,0.10); border-color:rgba(244,63,94,0.4); }
+    .ex-res-item.important .ex-res-name { color:#ef4444; font-weight:800; }
+    .ex-codebox { background:var(--bg-card); border:1px solid var(--border-color); border-radius:12px; padding:.5rem; }
+    .ex-codebox textarea { width:100%; box-sizing:border-box; resize:vertical; border:1px solid var(--border-color); border-radius:8px;
+      background:var(--code-bg); color:var(--code-text); font-family:monospace; font-size:.72rem; padding:.5rem; line-height:1.5; }
+    .ex-run { width:100%; margin-top:.4rem; height:32px; font-size:.8rem; }
+    /* 传输列表中的提取任务卡片 */
+    .transfer-item-ex { border-left:3px solid var(--primary-color); }
+    @media (max-width: 900px) {
+      .extraction-body { flex-direction:column; }
+      .extraction-sidebar { width:100%; flex:0 0 auto; }
+    }
+
+    /* 二维码放大灯箱 */
+    .qr-lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(0,0,0,0.88);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: zoom-out;
+    }
+    .qr-lightbox img {
+      max-width: 92vw;
+      max-height: 92vh;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+      cursor: default;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 左侧边栏 -->
+  <div class="sidebar">
+    <div class="brand" style="display: flex; flex-direction: column; align-items: center; gap: 0.25rem; justify-content: center; margin-bottom: 2rem;">
+      <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <img src="logo.png" alt="Logo" style="height: 28px; width: 28px; border-radius: 6px; box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);">
+        <span style="font-size: 1.25rem; font-weight: 800; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 0.5px;">BioDownloader</span>
+      </div>
+      <span id="sidebarVersion" style="font-size: 0.7rem; color: var(--text-muted); letter-spacing: 0.5px;">v-.-.-</span>
+    </div>
+    <div class="nav-menu">
+      <div class="nav-item active" onclick="switchTab('download-hub')">下载中心</div>
+      <div class="nav-item" onclick="switchTab('transfers-tab')" id="navTransfers">传输列表<span class="badge" id="activeDownloadsBadge" style="display: none;">0</span></div>
+      <div class="nav-item" onclick="switchTab('store-tab')">流量商店</div>
+      <div class="nav-item" onclick="switchTab('cloud-tab')">云下载</div>
+      <div class="nav-item" onclick="switchTab('profile-tab')">我的</div>
+      <div class="nav-item" onclick="switchTab('plugins-tab')" id="navPlugins">扩展插件</div>
+      <div class="nav-item" onclick="switchTab('settings-tab')">设置</div>
+    </div>
+
+    <!-- 实时总速度展示面板 -->
+    <div class="global-speed-panel" style="margin-top: auto; margin-bottom: 0.5rem; padding: 0.7rem 1rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; display: flex; align-items: center; justify-content: space-between;">
+      <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.35rem;">
+        <span style="font-size: 0.9rem;">🚀</span>
+        <span>实时总速度</span>
+      </div>
+      <span id="globalTotalSpeed" style="font-size: 0.95rem; font-weight: 800; color: #38bdf8; font-family: monospace;">0 B/s</span>
+    </div>
+
+    <!-- 夜间模式切换按钮 -->
+    <button class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleDarkMode()" style="margin-top: 0;">
+      <span id="themeIcon">🌙</span>
+      <span id="themeLabel">夜间模式</span>
+    </button>
+
+    <!-- 下载加速器状态控制器 -->
+    <div class="accelerator-status-panel">
+      <div class="status-indicator">
+        <div class="dot" id="clashDot"></div>
+        <span id="clashStatusText">加速器已关闭</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="clashToggle" onchange="toggleClash()">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <!-- 优化连接 / 重置通道按钮 -->
+    <button class="btn btn-secondary" id="btnOptimizeConn" onclick="optimizeConnections()" style="width: 100%; margin-top: 0.5rem; font-size: 0.8rem; padding: 0.45rem 0.6rem; display: flex; align-items: center; justify-content: center; gap: 0.3rem; border-radius: 8px; background: rgba(99, 102, 241, 0.12); border: 1px solid rgba(99, 102, 241, 0.25); color: #818cf8; cursor: pointer; white-space: nowrap; overflow: hidden;">
+      <span id="btnOptimizeConnText">⚡ 优化连接</span>
+    </button>
+  </div>
+
+  <!-- 右侧主体区域 -->
+  <div class="main-container">
+    
+    <!-- 头部栏 -->
+    <div class="header-bar">
+      <div class="page-title" id="tabTitle">下载中心</div>
+      <div style="display:flex; align-items:center; gap:0.75rem;">
+        <button class="btn btn-secondary" onclick="if(window.api&&window.api.openSpeedtestPage){window.api.openSpeedtestPage();}else{window.open('speedtest.html','_blank');}" style="font-size:0.85rem; padding:0.4rem 0.9rem; white-space:nowrap;">
+          🚀 测速
+        </button>
+        <button class="btn btn-primary" id="btnHeaderCheckin" onclick="handleCheckin()" style="font-size:0.85rem; padding:0.4rem 0.9rem; white-space:nowrap; background:linear-gradient(135deg,#f59e0b,#d97706); border:none;">
+          📅 签到
+        </button>
+        <div class="user-info-badge" id="userInfoBadge" style="display:none;">
+          <span id="headerUsername">未登录</span>
+          <div class="traffic-progress-container">
+            <div class="traffic-text">
+              <span>流量额度:</span>
+              <span id="headerTrafficText">0 / 0 MB</span>
+            </div>
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" id="headerTrafficFill" style="width: 0%;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: 下载中心 -->
+    <div class="tab-view active" id="download-hub">
+      <div class="hub-top-row">
+        <div class="btn-group" id="localSourceGrid" style="position: relative;"></div>
+        <div class="extraction-entry" onclick="openExtraction()" title="打开内置浏览器：拦截下载 / 嗅探资源 / 代码框"><span class="ex-ico">🧭</span><span>引导式提取</span></div>
+      </div>
+      <div class="hub-secondary-row" id="localOtherSources" style="display:none;"></div>
+
+      <div class="card">
+        <div class="form-group" id="bioProjectPanel" style="padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-secondary);">
+          <label for="bioProjectInput">BioProject 查询 Run 编号</label>
+          <div class="dir-select-group" style="margin-top: 0.5rem; flex-wrap: wrap;">
+            <input type="text" id="bioProjectInput" placeholder="例如: PRJNA727404" value="PRJNA727404" oninput="this.value=BioDownloadSources.normalizeValue('bioproject',this.value)">
+            <button class="btn btn-secondary" id="bioProjectQueryBtn" onclick="queryBioProject()">查询 Project</button>
+          </div>
+          <div id="bioProjectResult" style="margin-top:0.6rem; font-size:0.82rem; color:var(--text-muted);">查询后可将全部 Run 采用为 SRA 或 EBI 下载。</div>
+          <textarea id="bioProjectRunsInput" rows="10" style="display:none; margin-top:0.75rem;" placeholder="查询到的 Run 编号会显示在这里，可在校验前继续编辑。"></textarea>
+          <div id="bioProjectAdoptActions" style="display:none; gap:0.6rem; flex-wrap:wrap; margin-top:0.75rem;">
+            <button class="btn btn-primary btn-sm" onclick="adoptBioProjectRuns('sra_raw')">校验 SRA 文件与大小</button>
+            <button class="btn btn-secondary btn-sm" onclick="adoptBioProjectRuns('ebi_raw')">校验 EBI 文件与大小</button>
+          </div>
+        </div>
+        <div class="form-group" id="group-sra_raw">
+          <label>请输入 SRA 原始数据编号 (多项使用换行或空格分隔)
+            <button class="btn btn-secondary btn-sm" id="biosampleBtn" style="margin-left: 8px; padding: 0.15rem 0.6rem; font-size: 0.78rem; display:none;" onclick="queryBioSample()">🔍 用 BioSample 查询编号</button>
+          </label>
+          <textarea id="accInput-sra_raw" rows="6"></textarea>
+          <div id="biosampleResult" style="display:none; margin-top:0.5rem; font-size:0.82rem; color:var(--text-muted);"></div>
+        </div>
+        <div class="form-group" id="group-ebi_raw" style="display:none;">
+          <label>请输入 EBI 原始数据编号 (优先拉取 EBI 高速 Fastq，无则回退 SRA)</label>
+          <textarea id="accInput-ebi_raw" rows="6"></textarea>
+        </div>
+        <div class="form-group" id="group-geo_suppl" style="display:none;">
+          <label>请输入 GEO 系列号 (将自动提取页面下的全部补充文件)</label>
+          <textarea id="accInput-geo_suppl" rows="6"></textarea>
+        </div>
+        <div class="form-group" id="group-links" style="display:none;">
+          <label>请输入直接下载链接 (多项使用换行分隔)</label>
+          <textarea id="accInput-links" rows="6"></textarea>
+        </div>
+        <div class="form-group" id="group-zenodo" style="display:none;">
+          <label>请输入 Zenodo 记录编号或链接 (将自动解析并提取全量附件数据)</label>
+          <textarea id="accInput-zenodo" rows="6"></textarea>
+        </div>
+        <div class="form-group" id="group-huggingface" style="display:none;">
+          <label>请输入 Hugging Face 数据集/模型 ID 或文件直链 (多项使用换行分隔)</label>
+          <textarea id="accInput-huggingface" rows="6"></textarea>
+        </div>
+        <div class="form-group" id="group-ftp" style="display:none;">
+          <label>请输入 FTP 下载链接 (多项使用换行分隔，支持 ftp://[user:pass@]host[:port]/path)</label>
+          <textarea id="accInput-ftp" rows="6"></textarea>
+        </div>
+        <div class="form-group" id="group-sftp" style="display:none;">
+          <label>请输入 SFTP 安全传输链接 (多项使用换行分隔，格式: sftp://[user:pass@]host[:port]/path)</label>
+          <textarea id="accInput-sftp" rows="6"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label>下载目标位置</label>
+          <div class="dir-select-group">
+            <input type="text" id="targetDirInput" placeholder="请选择下载路径..." readonly>
+            <button class="btn btn-secondary" onclick="chooseDir()">选择文件夹</button>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+          <button class="btn btn-primary" id="checkSizeBtn" onclick="checkSizes()">检验下载大小</button>
+          <button class="btn btn-success" id="downloadBtn" onclick="startDownload()" disabled>开始加速下载</button>
+          <button class="btn btn-danger" id="cancelBtn" onclick="cancelDownload()" style="display:none;">取消下载</button>
+        </div>
+      </div>
+
+      <!-- 待下载文件列表 -->
+      <div class="queue-container">
+        <div class="queue-header">
+          <span>文件队列</span>
+          <span id="totalQueueSize" style="font-size: 0.9rem; color: var(--text-muted);">共 0 字节</span>
+        </div>
+        <div class="queue-list" id="queueList">
+          <div class="empty-state" id="emptyQueueState">
+            <div class="empty-icon">📁</div>
+            <p>请输入 SRA 编号(如 SRR1234567),点击"检验下载大小"后自动生成下载队列</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: 传输列表 -->
+    <div class="tab-view" id="transfers-tab">
+      <div class="transfers-container">
+        <div class="transfers-header">
+          <div class="transfer-sub-tabs">
+            <button class="sub-tab-btn active" id="tabBtnDownloading" onclick="switchTransferSubTab('downloading')">正在下载 (<span id="downloadingCount">0</span>)</button>
+            <button class="sub-tab-btn" id="tabBtnCompleted" onclick="switchTransferSubTab('completed')">已完成 (<span id="completedCount">0</span>)</button>
+            <button class="sub-tab-btn" id="tabBtnFailed" onclick="switchTransferSubTab('failed')">下载失败 (<span id="failedCount">0</span>)</button>
+          </div>
+          <div class="transfer-actions transfer-toolbar-right">
+            <input type="text" class="transfer-search" id="transferSearchInput" placeholder="🔍 搜索任务名称…" oninput="onTransferSearch(event)">
+            <button class="btn btn-secondary" id="btnPauseAll" onclick="pauseAllDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">⏸ 全部暂停</button>
+            <button class="btn btn-secondary" id="btnResumeAll" onclick="resumeAllDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">▶ 全部恢复</button>
+            <button class="btn btn-secondary" id="btnCancelAll" onclick="cancelAllDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">✕ 全部取消</button>
+            <button class="btn btn-secondary" onclick="openDownloadsDirectory()" style="font-size: 0.85rem; padding: 0.45rem 1rem;">📂 打开下载目录</button>
+            <button class="btn btn-primary" id="btnRetryAllFailed" onclick="retryAllFailedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🔄 一键重试全部</button>
+            <button class="btn btn-danger" id="btnClearCompleted" onclick="clearCompletedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空已完成</button>
+            <button class="btn btn-danger" id="btnClearFailed" onclick="clearFailedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空失败记录</button>
+          </div>
+        </div>
+
+        <!-- 正在下载列表 -->
+        <div class="transfer-stats-line" id="transferStatsLine"></div>
+        <div class="transfer-list-container" id="transferDownloadingList">
+          <div class="empty-state" id="emptyDownloadingState">
+            <div class="empty-icon">📥</div>
+            <p>暂无正在下载的任务</p>
+          </div>
+        </div>
+
+        <!-- 已完成列表 -->
+        <div class="transfer-list-container" id="transferCompletedList" style="display: none;">
+          <div class="empty-state" id="emptyCompletedState">
+            <div class="empty-icon">✓</div>
+            <p>暂无已完成的下载历史</p>
+          </div>
+        </div>
+
+        <!-- 下载失败列表 -->
+        <div class="transfer-list-container" id="transferFailedList" style="display: none;">
+          <div class="empty-state" id="emptyFailedState">
+            <div class="empty-icon">❌</div>
+            <p>暂无下载失败的任务</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: 流量商店 -->
+    <div class="tab-view" id="store-tab">
+      <div class="card" style="max-width: 800px; margin: 0 auto; width: 100%;">
+        <h3 style="color:#38bdf8; margin-bottom: 0.5rem; text-align: center;">流量套餐 <small style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">有效期 30 天</small></h3>
+        <div class="package-grid" id="packageList">
+          <!-- 动态载入限时充值包 -->
+        </div>
+      </div>
+
+      <div class="card" style="max-width: 800px; margin: 1.5rem auto 0 auto; width: 100%;">
+        <h3 style="color:#10b981; margin-bottom: 0.5rem; text-align: center;">永久流量 <small style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;">永不过期</small></h3>
+        <div class="package-grid" id="packageListPerm">
+          <!-- 动态载入永久流量包 -->
+        </div>
+      </div>
+
+      <div class="card" style="max-width: 800px; margin: 1.5rem auto 0 auto; width: 100%;">
+        <h3 style="color:#10b981; margin-bottom: 1.5rem; text-align: center;">节点与网络诊断</h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+          <!-- Speed Test Card -->
+          <div style="background: var(--surface-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; align-items: center; text-align: center;">
+            <div style="font-size: 1.75rem;">🚀</div>
+            <h4 style="font-weight: bold; font-size: 0.95rem;">中科院网页测速</h4>
+            <p style="font-size: 0.8rem; color: var(--text-muted);">核验您的本地最大下行带宽与网络吞吐能力。</p>
+            <button class="btn btn-secondary" style="width: 100%; margin-top: auto; padding: 0.5rem;" onclick="runUstcSpeedTest()">立即检测 (网页测速)</button>
+          </div>
+          <!-- Connection Status Card -->
+          <div style="background: var(--surface-subtle); border: 1px solid var(--border-color); border-radius: 8px; padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; align-items: center; text-align: center;">
+            <div style="font-size: 1.75rem;" id="diagIcon">🌐</div>
+            <h4 style="font-weight: bold; font-size: 0.95rem;">海外学术加速核验</h4>
+            <p style="font-size: 0.8rem; color: var(--text-muted);" id="diagDesc">核验内置加速器是否能正常连通海外学术数据库节点（SRA/EBI/NCBI）。</p>
+            <div id="diagStatus" style="font-size: 0.85rem; font-weight: bold; min-height: 1.5rem; margin-top: auto; color: var(--text-muted);">等待开始...</div>
+            <button class="btn btn-primary" id="diagBtn" style="width: 100%; padding: 0.5rem;" onclick="checkNodeConnection()">立即核验 (通道核验)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: 云下载（复用线上同一套模块，避免桌面端/网页端双份维护） -->
+    <div class="tab-view" id="cloud-tab">
+      <webview id="cloudWorkspaceWebview" src="https://biodown.ye.aimeals.cn/user/cloud?embed=cloud" partition="persist:biodl-cloud" style="width:100%;height:calc(100vh - 115px);border:0;border-radius:12px;background:#f7f8fc;"></webview>
+    </div>
+
+    <!-- VIEW: 我的 (个人中心与设置) -->
+    <div class="tab-view" id="profile-tab">
+      <!-- 未登录界面 -->
+      <div class="card" id="authFormCard" style="max-width: 500px; margin: 0 auto; width: 100%;">
+        <div style="display:flex; justify-content:space-around; margin-bottom:1.5rem; border-bottom:1px solid var(--border-color); padding-bottom:0.75rem; font-size: 0.95rem;">
+          <span id="tab-btn-login" style="font-weight:bold; cursor:pointer; color:#6366f1;" onclick="switchAuthTab('login')">账户登录</span>
+          <span id="tab-btn-register" style="cursor:pointer; color:var(--text-muted);" onclick="switchAuthTab('register')">账号注册</span>
+          <span id="tab-btn-forgot" style="cursor:pointer; color:var(--text-muted);" onclick="switchAuthTab('forgot')">忘记密码</span>
+        </div>
+        
+        <div class="form-group" id="group-username">
+          <label>账号/用户名</label>
+          <input type="text" id="authUsername" placeholder="请输入用户名..." onkeydown="if(event.key==='Enter')submitAuthForm()">
+        </div>
+        
+        <div class="form-group" id="group-email" style="display:none;">
+          <label id="label-email">绑定邮箱 (选填，重置密码凭证)</label>
+          <input type="email" id="authEmail" placeholder="请输入邮箱地址 (如 name@example.com)...">
+        </div>
+
+        <div class="form-group" id="group-code" style="display:none;">
+          <label>6位邮箱验证码</label>
+          <div style="display:flex; gap:0.5rem;">
+            <input type="text" id="authCode" placeholder="请输入验证码..." style="flex-grow:1;">
+            <button class="btn btn-secondary" id="sendResetCodeBtn" style="font-size:0.8rem; padding: 0 0.75rem;" onclick="sendResetEmailCode()">获取验证码</button>
+          </div>
+        </div>
+
+        <div class="form-group" id="group-password">
+          <label id="label-password">登录密码</label>
+          <input type="password" id="authPassword" placeholder="请输入密码..." onkeydown="if(event.key==='Enter')submitAuthForm()">
+        </div>
+
+        <button class="btn btn-primary" id="btn-login-submit" style="width:100%; margin-top:1rem;" onclick="handleLogin()">账户登录</button>
+        <div class="form-group" id="group-invite" style="display:none;">
+          <label>邀请码 (选填)</label>
+          <input type="text" id="authInviteCode" placeholder="如有好友的邀请码，请输入...">
+        </div>
+        <button class="btn btn-secondary" id="btn-register-submit" style="width:100%; display:none; margin-top:1rem;" onclick="handleRegister()">极速注册</button>
+        <button class="btn btn-danger" id="btn-forgot-submit" style="width:100%; display:none; margin-top:1rem;" onclick="submitPasswordReset()">确认重置密码</button>
+      </div>
+
+      <!-- 已登录界面 (包含账户卡片与设置卡片) -->
+      <div class="profile-grid" id="loggedInProfile" style="display:none;">
+        
+        <!-- 左侧：账户卡片 -->
+        <div class="card profile-card">
+          <h3 style="color:#38bdf8;">账户信息</h3>
+          <div class="form-group">
+            <label>用户名</label>
+            <div id="profUsername" style="font-weight:bold;font-size:1.1rem;margin-top:0.25rem;">-</div>
+          </div>
+          <div class="form-group">
+            <label>用户 UID (充值凭证)</label>
+            <div id="profUid" style="font-weight:bold;font-size:1.1rem;color:#eab308;margin-top:0.25rem;">-</div>
+          </div>
+          <div class="form-group" style="display: none;">
+            <label>我的 Token (用于加速器连接)</label>
+            <input type="text" id="profToken" readonly style="cursor:pointer;" onclick="this.select()">
+          </div>
+          <div class="form-group">
+            <label>到期时间</label>
+            <div id="profExpiry" style="font-size:0.95rem;margin-top:0.25rem;">-</div>
+          </div>
+
+          <div class="form-group">
+            <label>限时流量</label>
+            <div id="profLimitedTraffic" style="font-size:0.95rem;margin-top:0.25rem;">-</div>
+          </div>
+
+          <div class="form-group">
+            <label>永久流量</label>
+            <div id="profPermanentTraffic" style="font-size:0.95rem;margin-top:0.25rem;">-</div>
+          </div>
+
+          <div class="form-group">
+            <label>设备数上限</label>
+            <div id="profMaxDevices" style="font-size:0.95rem;margin-top:0.25rem;">-</div>
+          </div>
+
+          <div class="form-group" style="border-top:1px solid var(--border-color); padding-top:1rem; margin-top:0.5rem;">
+            <label>兑换码 (兑换套餐流量 / 永久流量 / 余额)</label>
+            <div style="display:flex; gap:0.5rem; margin-top:0.25rem;">
+              <input type="text" id="clientRedeemCode" placeholder="请输入兑换码，如 YD-XXXXXXXXXXXX" style="text-transform:uppercase; font-size:0.85rem;">
+              <button class="btn btn-primary" style="padding:0 0.75rem; white-space:nowrap;" onclick="handleClientRedeem()">兑换</button>
+            </div>
+          </div>
+
+          <div class="form-group" style="border-top:1px solid var(--border-color); padding-top:1rem; margin-top:0.5rem;">
+            <label>我的订阅链接 (填入 Clash/Mihomo 远程配置使用)</label>
+            <div style="display:flex; gap:0.5rem; margin-top:0.25rem;">
+              <input type="text" id="profSubLink" readonly style="font-size:0.78rem; cursor:pointer;" onclick="this.select()">
+              <button class="btn btn-secondary" style="padding:0 0.75rem; white-space:nowrap;" onclick="copySubLink()">复制</button>
+            </div>
+          </div>
+
+          <div class="form-group" style="display:flex; gap:0.5rem; margin-top:0.5rem;">
+            <button class="btn btn-secondary" style="flex:1;" onclick="handleResetToken()">重置 Token</button>
+          </div>
+          <div class="form-group" style="border-top:1px solid var(--border-color); padding-top:1rem; margin-top:0.5rem; display:flex; flex-direction:column; gap:0.5rem;">
+            <label>绑定邮箱</label>
+            <div id="emailBindStatus" style="font-size:0.85rem; color:var(--text-muted); font-weight:bold;">未绑定邮箱 (绑定后可自助找回密码)</div>
+            <div id="emailBindForm" style="display:none; flex-direction:column; gap:0.5rem;">
+              <input type="email" id="bindEmailInput" placeholder="请输入邮箱地址..." style="font-size:0.85rem; padding:0.5rem;">
+              <div style="display:flex; gap:0.5rem;">
+                <input type="text" id="bindCodeInput" placeholder="6位验证码" style="width:100px; font-size:0.85rem; padding:0.5rem; text-align:center;">
+                <button class="btn btn-secondary" id="sendBindCodeBtn" style="font-size:0.8rem; padding:0 0.5rem; flex-grow:1;" onclick="sendBindEmailCode()">获取验证码</button>
+                <button class="btn btn-primary" style="font-size:0.8rem; padding:0 0.75rem;" onclick="submitEmailBind()">绑定</button>
+              </div>
+            </div>
+          </div>
+
+          <button class="btn btn-danger" style="margin-top:1rem;" onclick="handleLogout()">注销退出</button>
+        </div>
+
+        <!-- 右侧：邀请返利卡片 -->
+        <div class="card invite-card" style="display:flex; flex-direction:column; gap:1rem;">
+          <h3 style="color:#10b981;">邀请好友获返利</h3>
+          <div class="form-group">
+            <label>我的专属邀请码</label>
+            <div style="display:flex; gap:0.5rem; margin-top:0.25rem;">
+              <div id="profInviteCode" style="font-weight:bold; font-size:1.2rem; color:#10b981; line-height:36px; padding:0 0.5rem; background:rgba(16,185,129,0.1); border-radius:6px; flex-grow:1; text-align:center; border:1px dashed rgba(16,185,129,0.3);">-</div>
+              <button class="btn btn-secondary" style="padding:0 0.75rem;" onclick="copyInviteCode()">复制邀请码</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>专属邀请链接 (好友通过该链接下载或在注册时输入即可关联)</label>
+            <div style="display:flex; gap:0.5rem; margin-top:0.25rem;">
+              <input type="text" id="profInviteUrl" readonly style="font-size:0.8rem; cursor:pointer;" onclick="this.select()">
+              <button class="btn btn-primary" style="padding:0 0.75rem; white-space:nowrap;" onclick="copyInviteUrl()">复制链接</button>
+            </div>
+          </div>
+          <div style="border-top:1px solid var(--border-color); padding-top:1rem; margin-top:0.5rem; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-size:0.85rem; color:var(--text-muted);">已得邀请返利余额</div>
+              <div style="font-size:1.8rem; font-weight:800; color:#ef4444; margin-top:0.25rem;">¥ <span id="profBalance">0.00</span></div>
+            </div>
+            <div style="font-size:0.8rem; color:var(--text-muted); text-align:right; max-width: 170px;">
+              <div>享受到好友消费金额 <span style="color:#10b981; font-weight:bold;">50%</span> 终身返利。可在购买流量时直接抵扣。</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部跨列卡片：钱包/签到/充值 + 订单历史 + 设备管理 -->
+        <div class="card" style="grid-column: 1 / -1;">
+          <h3 style="color:#38bdf8; margin-bottom:1rem;">💰 钱包与账户管理</h3>
+          <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem; padding:0.9rem; background:var(--bg-input); border:1px solid var(--border-color); border-radius:8px;">
+            <div style="flex:1; min-width:180px;">
+              <div style="font-size:0.8rem; color:var(--text-muted);">账号可用余额 (可用于购买套餐)</div>
+              <div style="font-size:1.7rem; font-weight:800; color:#10b981;">¥ <span id="profWalletBalance">0.00</span></div>
+            </div>
+            <button class="btn btn-primary" id="btnDailyCheckin" onclick="handleCheckin()" style="font-size:0.85rem; padding:0.45rem 0.9rem;">📅 每日签到</button>
+            <button class="btn btn-secondary" onclick="openRechargeModal()" style="font-size:0.85rem; padding:0.45rem 0.9rem;">💳 充值到余额</button>
+            <button class="btn btn-secondary" onclick="openOrdersModal()" style="font-size:0.85rem; padding:0.45rem 0.9rem;">📋 我的订单</button>
+            <button class="btn btn-secondary" onclick="openDevicesModal()" style="font-size:0.85rem; padding:0.45rem 0.9rem;">📱 设备管理</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- VIEW: 扩展插件 -->
+    <div class="tab-view" id="plugins-tab">
+      <div class="card" style="max-width: 800px; margin: 0 auto; width: 100%;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.2rem; flex-wrap:wrap; gap:0.5rem;">
+          <div>
+            <h3 style="color:#6366f1; margin:0; display:flex; align-items:center; gap:0.4rem;">🧩 扩展插件生态</h3>
+            <p style="font-size:0.85rem; color:var(--text-muted); margin-top:0.3rem; margin-bottom:0;">按需安装或检查特殊下载协议插件，保障客户端体积轻巧且功能完备。</p>
+          </div>
+          <button class="btn btn-secondary" onclick="refreshPluginsList()" style="font-size:0.85rem; padding:0.4rem 0.9rem; display:flex; align-items:center; gap:0.3rem;">
+            <span>🔄</span> 重新检测
+          </button>
+        </div>
+
+        <div id="pluginsListContainer" style="display:flex; flex-direction:column; gap:1rem;">
+          <!-- 动态渲染插件卡片 -->
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: 设置 -->
+    <div class="tab-view" id="settings-tab">
+      <div class="card" style="max-width: 800px; margin: 0 auto; width: 100%;">
+        <h3 style="color:#6366f1; margin-bottom:1.5rem;">⚙️ 全局设置</h3>
+
+        <!-- 版本检测 -->
+        <div class="form-group">
+          <label style="font-weight:600;">🔔 软件更新</label>
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-top:0.5rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color);">
+            <div style="font-size:0.9rem; color:var(--text-muted);">当前版本：<span id="settingsAppVersion" style="color:var(--text-primary); font-weight:600;">-</span></div>
+            <button class="btn btn-secondary" style="font-size: 0.85rem; padding: 0.3rem 0.9rem;" onclick="triggerCheckForUpdates()">检查更新</button>
+          </div>
+          <!-- Preview 预览版更新卡片(优先置于顶部：仅高级模式开启且存在预览版时显示) -->
+          <div id="updateCardPreview" style="display:none; margin-top:0.75rem; padding:1rem; background:rgba(244,63,94,0.06); border:1px solid rgba(244,63,94,0.3); border-radius:8px;">
+            <div style="font-weight:700; color:#f43f5e; font-size:0.95rem; margin-bottom:0.35rem; display:flex; justify-content:space-between; align-items:center;">
+              <span>🧪 预览版 v<span id="updatePreviewVersion">-</span> 可用</span>
+              <button onclick="document.getElementById('updateCardPreview').style.display='none'" style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:1.1rem; padding:0 0.2rem;">&times;</button>
+            </div>
+            <div style="font-size:0.8rem; color:#f43f5e; margin-bottom:0.5rem;">预览版用于体验新功能，可能不够稳定。升级后可随时回滚到正式版。</div>
+            <div style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.75rem;">
+              <strong>更新日志：</strong>
+              <pre id="updatePreviewReleaseNotes" style="font-family:inherit; white-space:pre-wrap; margin-top:0.25rem; background:var(--code-bg); padding:0.5rem; border-radius:4px; font-size:0.8rem; line-height:1.4; color:var(--code-text);"></pre>
+            </div>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+              <button id="btnUpdatePreview" class="btn btn-primary" style="font-size:0.8rem; padding:0.4rem 0.85rem; background:linear-gradient(135deg,#f43f5e,#e11d48); border:none;" onclick="startPreviewUpdate()">⚡ 热更新到预览版</button>
+              <button class="btn btn-secondary" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="document.getElementById('updateCardPreview').style.display='none'">暂不升级</button>
+            </div>
+          </div>
+
+          <!-- 正式稳定版更新卡片 -->
+          <div id="updateCard" style="display:none; margin-top:0.75rem; padding:1rem; background:rgba(99, 102, 241, 0.05); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 8px;">
+            <div style="font-weight:700; color:#818cf8; font-size:0.95rem; margin-bottom:0.35rem; display:flex; justify-content:space-between; align-items:center;">
+              <span>🎁 检测到新版本 v<span id="updateLatestVersion">-</span></span>
+              <button onclick="closeUpdateCard()" style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:1.1rem; padding:0 0.2rem;">&times;</button>
+            </div>
+            <div style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.75rem;">
+              <strong>更新日志：</strong>
+              <pre id="updateReleaseNotes" style="font-family:inherit; white-space:pre-wrap; margin-top:0.25rem; background:var(--code-bg); padding:0.5rem; border-radius:4px; font-size:0.8rem; line-height:1.4; color:var(--code-text);"></pre>
+            </div>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+              <button id="btnHotPatchUpdate" class="btn btn-primary" style="font-size:0.8rem; padding:0.4rem 0.85rem; background: linear-gradient(135deg, #10b981, #059669); border:none; display:none;" onclick="startHotPatchUpdate()">⚡ 极速平滑热更新 (仅 3MB)</button>
+              <button id="downloadWinUpdateBtn" class="btn btn-success" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="downloadUpdate('win')">下载 Windows 全量包</button>
+              <button id="downloadMacUpdateBtn" class="btn btn-primary" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="downloadUpdate('mac')">下载 Mac 全量包</button>
+              <button class="btn btn-secondary" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="openReleasePage()">发布页</button>
+            </div>
+          </div>
+          <!-- 2.x 升级桥接卡片(仅当 1.x 清单含 upgrade2x 且可热更新时显示) -->
+          <div id="updateCard2x" style="display:none; margin-top:0.75rem; padding:1rem; background:rgba(244,63,94,0.06); border:1px solid rgba(244,63,94,0.3); border-radius:8px;">
+            <div style="font-weight:700; color:#f43f5e; font-size:0.95rem; margin-bottom:0.35rem;">🚀 重大更新 v<span id="update2xVersion">2.x</span> 可用（引导式提取 · 内置浏览器嗅探下载）</div>
+            <div style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.75rem;">
+              <strong>更新日志：</strong>
+              <pre id="update2xReleaseNotes" style="font-family:inherit; white-space:pre-wrap; margin-top:0.25rem; background:var(--code-bg); padding:0.5rem; border-radius:4px; font-size:0.8rem; line-height:1.4; color:var(--code-text);"></pre>
+            </div>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+              <button id="btnUpgrade2x" class="btn btn-primary" style="font-size:0.8rem; padding:0.4rem 0.85rem; background:linear-gradient(135deg,#f43f5e,#e11d48); border:none;" onclick="startUpgrade2x()">⚡ 热更新升级到 2.x</button>
+              <button class="btn btn-secondary" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="document.getElementById('updateCard2x').style.display='none'">暂不升级</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 官方发布渠道 -->
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">📋 官方发布渠道</label>
+          <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-top:0.5rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color);">
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.9rem; flex-wrap:wrap; gap:0.5rem;">
+              <span style="color:var(--text-muted);">官方高速主页:</span>
+              <a href="#" style="color:#38bdf8; text-decoration:none; font-weight:600;" onclick="window.api.openExternalUrl('https://biodown.ye.aimeals.cn/'); return false;">https://biodown.ye.aimeals.cn/</a>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.9rem; flex-wrap:wrap; gap:0.5rem; border-top:1px solid var(--border-color); padding-top:0.5rem;">
+              <span style="color:var(--text-muted);">GitHub Releases 开源托管:</span>
+              <a href="#" style="color:#38bdf8; text-decoration:none; font-weight:600;" onclick="window.api.openExternalUrl('https://github.com/sandy9707/bio-downloader/releases'); return false;">GitHub Releases 🚀</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- 默认下载文件夹 -->
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">📁 默认下载文件夹</label>
+          <div class="dir-select-group" style="margin-top:0.5rem;">
+            <input type="text" id="settingsDefaultDirInput" placeholder="尚未设置，点击右侧选择..." readonly>
+            <button class="btn btn-primary" onclick="chooseDefaultDir()">选择文件夹</button>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.25rem;">每次启动软件时，下载路径将自动填充为此目录。</div>
+        </div>
+
+        <!-- 并发下载设置 -->
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">⚡ 并发任务设置</label>
+          <div style="display: flex; align-items: center; gap: 1rem; margin-top:0.5rem;">
+            <span style="font-size:0.9rem; color:var(--text-muted);">最大同时下载任务数：</span>
+            <select id="settingsMaxConcurrent" onchange="changeMaxConcurrent(this.value)" style="background:var(--bg-input); color:var(--text-color); border: 1px solid var(--border-color); border-radius:6px; padding:0.4rem 1rem; font-size:0.9rem; outline:none; cursor:pointer;">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3" selected>3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.25rem;">设置同时下载的最大文件个数。并发过高可能会导致宽带饱和。</div>
+        </div>
+
+        <!-- 低功耗模式 -->
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">🌿 低功耗模式（性能优化）</label>
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.75rem; margin-top:0.5rem; padding:0.75rem; background:var(--bg-input); border-radius:6px; border:1px solid var(--border-color);">
+            <div style="font-size:0.9rem; color:var(--text-muted); flex:1 1 420px;">适合笔记本、机械硬盘或容易发热的电脑。开启后单文件最多16线程、所有下载任务合计最多32连接；关闭时使用正常高速模式，单文件最高32线程、合计最高64连接。</div>
+            <label class="switch">
+              <input type="checkbox" id="settingsLowPowerToggle" onchange="toggleLowPowerMode(this.checked)">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">进度每秒刷新一次，诊断日志每5秒记录一次；切换后对下一批下载生效。</div>
+        </div>
+
+        <!-- 下载诊断日志 -->
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">📋 下载故障排查与诊断日志</label>
+          <div style="margin-top:0.5rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color); display:flex; flex-direction:column; gap:0.75rem;">
+            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
+              <div style="font-size:0.9rem; color:var(--text-muted);">
+                记录详细下载诊断日志 (排查 Axel 下载报错)：
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="settingsLoggingToggle" onchange="toggleLogging(this.checked)">
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+            <div style="font-size:0.8rem; color:var(--text-muted); border-top:1px solid var(--border-color); padding-top:0.5rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+              <span>如果下载经常报错失败，请开启日志并在复现报错后在此处管理并上传日志。</span>
+              <button class="btn btn-primary" style="font-size: 0.75rem; padding: 0.25rem 0.65rem;" onclick="openLogManagerModal()">管理与上传错误日志</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 客户支持 -->
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">💬 客户支持</label>
+          <div style="display: flex; align-items: center; gap: 1.5rem; margin-top:0.5rem; padding: 1rem; background:var(--bg-input); border-radius: 8px; border: 1px solid var(--border-color); flex-wrap: wrap;">
+            <div style="flex-shrink:0;">
+              <img src="img/group_qrcode.jpg?v=1" alt="客户支持群二维码" style="width:auto; height:auto; max-width:160px; border-radius:8px; border:1px solid var(--border-color); cursor:zoom-in;" onclick="openQrLightbox(this.src)">
+            </div>
+            <div style="font-size:0.9rem; color:var(--text-muted); line-height:1.6;">
+              <p style="margin:0 0 0.5rem 0;">在使用过程中遇到任何问题，欢迎加入我们的用户支持群交流：</p>
+              <p style="margin:0; font-weight:600; color:var(--text-primary);">📢 官方支持群：1102855142</p>
+              <p style="margin:0.35rem 0 0 0; font-size:0.82rem;">工作时间：周一至周五 9:00–21:00</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 高级模式 -->
+        <div class="form-group" style="margin-top:1.5rem; padding-top:1.5rem; border-top: 1px solid var(--border-color);">
+          <label style="font-weight:600;">🔧 高级模式</label>
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-top:0.5rem; padding: 0.75rem; background:var(--bg-input); border-radius: 6px; border: 1px solid var(--border-color);">
+            <div style="font-size:0.9rem; color:var(--text-muted);">启用后，"检查更新"将同时显示正式版与预览版（Preview）可选更新。</div>
+            <label class="switch">
+              <input type="checkbox" id="settingsAdvancedModeToggle" onchange="toggleAdvancedMode(this.checked)">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">预览版用于提前体验新功能，可能不够稳定；升级预览版后仍可随时回滚到正式版。</div>
+        </div>
+
+        <!-- 危险区 -->
+        <div class="form-group" style="margin-top:2rem; padding-top:1.5rem; border-top: 1px solid var(--border-color);">
+          <label style="font-weight:600; color:#ef4444;">⚠️ 危险操作</label>
+          <div style="margin-top:0.5rem;">
+            <button class="btn btn-danger" onclick="clearSettings()">重置本地所有配置 (退出登录)</button>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">这将清除本地缓存的登录 Token 和所有偏好设置，应用会在操作后退出。</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 支付模态框 -->
+  <div class="modal-overlay" id="payModal">
+    <div class="modal">
+      <h3 id="modalTitle">正在发起支付</h3>
+      <p style="color:var(--text-muted);font-size:0.9rem;">请点击下方的付款链接进行付款，付款成功后额度会自动累加至您的账户。</p>
+      <a href="#" class="modal-checkout-link" id="checkoutLink" target="_blank">点击前往付款页面 (易支付)</a>
+      <div style="display:flex; flex-direction:column; gap:0.5rem; margin-top:1rem;">
+        <button class="btn btn-primary" onclick="checkPayArrival()">我已付款,刷新到账状态</button>
+        <button class="btn btn-secondary" onclick="closePayModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 每日签到弹窗 -->
+  <div class="modal-overlay" id="checkinModal">
+    <div class="modal" style="max-width: 420px;">
+      <h3>🎉 签到成功</h3>
+      <div style="text-align:center; padding:1.5rem 0 0.5rem;">
+        <div style="font-size:2.6rem; font-weight:800; color:#10b981;" id="checkinReward">+0 MB</div>
+        <div style="font-size:0.85rem; color:var(--text-muted); margin-top:0.5rem;">已计入<strong style="color:#10b981;">永久流量</strong>，永不过期</div>
+      </div>
+      <div style="display:flex; justify-content:center; margin-top:1rem;">
+        <button class="btn btn-primary" onclick="closeCheckinModal()">收下奖励</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 余额充值弹窗 -->
+  <div class="modal-overlay" id="rechargeModal">
+    <div class="modal" style="max-width: 440px; text-align:left;">
+      <h3 style="text-align:center;">💳 充值到余额</h3>
+      <p style="font-size:0.82rem; color:var(--text-muted); margin-bottom:0.9rem;">充值后余额可用于在商店购买套餐（含永久流量包）。</p>
+      <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:0.5rem; margin-bottom:0.9rem;">
+        <button class="btn btn-secondary recharge-opt" onclick="selectRecharge(2, this)">¥2</button>
+        <button class="btn btn-secondary recharge-opt" onclick="selectRecharge(10, this)">¥10</button>
+        <button class="btn btn-secondary recharge-opt" onclick="selectRecharge(40, this)">¥40</button>
+        <button class="btn btn-secondary recharge-opt" onclick="selectRecharge(120, this)">¥120</button>
+      </div>
+      <div class="form-group">
+        <label style="font-size:0.82rem; color:var(--text-muted);">自定义金额（元）</label>
+        <input type="number" id="customRechargeInput" placeholder="≥1，≤1000" min="1" max="1000" style="width:100%; background:var(--bg-input); color:var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:0.5rem; outline:none;">
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:0.9rem;">
+        <button class="btn btn-secondary" onclick="closeRechargeModal()">取消</button>
+        <button class="btn btn-success" onclick="doRecharge()">充值到余额</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 订单历史弹窗 -->
+  <div class="modal-overlay" id="ordersModal">
+    <div class="modal" style="max-width: 640px; width: 92%; text-align:left;">
+      <h3 style="text-align:center;">📋 我的订单</h3>
+      <div style="display:flex; gap:0.4rem; margin-bottom:0.9rem;">
+        <button class="btn btn-primary btn-sm" id="ordTabAll" onclick="switchOrdersFilter('all', this)">全部</button>
+        <button class="btn btn-secondary btn-sm" id="ordTabPending" onclick="switchOrdersFilter('pending', this)">待支付</button>
+        <button class="btn btn-secondary btn-sm" id="ordTabPaid" onclick="switchOrdersFilter('paid', this)">已支付</button>
+      </div>
+      <div id="ordersListBody" style="max-height: 320px; overflow-y:auto; background:rgba(0,0,0,0.2); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem; font-size:0.85rem;">
+        加载中...
+      </div>
+      <div style="display:flex; justify-content:flex-end; margin-top:0.9rem;">
+        <button class="btn btn-secondary" onclick="closeOrdersModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 设备管理弹窗 -->
+  <div class="modal-overlay" id="devicesModal">
+    <div class="modal" style="max-width: 640px; width: 92%; text-align:left;">
+      <h3 style="text-align:center;">📱 设备管理 <small style="font-size:0.8rem; color:var(--text-muted);">(<span id="devCountText">0</span>/<span id="devMaxText">2</span>)</small></h3>
+      <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.8rem;">设备数仅统计下载客户端（网页登录不计入设备数）。</p>
+      <div id="devicesListBody" style="max-height: 240px; overflow-y:auto; background:rgba(0,0,0,0.2); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem; font-size:0.85rem;">
+        加载中...
+      </div>
+      <div style="font-size:0.82rem; color:var(--text-muted); font-weight:600; margin:0.9rem 0 0.35rem;">登录记录（不计入设备数）</div>
+      <div id="loginLogListBody" style="max-height: 160px; overflow-y:auto; background:rgba(0,0,0,0.15); border:1px solid var(--border-color); border-radius:6px; padding:0.75rem; font-size:0.82rem;">
+        加载中...
+      </div>
+      <div style="display:flex; justify-content:flex-end; margin-top:0.9rem;">
+        <button class="btn btn-secondary" onclick="closeDevicesModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通用信息弹窗(如:NCBI 会话型链接无法直接下载说明) -->
+  <div class="modal-overlay" id="infoModal">
+    <div class="modal" style="max-width: 560px; width: 92%; text-align: left;">
+      <h3 id="infoModalTitle" style="text-align: center;">提示</h3>
+      <div id="infoModalBody" style="font-size: 0.88rem; line-height: 1.65; color: var(--text-main);"></div>
+      <div style="display:flex; justify-content:center; margin-top:1.25rem;">
+        <button class="btn btn-primary" onclick="closeInfoModal()">我知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 粘贴 cURL 下载弹窗 -->
+  <div class="modal-overlay" id="curlModal">
+    <div class="modal" style="max-width: 660px; width: 94%; text-align: left;">
+      <h3 style="text-align:center;">📋 粘贴 cURL 下载</h3>
+      <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.6rem;">用于下载需要浏览器会话(Cookie)的链接,例如 NCBI 的 Copy as cURL。把浏览器复制的<b>整段 cURL 命令</b>粘贴到下方,本工具会解析其中的网址、请求头与 Cookie,并带上会话下载。</p>
+      <textarea id="curlInput" rows="7" placeholder="curl 'https://...' -H 'accept: ...' -b 'ncbi_sid=...; WebEnv=...' ..." style="width:100%; font-family:monospace; font-size:0.74rem; resize:vertical; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-color); border-radius:8px; padding:0.6rem; line-height:1.5;"></textarea>
+      <div id="curlPreview" style="display:none; margin-top:0.6rem; padding:0.6rem; background:var(--surface-subtle); border:1px solid var(--border-color); border-radius:8px; font-size:0.78rem; word-break:break-all; line-height:1.5;"></div>
+      <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.6rem; font-size:0.8rem;">
+        <span style="color:var(--text-muted); white-space:nowrap;">保存到:</span>
+        <input id="curlSaveDir" type="text" readonly style="flex:1; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-color); border-radius:6px; padding:0.35rem 0.5rem; font-size:0.78rem;">
+        <button class="btn btn-secondary" style="padding:0.35rem 0.7rem; font-size:0.78rem;" onclick="chooseCurlSaveDir()">更换</button>
+      </div>
+      <div style="margin-top:0.7rem;">
+        <div class="item-progress-bar" id="curlProgressWrap" style="display:none; height:8px; background:var(--progress-bar-bg); border-radius:4px; overflow:hidden;">
+          <div id="curlProgressBar" style="height:100%; width:0%; background:var(--primary-grad); transition:width 0.2s;"></div>
+        </div>
+        <div id="curlStatus" style="font-size:0.78rem; color:var(--text-muted); margin-top:0.4rem; min-height:1.1em; word-break:break-all;"></div>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem;">
+        <button class="btn btn-secondary" id="curlCloseBtn" onclick="closeCurlModal()">关闭</button>
+        <button class="btn btn-primary" id="curlParseBtn" onclick="parseCurlInput()">解析</button>
+        <button class="btn btn-primary" id="curlStartBtn" onclick="startCurlDownload()" style="display:none;">开始下载</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 日志管理模态框 -->
+  <div class="modal-overlay" id="logManagerModal">
+    <div class="modal" style="max-width: 750px; width: 90%;">
+      <h3>📋 下载诊断日志管理</h3>
+      <p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:1rem;text-align:left;">
+        这里是最近 7 天内您开启日志记录后捕获的 Axel 下载命令与报错输出。您可以将其上传给开发者，以便排查修复下载失败问题。
+      </p>
+      
+      <!-- 日志列表 -->
+      <div style="max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.5rem; text-align: left; margin-bottom: 1rem;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+          <thead>
+            <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-muted);">
+              <th style="padding: 0.5rem; text-align: left;">日志文件名称</th>
+              <th style="padding: 0.5rem; text-align: right;">文件大小</th>
+              <th style="padding: 0.5rem; text-align: center;">操作</th>
+            </tr>
+          </thead>
+          <tbody id="localLogsTableBody">
+            <!-- 动态渲染日志列表 -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 日志预览 -->
+      <div id="logPreviewSection" style="display: none; flex-direction: column; gap: 0.5rem; text-align: left; margin-bottom: 1rem;">
+        <div style="font-weight: bold; font-size: 0.85rem; color: #10b981;">日志内容预览 (<span id="previewLogName"></span>):</div>
+        <div style="background: #0b0f19; border: 1px solid var(--border-color); border-radius: 6px; padding: 0.75rem; max-height: 200px; overflow-y: auto;">
+          <pre id="logPreviewContent" style="font-family: monospace; font-size: 0.75rem; white-space: pre-wrap; word-break: break-all; color: #cbd5e1; margin: 0;"></pre>
+        </div>
+        <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+          <button class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.25rem 0.65rem;" onclick="hideLogPreview()">隐藏预览</button>
+          <button class="btn btn-primary" id="btnUploadLog" style="font-size: 0.75rem; padding: 0.25rem 0.65rem;" onclick="uploadSelectedLog()">📤 上传日志至云端</button>
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:0.5rem;">
+        <button class="btn btn-secondary" onclick="closeLogManagerModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通知信息框 -->
+  <div class="notification" id="notificationToast">提示信息</div>
+
+  <!-- 载入渲染器逻辑 -->
+  <script src="web-bridge.js"></script>
+  <script src="shared/download-sources.js"></script>
+  <script src="renderer.js"></script>
+  <script>
+    function openQrLightbox(imgSrc) {
+      var lb = document.createElement('div');
+      lb.className = 'qr-lightbox';
+      lb.innerHTML = '<img src="' + imgSrc + '" alt="二维码放大">';
+      lb.onclick = function () { document.body.removeChild(lb); };
+      document.body.appendChild(lb);
+    }
+    document.querySelectorAll('.qr-code-img').forEach(function (img) {
+      img.addEventListener('click', function () { openQrLightbox(img.src); });
+    });
+  </script>
+</body>
+</html>

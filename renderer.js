@@ -2684,6 +2684,9 @@ function renderFailedList() {
 function escapeJsArg(str) {
   return String(str || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
+
+function getFileTypeBadge(url) {
+  if (!url) return 'Direct Link';
   if (url.includes('sra_raw') || url.includes('sra-pub-run-odp')) return 'SRA Raw';
   if (url.includes('ebi.ac.uk')) return 'EBI Raw';
   if (url.includes('geo/series')) return 'GEO Suppl';
