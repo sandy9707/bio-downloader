@@ -295,6 +295,14 @@ function getAria2BinaryPath() {
   const binName = isWin ? 'aria2c.exe' : 'aria2c';
   const pluginBin = path.join(PLUGIN_DIR, 'aria2', binName);
   if (fs.existsSync(pluginBin)) {
+    // 针对 macOS: 检查是否具备配套的独立动态库, 避免旧版依赖缺失报错
+    if (platform === 'darwin') {
+      const ssh2Lib = path.join(PLUGIN_DIR, 'aria2', 'libssh2.1.dylib');
+      if (!fs.existsSync(ssh2Lib)) {
+        console.warn('[Plugin] 检测到缺少独立运行库的 aria2c, 准备重新拉取自包含包...');
+        return null;
+      }
+    }
     ensureExecutable(pluginBin);
     return pluginBin;
   }
@@ -306,7 +314,6 @@ async function ensureAria2Plugin() {
   if (existing) return existing;
 
   const platform = os.platform();
-  const arch = os.arch();
   const isWin = platform === 'win32';
   const binName = isWin ? 'aria2c.exe' : 'aria2c';
   const aria2Dir = path.join(PLUGIN_DIR, 'aria2');
@@ -317,7 +324,7 @@ async function ensureAria2Plugin() {
 
   let remoteArchive = '';
   if (platform === 'darwin') {
-    remoteArchive = arch === 'arm64' ? 'aria2c-darwin-arm64.gz' : 'aria2c-darwin-arm64.gz';
+    remoteArchive = 'aria2-darwin-arm64.tar.gz';
   } else if (platform === 'win32') {
     remoteArchive = 'aria2c-win-x64.exe.gz';
   } else {
@@ -328,27 +335,49 @@ async function ensureAria2Plugin() {
   console.log(`[Plugin] 正在按需拉取 FTP/SFTP 加速引擎插件: ${downloadUrl}`);
   
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('toast-message', { message: '正在自动下载 FTP/SFTP 加速引擎插件 (约 1MB)...', type: 'info' });
+    mainWindow.webContents.send('toast-message', { message: '正在自动下载 FTP/SFTP 加速引擎插件...', type: 'info' });
   }
 
-  const response = await axios({
-    method: 'GET',
-    url: downloadUrl,
-    responseType: 'stream',
-    timeout: 30000
-  });
+  if (platform === 'darwin') {
+    const tempTar = path.join(aria2Dir, 'aria2_temp.tar.gz');
+    const response = await axios({
+      method: 'GET',
+      url: downloadUrl,
+      responseType: 'stream',
+      timeout: 60000
+    });
+    const writer = fs.createWriteStream(tempTar);
+    await new Promise((resolve, reject) => {
+      response.data.pipe(writer).on('finish', resolve).on('error', reject);
+    });
 
-  const zlib = require('zlib');
-  const gunzip = zlib.createGunzip();
-  const outWriter = fs.createWriteStream(destBin);
+    await new Promise((resolve, reject) => {
+      exec(`tar -xzf "${tempTar}" -C "${aria2Dir}"`, (err) => {
+        try { fs.unlinkSync(tempTar); } catch (e) {}
+        if (err) reject(new Error('解压 aria2 插件失败: ' + err.message));
+        else resolve();
+      });
+    });
+  } else {
+    const response = await axios({
+      method: 'GET',
+      url: downloadUrl,
+      responseType: 'stream',
+      timeout: 60000
+    });
 
-  await new Promise((resolve, reject) => {
-    response.data
-      .pipe(gunzip)
-      .pipe(outWriter)
-      .on('finish', resolve)
-      .on('error', reject);
-  });
+    const zlib = require('zlib');
+    const gunzip = zlib.createGunzip();
+    const outWriter = fs.createWriteStream(destBin);
+
+    await new Promise((resolve, reject) => {
+      response.data
+        .pipe(gunzip)
+        .pipe(outWriter)
+        .on('finish', resolve)
+        .on('error', reject);
+    });
+  }
 
   ensureExecutable(destBin);
   console.log(`[Plugin] 插件安装就绪: ${destBin}`);
@@ -878,41 +907,44 @@ function parseCurlCommand(text) {
 async function headRequestSize(url) {
   // 针对 FTP 与 SFTP 协议,使用 curl 探测远程文件大小 (Content-Length)
   if (typeof url === 'string') {
-    const isFtp = url.startsWith('ftp://') || url.startsWith('ftps://');
-    const isSftp = url.startsWith('sftp://');
+    // 自动将已知原生支持 HTTPS 的 NCBI 与 EBI FTP 映射为 HTTPS 探测，既快速又走代理
+    let targetUrl = url;
+    if (targetUrl.startsWith('ftp://ftp.ncbi.nlm.nih.gov/') || targetUrl.startsWith('ftps://ftp.ncbi.nlm.nih.gov/')) {
+      targetUrl = targetUrl.replace(/^ftps?:\/\/ftp\.ncbi\.nlm\.nih\.gov\//, 'https://ftp.ncbi.nlm.nih.gov/');
+    } else if (targetUrl.startsWith('ftp://ftp.sra.ebi.ac.uk/') || targetUrl.startsWith('ftps://ftp.sra.ebi.ac.uk/')) {
+      targetUrl = targetUrl.replace(/^ftps?:\/\/ftp\.sra\.ebi\.ac\.uk\//, 'https://ftp.sra.ebi.ac.uk/');
+    }
+
+    const isFtp = targetUrl.startsWith('ftp://') || targetUrl.startsWith('ftps://');
+    const isSftp = targetUrl.startsWith('sftp://');
     if (isFtp || isSftp) {
       return new Promise((resolve) => {
-        // 重要：Mihomo 的 HTTP 端口(43289)对 FTP 代理不支持(返回 502);必须使用 SOCKS5 端口(43290)代理!
-        const proxyArg = clashProcess
-          ? (isFtp ? '--proxy "socks5://127.0.0.1:43290"' : '--proxy "http://127.0.0.1:43289"')
+        const cleanEnv = { ...process.env };
+        delete cleanEnv.http_proxy;
+        delete cleanEnv.https_proxy;
+        delete cleanEnv.all_proxy;
+        delete cleanEnv.HTTP_PROXY;
+        delete cleanEnv.HTTPS_PROXY;
+        delete cleanEnv.ALL_PROXY;
+
+        const proxyArg = (clashProcess && isSftp)
+          ? '--proxy "http://127.0.0.1:43289"'
           : '--noproxy "*"';
         const cmd = isFtp
-          ? `curl ${proxyArg} -sIL --max-time 15 "${url}"`
-          : `curl ${proxyArg} --insecure -sIL --max-time 20 "${url}"`;
-        exec(cmd, (err, stdout) => {
+          ? `curl ${proxyArg} -sIL --max-time 15 "${targetUrl}"`
+          : `curl ${proxyArg} --insecure -sIL --max-time 20 "${targetUrl}"`;
+        exec(cmd, { env: cleanEnv }, (err, stdout) => {
           if (!err && stdout) {
             const match = stdout.match(/(?:Content-Length|content-length):\s*(\d+)/i);
             if (match && parseInt(match[1], 10) > 0) {
               return resolve(parseInt(match[1], 10));
             }
           }
-          // 代理失败时尝试直连兜底一次
-          if (clashProcess) {
-            exec(`curl --noproxy "*" -sIL --max-time 10 "${url}"`, (e2, out2) => {
-              if (!e2 && out2) {
-                const match2 = out2.match(/(?:Content-Length|content-length):\s*(\d+)/i);
-                if (match2 && parseInt(match2[1], 10) > 0) {
-                  return resolve(parseInt(match2[1], 10));
-                }
-              }
-              resolve(0);
-            });
-          } else {
-            resolve(0);
-          }
+          resolve(0);
         });
       });
     }
+    url = targetUrl;
   }
 
   const tryGetSizeFromHeaders = (headers) => {
@@ -2307,12 +2339,17 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
   const isFtp = file.isFtp || String(file.url).startsWith('ftp://') || String(file.url).startsWith('ftps://');
   const isSftp = file.isSftp || String(file.url).startsWith('sftp://');
 
-  // 环境代理适配：
-  // 1) FTP 协议：aria2 不支持 socks5:// 代理参数，且 HTTP 代理的 FTP 握手会 502；
-  //    因此 FTP 的最优加速方案是：优先使用支持 socks5 的 curl 经本地 Mihomo SOCKS5 端口(43290)高速代理传输，
-  //    若加速器未开则直连下载；
-  // 2) SFTP 协议：aria2c 原生支持通过 HTTP CONNECT 代理下载 SFTP (--all-proxy=http://127.0.0.1:43289)。
-  if (aria2Bin && fs.existsSync(aria2Bin) && isSftp) {
+  // 构建净化环境(彻底清除可能导致 FTP 报 502 的环境代理变量)
+  const cleanEnv = { ...process.env };
+  delete cleanEnv.http_proxy;
+  delete cleanEnv.https_proxy;
+  delete cleanEnv.all_proxy;
+  delete cleanEnv.HTTP_PROXY;
+  delete cleanEnv.HTTPS_PROXY;
+  delete cleanEnv.ALL_PROXY;
+
+  // 1) 优先使用 aria2c 多连接下载 (SFTP 支持通过 HTTP 代理隧道，FTP 支持原生多连接直连下载)
+  if (aria2Bin && fs.existsSync(aria2Bin)) {
     return new Promise((resolve, reject) => {
       if (cancelled) return reject(new Error('Cancelled'));
       const ariaArgs = [
@@ -2328,18 +2365,20 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         '-o', safeName
       ];
 
-      if (clashProcess) {
+      if (isSftp && clashProcess) {
+        // SFTP 通过 HTTP CONNECT 代理隧道加速
         ariaArgs.push('--all-proxy=http://127.0.0.1:43289');
       }
 
       ariaArgs.push(file.url);
 
-      console.log(`[Plugin] Running aria2c (SFTP): ${aria2Bin} ${ariaArgs.join(' ')}`);
+      const protoName = isSftp ? 'SFTP' : 'FTP';
+      console.log(`[Plugin] Running aria2c (${protoName}): ${aria2Bin} ${ariaArgs.join(' ')}`);
       if (logStream) {
-        logStream.write(`=== 启动 aria2c 插件加速下载 (SFTP) ===\n命令: ${aria2Bin} ${ariaArgs.join(' ')}\n\n`);
+        logStream.write(`=== 启动 aria2c 插件加速下载 (${protoName}) ===\n命令: ${aria2Bin} ${ariaArgs.join(' ')}\n\n`);
       }
 
-      const proc = spawn(aria2Bin, ariaArgs);
+      const proc = spawn(aria2Bin, ariaArgs, { env: (isSftp && clashProcess) ? env : cleanEnv });
       activeAxelProcesses.set(fileIndex, proc);
 
       cancelTokens.set(fileIndex, () => {
@@ -2401,18 +2440,13 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
     });
   }
 
-  // 针对 FTP (支持 socks5 代理传输) 及未就绪降级使用 curl
+  // 2) 针对 aria2 未就绪时，降级使用 curl 兜底断点续传
   return new Promise((resolve, reject) => {
     if (cancelled) return reject(new Error('Cancelled'));
     const curlArgs = ['-sL', '-C', '-', '--insecure'];
     
-    // 代理挂载：若是 FTP 且加速器开启，走 Mihomo socks5 端口；若是 SFTP 走 http 代理
-    if (clashProcess) {
-      if (isFtp) {
-        curlArgs.push('--proxy', 'socks5://127.0.0.1:43290');
-      } else {
-        curlArgs.push('--proxy', 'http://127.0.0.1:43289');
-      }
+    if (isSftp && clashProcess) {
+      curlArgs.push('--proxy', 'http://127.0.0.1:43289');
     } else {
       curlArgs.push('--noproxy', '*');
     }
@@ -2423,13 +2457,17 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       logStream.write(`=== 启动 curl 下载引擎 ===\n命令: curl ${curlArgs.join(' ')}\n\n`);
     }
 
-    const proc = spawn('curl', curlArgs);
+    const proc = spawn('curl', curlArgs, { env: (isSftp && clashProcess) ? env : cleanEnv });
     activeAxelProcesses.set(fileIndex, proc);
 
     cancelTokens.set(fileIndex, () => {
       try { killProcess(proc); } catch (e) {}
       activeAxelProcesses.delete(fileIndex);
       reject(new Error('Cancelled'));
+    });
+
+    proc.stderr.on('data', (data) => {
+      if (logStream) logStream.write(`[curl stderr] ${data.toString()}`);
     });
 
     let lastBytes = 0;
@@ -2715,6 +2753,16 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         downloadSuccess = true;
       } catch (nodeErr) {
         lastErrorMsg = nodeErr.message;
+        // 若 Node 引擎因为代理连接被拒绝 (ECONNREFUSED 127.0.0.1:43289) 失败，自动清除代理直连兜底一次
+        if (nodeErr.message && nodeErr.message.includes('ECONNREFUSED')) {
+          try {
+            console.warn(`Node proxy failed with ECONNREFUSED, retrying directly without proxy for ${file.name}...`);
+            await downloadFileWithNodeStream(file.url, savePath, {}, fileIndex, file.size, null);
+            downloadSuccess = true;
+          } catch (eDirect) {
+            lastErrorMsg = eDirect.message;
+          }
+        }
       }
     }
 
