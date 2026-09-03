@@ -2629,7 +2629,7 @@ function renderCompletedList() {
         </div>
       </div>
       <div class="tl-actions">
-        <button class="tl-btn primary" title="在文件夹中定位" onclick="openCompletedFile('${item.savePath || ''}')">📂</button>
+        <button class="tl-btn primary" title="在文件夹中定位" onclick="openCompletedRecord(${index})">📂</button>
         <button class="tl-btn danger" title="删除记录" onclick="deleteCompletedRecord(${index})">🗑</button>
       </div>
     `;
@@ -2680,7 +2680,10 @@ function renderFailedList() {
   });
 }
 
-function getFileTypeBadge(url) {
+// 点击定位文件夹时，不再通过 innerHTML 拼接未转义反斜杠，避免 Windows 路径被 JS 字符串吞噬
+function escapeJsArg(str) {
+  return String(str || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
   if (url.includes('sra_raw') || url.includes('sra-pub-run-odp')) return 'SRA Raw';
   if (url.includes('ebi.ac.uk')) return 'EBI Raw';
   if (url.includes('geo/series')) return 'GEO Suppl';
@@ -2689,6 +2692,15 @@ function getFileTypeBadge(url) {
   if (url.includes('ncbi.nlm.nih.gov')) return 'NCBI';
   if (url.includes('singlecell.broadinstitute.org')) return 'Broad';
   return 'Direct Link';
+}
+
+function openCompletedRecord(index) {
+  const item = completedDownloads[index];
+  if (!item || !item.savePath) {
+    showToast('该任务无文件存储路径', 'error');
+    return;
+  }
+  openCompletedFile(item.savePath);
 }
 
 function openCompletedFile(savePath) {
@@ -3173,6 +3185,7 @@ window.selectMoreType = selectMoreType;
 window.openDownloadsDirectory = openDownloadsDirectory;
 window.switchTransferSubTab = switchTransferSubTab;
 window.changeMaxConcurrent = changeMaxConcurrent;
+window.openCompletedRecord = openCompletedRecord;
 window.openCompletedFile = openCompletedFile;
 window.deleteCompletedRecord = deleteCompletedRecord;
 window.clearCompletedDownloads = clearCompletedDownloads;
