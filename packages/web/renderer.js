@@ -148,6 +148,8 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (versionEl) versionEl.innerText = 'v' + version;
     const sidebarVerEl = document.getElementById('sidebarVersion');
     if (sidebarVerEl) sidebarVerEl.innerText = 'v' + version;
+    const brandVer = document.querySelector('.brand span:last-child');
+    if (brandVer) brandVer.innerText = 'v' + version;
     // 预览版(含 -preview)才显示 BioSample 查询按钮(抢先体验功能)
     const biosampleBtn = document.getElementById('biosampleBtn');
     if (biosampleBtn) biosampleBtn.style.display = /preview/i.test(String(version)) ? 'inline-block' : 'none';
@@ -326,20 +328,20 @@ function switchTab(tabId) {
   if (tabId === 'plugins-tab') refreshPluginsList();
 }
 
-// 云下载只维护网页端一套实现；桌面端将当前登录令牌同步到隔离的官方同源 webview。
+// 云下载只维护官网一套实现；浏览器版通过 postMessage 安全同步 Token。
 async function syncCloudWorkspaceLogin() {
-  const webview = document.getElementById('cloudWorkspaceWebview');
-  if (!webview || !currentUser?.token || typeof webview.executeJavaScript !== 'function') return;
-  const token = JSON.stringify(currentUser.token);
+  const frame = document.getElementById('cloudWorkspaceFrame');
+  if (!frame || !currentUser?.token) return;
   try {
-    const changed = await webview.executeJavaScript(`(() => { const next=${token}; if (localStorage.getItem('bd_token') === next) return false; localStorage.setItem('bd_token', next); return true; })()`);
-    if (changed) webview.reload();
-  } catch (e) { console.warn('云下载登录状态同步失败:', e.message); }
+    frame.contentWindow.postMessage({ type: 'biodl-auth-token', token: currentUser.token }, 'https://biodown.ye.aimeals.cn');
+  } catch (e) {
+    console.warn('云下载登录状态同步失败:', e.message);
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  const webview = document.getElementById('cloudWorkspaceWebview');
-  if (webview) webview.addEventListener('dom-ready', syncCloudWorkspaceLogin);
+  const frame = document.getElementById('cloudWorkspaceFrame');
+  if (frame) frame.addEventListener('load', syncCloudWorkspaceLogin);
 });
 
 function toggleMoreMenu(e) {
@@ -1095,6 +1097,9 @@ async function startDownload() {
       return;
     }
   }
+
+  // Web 端每次启动任务前清理同名旧完成文件误跳过的提示由核心负责；
+  // 前端必须立即写入传输列表，等待 SSE 事件更新状态。
 
   // 校验当前流量剩余额度是否充足
   const totalBytes = currentQueue.reduce((acc, f) => acc + (f.size || 0), 0);

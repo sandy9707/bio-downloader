@@ -1,4 +1,9 @@
-const { app, BrowserWindow, BrowserView, ipcMain, dialog, shell, session, Menu } = require('electron');
+const isElectron = Boolean(process.versions && process.versions.electron);
+let electron = {};
+try {
+  if (isElectron) electron = require('electron');
+} catch (e) {}
+
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
@@ -6,6 +11,59 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const os = require('os');
 const crypto = require('crypto');
+const EventEmitter = require('events');
+
+const eventBus = new EventEmitter();
+const headlessHandlers = {};
+const headlessListeners = {};
+
+const app = electron.app || {
+  getPath: (name) => {
+    if (name === 'userData') return process.env.BIODL_DATA_DIR || path.join(os.homedir(), '.bio-downloader');
+    if (name === 'downloads') return path.join(os.homedir(), 'Downloads');
+    if (name === 'temp') return os.tmpdir();
+    return os.homedir();
+  },
+  getVersion: () => {
+    try { return require('./package.json').version; } catch(e) { return '2.0.37'; }
+  },
+  getAppPath: () => __dirname,
+  isPackaged: false,
+  on: () => {},
+  whenReady: () => Promise.resolve(),
+  exit: (code) => process.exit(code || 0),
+  relaunch: () => {},
+  quit: () => process.exit(0)
+};
+
+const ipcMain = electron.ipcMain || {
+  handle: (channel, fn) => { headlessHandlers[channel] = fn; },
+  on: (channel, fn) => { (headlessListeners[channel] = headlessListeners[channel] || []).push(fn); },
+  emit: (channel, ...args) => {
+    if (headlessListeners[channel]) headlessListeners[channel].forEach(fn => fn(...args));
+  }
+};
+
+const BrowserWindow = electron.BrowserWindow || class {
+  constructor() {
+    this.webContents = {
+      send: (channel, data) => eventBus.emit(channel, data)
+    };
+  }
+  loadFile() {}
+  on() {}
+  isDestroyed() { return false; }
+};
+
+const BrowserView = electron.BrowserView || class {};
+const dialog = electron.dialog || { showOpenDialog: async () => ({ canceled: true }) };
+const shell = electron.shell || {
+  showItemInFolder: (p) => console.log('[shell.showItemInFolder]', p),
+  openPath: async (p) => console.log('[shell.openPath]', p),
+  openExternal: async (url) => console.log('[shell.openExternal]', url)
+};
+const session = electron.session || { fromPartition: () => ({ webRequest: { onBeforeRequest: () => {} } }) };
+const Menu = electron.Menu || { setApplicationMenu: () => {}, buildFromTemplate: () => ({}) };
 
 // ===== 热更新签名验签 =====
 // 内嵌的热更新补丁验签公钥(Ed25519)。私钥离线保管,仅在发布补丁时签名。
@@ -120,6 +178,9 @@ function loadConfiguration() {
 loadConfiguration();
 
 let mainWindow;
+if (!isElectron) {
+  mainWindow = new BrowserWindow();
+}
 let extractionWindow = null; // 引导式提取独立弹出窗口
 let clashProcess = null;
 let currentAxelProcess = null;
@@ -156,6 +217,7 @@ function killAllAxelProcesses() {
 }
 
 function ensureExecutable(filePath) {
+  if (!filePath || !path.isAbsolute(filePath)) return;
   try {
     fs.accessSync(filePath, fs.constants.X_OK);
     console.log(`Binary is already executable: ${filePath}`);
@@ -211,7 +273,7 @@ ipcMain.handle('save-transfers-history', (event, data) => {
 // 【文件路径管理】
 // ==========================================
 // 针对打包和开发环境，获取 bin 资源文件夹的路径
-const BIN_DIR = app.isPackaged
+const BIN_DIR = (app.isPackaged && process.resourcesPath)
   ? path.join(process.resourcesPath, 'bin')
   : path.join(__dirname, 'bin');
 
@@ -247,6 +309,7 @@ function ensureClashDataFiles() {
 // 拷贝加速器及多线程二进制可执行文件到用户空间以保障执行权限
 function ensureBinaries() {
   const platform = os.platform();
+  const arch = os.arch();
   const filesToCopy = [];
 
   if (platform === 'darwin') {
@@ -262,6 +325,12 @@ function ensureBinaries() {
       { src: path.join(BIN_DIR, 'win32', 'msys-2.0.dll'), dest: 'msys-2.0.dll' },
       { src: path.join(BIN_DIR, 'win32', 'msys-crypto-3.dll'), dest: 'msys-crypto-3.dll' },
       { src: path.join(BIN_DIR, 'win32', 'msys-ssl-3.dll'), dest: 'msys-ssl-3.dll' }
+    );
+  } else if (platform === 'linux') {
+    filesToCopy.push(
+      arch === 'arm64'
+        ? { src: path.join(BIN_DIR, 'linux', 'mihomo_linux_arm64'), dest: 'mihomo_linux_arm64' }
+        : { src: path.join(BIN_DIR, 'linux', 'mihomo_linux_amd64'), dest: 'mihomo_linux_amd64' }
     );
   }
 
@@ -302,6 +371,8 @@ function getClashBinaryPath() {
       : path.join(USER_BIN_DIR, 'mihomo_x86_64');
   } else if (platform === 'win32') {
     return path.join(USER_BIN_DIR, 'mihomo_windows_x86_64.exe');
+  } else if (platform === 'linux') {
+    return path.join(USER_BIN_DIR, arch === 'arm64' ? 'mihomo_linux_arm64' : 'mihomo_linux_amd64');
   }
   throw new Error('不支持的操作系统平台: ' + platform);
 }
@@ -313,6 +384,11 @@ function getAxelBinaryPath() {
     return path.join(USER_BIN_DIR, 'axel');
   } else if (platform === 'win32') {
     return path.join(USER_BIN_DIR, 'axel.exe');
+  } else if (platform === 'linux') {
+    const bundled = path.join(USER_BIN_DIR, 'axel');
+    if (fs.existsSync(bundled)) return bundled;
+    const aria2 = path.join(BIN_DIR, 'linux', 'aria2', 'aria2c');
+    return fs.existsSync(aria2) ? aria2 : 'aria2c';
   }
   throw new Error('不支持的操作系统平台: ' + platform);
 }
@@ -330,6 +406,14 @@ if (!fs.existsSync(PLUGIN_DIR)) {
 function getAria2BinaryPath() {
   const platform = os.platform();
   const isWin = platform === 'win32';
+  if (platform === 'linux') {
+    const linuxBin = path.join(BIN_DIR, 'linux', 'aria2', 'aria2c');
+    if (fs.existsSync(linuxBin)) {
+      ensureExecutable(linuxBin);
+      return linuxBin;
+    }
+    return null;
+  }
   const binName = isWin ? 'aria2c.exe' : 'aria2c';
   const pluginBin = path.join(PLUGIN_DIR, 'aria2', binName);
   if (fs.existsSync(pluginBin)) {
@@ -550,6 +634,7 @@ function checkPendingAsarUpdates() {
 }
 
 app.whenReady().then(() => {
+  if (!isElectron) return; // 无头模式下不创建原生窗口，由 Web Server / CLI 调度
   checkPendingAsarUpdates();
   ensureBinaries();
   ensureClashDataFiles();
@@ -587,7 +672,7 @@ function killExistingClashProcesses() {
         resolve();
       });
     } else {
-      exec('killall -9 mihomo_aarch64; killall -9 mihomo_x86_64', () => {
+      exec('killall -9 mihomo_aarch64 mihomo_x86_64 mihomo_linux_amd64 mihomo 2>/dev/null', () => {
         resolve();
       });
     }
@@ -1236,6 +1321,7 @@ ipcMain.handle('api-invite-copy', async (event, { token }) => {
 ipcMain.handle('plugin-get-status', async () => {
   const platform = os.platform();
   const isWin = platform === 'win32';
+  const isLinux = platform === 'linux';
   const aria2Bin = getAria2BinaryPath();
   const installed = !!(aria2Bin && fs.existsSync(aria2Bin));
   
@@ -1246,7 +1332,11 @@ ipcMain.handle('plugin-get-status', async () => {
   if (installed) {
     try {
       const verOut = await new Promise((resolve, reject) => {
-        exec(`"${aria2Bin}" -v`, { timeout: 3000 }, (err, stdout, stderr) => {
+        const env = { ...process.env };
+        if (isLinux) {
+          env.LD_LIBRARY_PATH = [path.join(path.dirname(aria2Bin), 'lib'), env.LD_LIBRARY_PATH].filter(Boolean).join(':');
+        }
+        exec(`"${aria2Bin}" -v`, { timeout: 3000, env }, (err, stdout, stderr) => {
           if (err) {
             err.stderr = stderr;
             return reject(err);
@@ -1272,7 +1362,7 @@ ipcMain.handle('plugin-get-status', async () => {
         id: 'aria2',
         name: 'FTP / SFTP 高速下载插件 (aria2)',
         description: '支持 FTP 原生多连接并发与 SFTP 隧道代理加速传输，断点续传。',
-        platform: isWin ? 'Windows x64' : 'macOS Apple Silicon',
+        platform: isLinux ? `Linux ${os.arch()}` : (isWin ? 'Windows x64' : 'macOS Apple Silicon'),
         installed,
         usable,
         version: version || '1.37.0',
@@ -2268,6 +2358,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
 
   const axelBin = getAxelBinaryPath();
   ensureExecutable(axelBin);
+  const useAria2ForHttp = process.platform === 'linux' && /aria2c$/.test(axelBin);
 
   const MAX_RETRIES = 3;
   const maxConcurrentCount = parseInt(maxConcurrent, 10) || 3;
@@ -2803,6 +2894,28 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
             console.error('Failed to create target directory:', dirErr);
           }
 
+          if (useAria2ForHttp) {
+            const ariaArgs = [
+              '-x', String(Math.min(16, threads || 8)),
+              '-s', String(Math.min(16, threads || 8)),
+              '-k', '1M',
+              '--file-allocation=none',
+              '--summary-interval=1',
+              '--console-log-level=warn',
+              '--auto-file-renaming=false',
+              '--allow-overwrite=true',
+              '-d', fileDestFolder,
+              '-o', safeName,
+              file.url
+            ];
+            if (clashProcess) ariaArgs.splice(ariaArgs.length - 1, 0, '--all-proxy=http://127.0.0.1:43289');
+            args.splice(0, args.length, ...ariaArgs);
+          }
+
+          if (useAria2ForHttp) {
+            const ariaLibDir = path.join(path.dirname(axelBin), 'lib');
+            env.LD_LIBRARY_PATH = [ariaLibDir, env.LD_LIBRARY_PATH].filter(Boolean).join(':');
+          }
           const proc = spawn(axelBin, args, { env });
           activeAxelProcesses.set(fileIndex, proc);
 
@@ -2837,13 +2950,18 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
             // Axel 可每秒输出数百次回车进度；所有模式统一最多 1Hz 解析和刷新。
             if (!isTerminalMessage && now - lastProgressHandledAt < 1000) return;
             lastProgressHandledAt = now;
-            const pctMatches = [...output.matchAll(/\[\s*(\d+)%\]/g)];
-            const speedMatches = [...output.matchAll(/\[\s*([\d\.]+\s*[KMGT]*B\/s)\]/g)];
+            const pctMatches = useAria2ForHttp
+              ? [...output.matchAll(/\((\d+)%\)/g)]
+              : [...output.matchAll(/\[\s*(\d+)%\]/g)];
+            const speedMatches = useAria2ForHttp
+              ? [...output.matchAll(/DL:([\d.]+[KMGT]?i?B(?:\/s)?)/ig)]
+              : [...output.matchAll(/\[\s*([\d\.]+\s*[KMGT]*B\/s)\]/g)];
             const pctMatch = pctMatches[pctMatches.length - 1];
             const speedMatch = speedMatches[speedMatches.length - 1];
 
             let percentage = pctMatch ? parseInt(pctMatch[1]) : null;
             let speed = speedMatch ? speedMatch[1] : null;
+            if (useAria2ForHttp && speed && !speed.endsWith('/s')) speed += '/s';
 
             if (percentage !== null || speed !== null) {
               if (logStream && (percentage === 100 || now - lastProgressLoggedAt >= 5000)) {
@@ -4015,3 +4133,29 @@ ipcMain.handle('upload-log-content', async (event, { token, filename, content })
     return { success: false, error: err.response?.data?.error || err.message };
   }
 });
+
+// ==========================================
+// 【导出无头服务调度器 (支持 Web Server & CLI 100% 逻辑复用)】
+// ==========================================
+module.exports = {
+  isElectron,
+  eventBus,
+  headlessHandlers,
+  headlessListeners,
+  ensureBinaries,
+  ensureClashDataFiles,
+  callIpcHandler: async (channel, payload) => {
+    const fn = headlessHandlers[channel];
+    if (!fn) throw new Error(`Handler not found for channel: ${channel}`);
+    const sender = {
+      send: (ch, data) => eventBus.emit(ch, data),
+      on: (ch, listener) => eventBus.on(ch, listener),
+      once: (ch, listener) => eventBus.once(ch, listener),
+      removeListener: (ch, listener) => eventBus.removeListener(ch, listener)
+    };
+    return await fn({ sender }, payload);
+  },
+  sendIpcSignal: (channel, ...args) => {
+    ipcMain.emit(channel, { sender: { send: (ch, data) => eventBus.emit(ch, data) } }, ...args);
+  }
+};

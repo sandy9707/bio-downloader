@@ -1,113 +1,182 @@
-// 为浏览器环境提供与 Electron preload 相同的 window.api 接口定义
+// 为浏览器环境提供动态通用的 IPC 映射层 (100% 对齐 preload.js)
 (function () {
-  if (window.api) return; // 若在 Electron 环境内直接使用原生 IPC
-
-  const API_BASE = ''; // 相对当前 Web Server 主机
-
-  async function request(path, options = {}) {
-    const res = await fetch(API_BASE + path, {
-      headers: { 'Content-Type': 'application/json', ...options.headers },
-      ...options
-    });
-    return await res.json();
-  }
+  if (window.api) return;
 
   const listeners = {
     downloadStatus: [],
-    downloadProgress: []
+    downloadProgress: [],
+    updateProgress: [],
+    updateStatus: [],
+    curlProgress: [],
+    speedtestProgress: [],
+    extractionEvent: [],
+    menuAddLink: [],
+    extractionNav: []
   };
 
-  // 建立 SSE 实时监听
-  const eventSource = new EventSource('/api/events');
-  eventSource.addEventListener('progress', (e) => {
+  // 1. SSE 实时长连接
+  const sse = new EventSource('/api/events');
+  sse.addEventListener('download-status', (e) => {
     try {
       const data = JSON.parse(e.data);
-      listeners.downloadProgress.forEach(cb => cb(data));
+      listeners.downloadStatus.forEach(fn => fn(data));
     } catch (err) {}
   });
 
-  eventSource.addEventListener('updated', (e) => {
+  sse.addEventListener('download-progress', (e) => {
     try {
       const data = JSON.parse(e.data);
-      listeners.downloadStatus.forEach(cb => cb(data));
+      listeners.downloadProgress.forEach(fn => fn(data));
     } catch (err) {}
   });
 
-  eventSource.addEventListener('completed', (e) => {
+  sse.addEventListener('curl-download-progress', (e) => {
     try {
       const data = JSON.parse(e.data);
-      listeners.downloadStatus.forEach(cb => cb({ ...data, status: 'completed' }));
+      listeners.curlProgress.forEach(fn => fn(data));
     } catch (err) {}
   });
 
-  eventSource.addEventListener('failed', (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      listeners.downloadStatus.forEach(cb => cb({ ...data, status: 'failed' }));
-    } catch (err) {}
-  });
+  // 2. 通用 IPC 调用映射表 (对齐 preload.js 48 个接口)
+  const channelMap = {
+    getSettings: 'get-settings',
+    saveSettings: (settings) => ({ channel: 'save-settings', payload: settings }),
+    selectDirectory: 'select-directory',
+    getAppVersion: 'get-app-version',
+    getBackendUrl: 'get-backend-url',
 
-  window.api = {
-    getAppVersion: async () => '2.0.37 (Linux Web/CLI)',
-    getSettings: async () => await request('/api/settings'),
-    saveSettings: async (settings) => await request('/api/settings', { method: 'POST', body: JSON.stringify(settings) }),
-    getTransfersHistory: async () => await request('/api/transfers'),
-    saveTransfersHistory: async (data) => await request('/api/transfers', { method: 'POST', body: JSON.stringify(data) }),
+    register: (u, p, e, i) => ({ channel: 'api-register', payload: { username: u, password: p, email: e, inviteCode: i } }),
+    login: (u, p) => ({ channel: 'api-login', payload: { username: u, password: p } }),
+    getUserInfo: (t) => ({ channel: 'api-get-user-info', payload: { token: t } }),
+    redeemCode: (t, c) => ({ channel: 'api-redeem', payload: { token: t, code: c } }),
+    requestEmailBindCode: (t, e) => ({ channel: 'api-request-email-bind-code', payload: { token: t, email: e } }),
+    confirmEmailBind: (t, e, c) => ({ channel: 'api-confirm-email-bind', payload: { token: t, email: e, code: c } }),
+    requestPasswordReset: (e) => ({ channel: 'api-request-password-reset', payload: { email: e } }),
+    confirmPasswordReset: (e, c, p) => ({ channel: 'api-confirm-password-reset', payload: { email: e, code: c, newPassword: p } }),
 
-    // 鉴权
-    loginUser: async (username, password) => await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
-    getUserInfo: async (token) => await request(`/api/user/info?token=${encodeURIComponent(token)}`),
+    getPackages: 'api-get-packages',
+    createOrder: (t, pkg, pt, q) => ({ channel: 'api-create-order', payload: { token: t, packageId: pkg, payType: pt, quantity: q } }),
+    checkin: (t) => ({ channel: 'api-checkin', payload: { token: t } }),
+    balanceRecharge: (t, a) => ({ channel: 'api-balance-recharge', payload: { token: t, amount: a } }),
+    getOrders: (t) => ({ channel: 'api-get-orders', payload: { token: t } }),
+    getDevices: (t) => ({ channel: 'api-get-devices', payload: { token: t } }),
+    getLoginLog: (t) => ({ channel: 'api-get-login-log', payload: { token: t } }),
+    resetToken: (t) => ({ channel: 'api-reset-token', payload: { token: t } }),
+    reportDevice: (t, id, n) => ({ channel: 'api-report-device', payload: { token: t, deviceId: id, deviceName: n } }),
+    recordInviteCopy: (t) => ({ channel: 'api-invite-copy', payload: { token: t } }),
 
-    // 加速器
-    getClashStatus: async () => {
-      const sys = await request('/api/system');
-      return !!sys.clashRunning;
-    },
-    getNodeCount: async () => {
-      const sys = await request('/api/system');
-      return sys.nodeCount || 60;
-    },
-    startClash: async () => await request('/api/clash/start', { method: 'POST' }),
-    stopClash: async () => await request('/api/clash/stop', { method: 'POST' }),
+    startClash: (t) => ({ channel: 'clash-start', payload: { token: t } }),
+    stopClash: 'clash-stop',
+    getClashStatus: 'clash-status',
+    optimizeClash: (t) => ({ channel: 'clash-optimize', payload: { token: t } }),
+    getNodeCount: 'clash-get-node-count',
 
-    // 数据源校验与下载
-    checkSize: async (type, inputVal) => {
-      const res = await request('/api/resolve', { method: 'POST', body: JSON.stringify({ type, input: inputVal }) });
-      return res.files || [];
-    },
-    startDownload: async (queue, targetDir) => {
-      return await request('/api/tasks', { method: 'POST', body: JSON.stringify({ files: queue, targetDir }) });
-    },
+    checkSize: (type, inputVal) => ({ channel: 'check-download-size', payload: { type, inputVal } }),
+    queryBioProject: (project) => ({ channel: 'query-bioproject', payload: { project } }),
+    queryBioSample: (biosample) => ({ channel: 'query-biosample', payload: { biosample } }),
+    startDownload: (files, targetDir, token, maxConcurrent) => ({ channel: 'start-download', payload: { files, targetDir, token, maxConcurrent } }),
+    cancelDownload: (idx) => ({ channel: 'cancel-download', payload: idx }),
+    pauseDownload: (idx) => ({ channel: 'pause-download', payload: idx }),
+    resumeDownload: (idx) => ({ channel: 'resume-download', payload: idx }),
+    openDownloadsFolder: (dir) => ({ channel: 'open-downloads-folder', payload: dir }),
+    cancelAllDownloadsSignal: () => ({ channel: 'cancel-all-downloads-signal', isSignal: true }),
 
-    // 目录选择 (Web 环境降级为手动输入或返回默认)
-    selectDirectory: async () => {
-      const p = prompt('请输入 Linux 服务器绝对保存路径 (例如 /home/user/downloads):');
-      return p ? p.trim() : null;
-    },
-    openDownloadsFolder: (dir) => {
-      alert(`文件已保存在 Linux 服务器目录:\n${dir}`);
-    },
+    parseCurl: (text) => ({ channel: 'parse-curl', payload: { text } }),
+    downloadCurl: (payload) => ({ channel: 'download-curl', payload }),
 
-    // 插件状态 (Web 版已内建)
-    getPluginStatus: async () => ({
-      plugins: [{
-        id: 'aria2',
-        name: 'Linux 原生加速引擎 (aria2 & axel)',
-        description: '已随 Linux 服务端完整内建并配置，开箱即用。',
-        platform: 'Linux x86_64 / aarch64',
-        installed: true,
-        usable: true,
-        version: '1.37.0'
-      }]
-    }),
-    installPlugin: async () => ({ success: true }),
+    openExtraction: 'open-extraction',
+    syncExtractionProxy: 'extraction-sync-proxy',
+    extractionBrowserNav: (url) => ({ channel: 'extraction-browser-nav', payload: { url } }),
+    extractionBrowserResize: (bounds) => ({ channel: 'extraction-browser-resize', payload: bounds }),
+    extractionBrowserControl: (action) => ({ channel: 'extraction-browser-control', payload: { action } }),
+    extractionPause: (id) => ({ channel: 'extraction-pause', payload: { id } }),
+    extractionCancel: (id) => ({ channel: 'extraction-cancel', payload: { id } }),
+    extractionDownload: (payload) => ({ channel: 'extraction-download', payload }),
+    extractionRunCode: (code, saveDir) => ({ channel: 'extraction-run-code', payload: { code, saveDir } }),
+    extractionCookiesFor: (url) => ({ channel: 'extraction-cookies-for', payload: { url } }),
+    extractionClearSession: 'extraction-clear-session',
 
-    // 事件
-    onDownloadStatus: (cb) => listeners.downloadStatus.push(cb),
-    onDownloadProgress: (cb) => listeners.downloadProgress.push(cb),
-    removeAllListeners: () => {
-      listeners.downloadStatus = [];
-      listeners.downloadProgress = [];
+    checkForUpdates: (advancedMode) => ({ channel: 'check-for-updates', payload: { advancedMode } }),
+    openExternalUrl: (url) => ({ channel: 'open-external-url', payload: { url } }),
+    downloadAppUpdate: (url, fileName) => ({ channel: 'download-app-update', payload: { url, fileName } }),
+    applyHotPatch: (patchUrl) => ({ channel: 'apply-hot-patch', payload: { patchUrl } }),
+
+    openSpeedtestPage: 'open-speedtest-page',
+    speedtestNetwork: (opts) => ({ channel: 'speedtest-network', payload: opts }),
+    speedtestDownloader: (opts) => ({ channel: 'speedtest-downloader', payload: opts }),
+
+    testNodeConnection: 'test-node-connection',
+    getLogsList: 'get-logs-list',
+    readLogContent: (f) => ({ channel: 'read-log-content', payload: f }),
+    deleteLog: (f) => ({ channel: 'delete-log', payload: f }),
+    uploadLogContent: (t, f, c) => ({ channel: 'upload-log-content', payload: { token: t, filename: f, content: c } }),
+
+    getPluginStatus: 'plugin-get-status',
+    installPlugin: (id) => ({ channel: 'plugin-install', payload: { pluginId: id } }),
+
+    getTransfersHistory: 'get-transfers-history',
+    saveTransfersHistory: (data) => ({ channel: 'save-transfers-history', payload: data })
+  };
+
+  async function invokeRpc(channel, payload) {
+    const res = await fetch('/api/ipc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel, payload })
+    });
+    const json = await res.json();
+    if (json && json.error) throw new Error(json.error);
+    return json ? json.result : undefined;
+  }
+
+  // 3. 构建动态 window.api Proxy 代理
+  window.api = new Proxy({}, {
+    get(target, prop) {
+      // 监听器
+      if (prop === 'onDownloadStatus') return (cb) => listeners.downloadStatus.push(cb);
+      if (prop === 'onDownloadProgress') return (cb) => listeners.downloadProgress.push(cb);
+      if (prop === 'onUpdateProgress') return (cb) => listeners.updateProgress.push(cb);
+      if (prop === 'onUpdateStatus') return (cb) => listeners.updateStatus.push(cb);
+      if (prop === 'onCurlProgress') return (cb) => listeners.curlProgress.push(cb);
+      if (prop === 'onSpeedtestProgress') return (cb) => listeners.speedtestProgress.push(cb);
+      if (prop === 'onExtractionEvent') return (cb) => listeners.extractionEvent.push(cb);
+      if (prop === 'onMenuAddLink') return (cb) => listeners.menuAddLink.push(cb);
+      if (prop === 'onExtractionNav') return (cb) => listeners.extractionNav.push(cb);
+      if (prop === 'removeAllListeners') return () => {
+        for (const k in listeners) listeners[k] = [];
+      };
+
+      // 特殊浏览器处理
+      if (prop === 'selectDirectory') {
+        return async () => {
+          const p = prompt('请输入保存目录路径 (例如 /home/user/downloads):');
+          return p ? p.trim() : null;
+        };
+      }
+      if (prop === 'openDownloadsFolder') {
+        return (dir) => alert(`文件已保存在服务器路径:\n${dir}`);
+      }
+      if (prop === 'openExternalUrl') {
+        return (url) => window.open(url, '_blank', 'noopener');
+      }
+
+      // 常规方法映射
+      return async (...args) => {
+        const mapping = channelMap[prop];
+        let channel = prop;
+        let payload = args[0];
+
+        if (typeof mapping === 'function') {
+          const res = mapping(...args);
+          channel = res.channel;
+          payload = res.payload;
+        } else if (typeof mapping === 'string') {
+          channel = mapping;
+          payload = args[0];
+        }
+
+        return await invokeRpc(channel, payload);
+      };
     }
-  };
+  });
 })();

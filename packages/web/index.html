@@ -1221,9 +1221,9 @@
     <div class="brand" style="display: flex; flex-direction: column; align-items: center; gap: 0.25rem; justify-content: center; margin-bottom: 2rem;">
       <div style="display: flex; align-items: center; gap: 0.5rem;">
         <img src="logo.png" alt="Logo" style="height: 28px; width: 28px; border-radius: 6px; box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);">
-        <span style="font-size: 1.25rem; font-weight: 800; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 0.5px;">BioDownloader</span>
+        <span class="logo" style="font-size: 1.25rem; font-weight: 800; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 0.5px;">BioDownloader</span>
       </div>
-      <span id="sidebarVersion" style="font-size: 0.7rem; color: var(--text-muted); letter-spacing: 0.5px;">v-.-.-</span>
+      <span id="sidebarVersion" style="font-size: 0.75rem; font-weight: 600; color: #818cf8; letter-spacing: 0.5px;">v2.0.38-preview</span>
     </div>
     <div class="nav-menu">
       <div class="nav-item active" onclick="switchTab('download-hub')">下载中心</div>
@@ -1470,9 +1470,9 @@
       </div>
     </div>
 
-    <!-- VIEW: 云下载（复用线上同一套模块，避免桌面端/网页端双份维护） -->
+    <!-- VIEW: 云下载（浏览器使用 iframe，Token 通过 URL fragment 传递，不进入服务端日志） -->
     <div class="tab-view" id="cloud-tab">
-      <webview id="cloudWorkspaceWebview" src="https://biodown.ye.aimeals.cn/user/cloud?embed=cloud" partition="persist:biodl-cloud" style="width:100%;height:calc(100vh - 115px);border:0;border-radius:12px;background:#f7f8fc;"></webview>
+      <iframe id="cloudWorkspaceFrame" src="https://biodown.ye.aimeals.cn/user/cloud?embed=cloud" allow="clipboard-write" style="width:100%;height:calc(100vh - 115px);border:0;border-radius:12px;background:#f7f8fc;"></iframe>
     </div>
 
     <!-- VIEW: 我的 (个人中心与设置) -->

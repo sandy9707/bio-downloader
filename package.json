@@ -5,7 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node scripts/check-shared-sources.js",
+    "test": "node scripts/check-shared-sources.js && node scripts/check-web-bridge-contract.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder"
   },
