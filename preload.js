@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('api', {
   pauseDownload: (fileIndex) => ipcRenderer.invoke('pause-download', fileIndex),
   resumeDownload: (fileIndex) => ipcRenderer.invoke('resume-download', fileIndex),
   openDownloadsFolder: (folderPath) => ipcRenderer.invoke('open-downloads-folder', folderPath),
+  deleteTransferFile: (filePath) => ipcRenderer.invoke('delete-transfer-file', filePath),
   cancelAllDownloadsSignal: () => ipcRenderer.send('cancel-all-downloads-signal'),
 
   // 粘贴 cURL 下载(解析 + 带会话下载)

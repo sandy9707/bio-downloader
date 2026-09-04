@@ -1,6 +1,6 @@
 {
   "name": "bio-downloader",
-  "version": "2.0.38-preview",
+  "version": "2.0.39-preview",
   "description": "Commercial Biology Raw Data Downloader Desktop Client",
   "main": "main.js",
   "scripts": {
@@ -15,7 +15,8 @@
   },
   "dependencies": {
     "axios": "^1.6.8",
-    "cheerio": "^1.0.0-rc.12"
+    "cheerio": "^1.0.0-rc.12",
+    "commander": "^12.1.0"
   },
   "devDependencies": {
     "electron": "30.5.1",

@@ -6,7 +6,8 @@ try {
 
 const path = require('path');
 const fs = require('fs');
-const { spawn, exec } = require('child_process');
+const originalFs = isElectron ? require('original-fs') : fs;
+const { spawn, spawnSync, exec } = require('child_process');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const os = require('os');
@@ -183,6 +184,7 @@ if (!isElectron) {
 }
 let extractionWindow = null; // 引导式提取独立弹出窗口
 let clashProcess = null;
+let currentRealNodeCount = 0;
 let currentAxelProcess = null;
 const activeAxelProcesses = new Map();
 const pausedAxelFiles = new Set(); // 用户手动暂停的 fileIndex:kill 进程但保留 axel 断点(.st),进程退出不自动重试,状态回传 paused
@@ -584,6 +586,51 @@ function createWindow() {
   });
 }
 
+function launchWindowsPersistentRuntime() {
+  if (!isElectron || process.platform !== 'win32' || !app.isPackaged || process.env.BIODL_FIXED_RUNTIME === '1') return false;
+
+  try {
+    const fixedDir = path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'BioDownloader', 'runtime');
+    if (path.resolve(path.dirname(process.execPath)).toLowerCase() === path.resolve(fixedDir).toLowerCase()) return false;
+
+    const fixedExe = path.join(fixedDir, path.basename(process.execPath));
+    const fixedResources = path.join(fixedDir, 'resources');
+    const persistentAsar = path.join(app.getPath('userData'), 'app.asar');
+    const sourceDir = path.dirname(process.execPath);
+
+    fs.rmSync(fixedDir, { recursive: true, force: true });
+    fs.mkdirSync(fixedDir, { recursive: true });
+    const copy = spawnSync('robocopy.exe', [sourceDir, fixedDir, '/E', '/COPY:DAT', '/R:3', '/W:1'], {
+      windowsHide: true,
+      encoding: 'utf8'
+    });
+    // Robocopy 0-7 均属于成功或仅有额外文件/属性差异。
+    if (!fs.existsSync(fixedExe) || !fs.existsSync(path.join(fixedResources, 'app.asar'))) {
+      throw new Error(`robocopy 固定运行时失败 (code=${copy.status}): ${copy.stderr || copy.stdout || '未生成运行文件'}`);
+    }
+    if (originalFs.existsSync(persistentAsar)) {
+      fs.mkdirSync(fixedResources, { recursive: true });
+      originalFs.copyFileSync(persistentAsar, path.join(fixedResources, 'app.asar'));
+    }
+    const launchScript = path.join(app.getPath('userData'), 'launch-fixed-runtime.cmd');
+    fs.writeFileSync(launchScript, [
+      '@echo off',
+      'ping 127.0.0.1 -n 4 >nul',
+      `taskkill /F /PID ${process.ppid} >nul 2>nul`,
+      'ping 127.0.0.1 -n 3 >nul',
+      'set BIODL_FIXED_RUNTIME=1',
+      `cd /d "${fixedDir}"`,
+      `start "" "${fixedExe}"`,
+      'del "%~f0"'
+    ].join('\r\n'), 'utf8');
+    spawn('cmd.exe', ['/d', '/c', launchScript], { detached: true, stdio: 'ignore' }).unref();
+    return true;
+  } catch (e) {
+    console.error('[WindowsRuntime] 固定运行目录初始化失败:', e.message);
+    return false;
+  }
+}
+
 function checkPendingAsarUpdates() {
   try {
     // 检查持久化存储目录中是否存在已校验的热更新包
@@ -591,16 +638,16 @@ function checkPendingAsarUpdates() {
     const targetAsar = path.join(process.resourcesPath, 'app.asar');
 
     // 若持久化存储目录中有更新的 asar，自动覆盖当前临时运行目录的 app.asar
-    if (fs.existsSync(persistentAsar) && fs.existsSync(targetAsar)) {
+    if (originalFs.existsSync(persistentAsar) && originalFs.existsSync(targetAsar)) {
       try {
-        const persistStat = fs.statSync(persistentAsar);
-        const targetStat = fs.statSync(targetAsar);
+        const persistStat = originalFs.statSync(persistentAsar);
+        const targetStat = originalFs.statSync(targetAsar);
         if (persistStat.size !== targetStat.size || persistStat.mtimeMs > targetStat.mtimeMs) {
           console.log('[HotPatch] 从用户持久化目录加载最新 app.asar 核心...');
           const backupAsar = path.join(process.resourcesPath, 'app.asar.old');
           try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
           fs.renameSync(targetAsar, backupAsar);
-          fs.copyFileSync(persistentAsar, targetAsar);
+          originalFs.copyFileSync(persistentAsar, targetAsar);
           try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
         }
       } catch (e) {
@@ -635,6 +682,10 @@ function checkPendingAsarUpdates() {
 
 app.whenReady().then(() => {
   if (!isElectron) return; // 无头模式下不创建原生窗口，由 Web Server / CLI 调度
+  if (launchWindowsPersistentRuntime()) {
+    setTimeout(() => process.exit(0), 100);
+    return;
+  }
   checkPendingAsarUpdates();
   ensureBinaries();
   ensureClashDataFiles();
@@ -1540,7 +1591,7 @@ async function applyHotPatch(patchUrl) {
     // 优先写入永久数据目录中的 app.asar，实现便携单文件 EXE 任意重解压均可优先挂载
     const persistentAsar = path.join(app.getPath('userData'), 'app.asar');
     try {
-      fs.copyFileSync(tempPatchPath, persistentAsar);
+      originalFs.copyFileSync(tempPatchPath, persistentAsar);
       console.log('[HotPatch] 补丁已持久化写入用户数据目录:', persistentAsar);
     } catch (persistErr) {
       console.warn('[HotPatch] 写入用户目录 asar 提示:', persistErr.message);
@@ -1558,7 +1609,7 @@ async function applyHotPatch(patchUrl) {
     } catch (err) {
       console.warn('Direct replace app.asar failed, staging update.asar for next launch:', err.message);
       const updateAsar = path.join(process.resourcesPath, 'update.asar');
-      try { fs.copyFileSync(persistentAsar, updateAsar); } catch(e) {}
+      try { originalFs.copyFileSync(persistentAsar, updateAsar); } catch(e) {}
       try {
         fs.writeFileSync(updateAsar + '.manifest', JSON.stringify({ sha256: manifest.sha256, signature: manifest.signature }));
       } catch(e){}
@@ -1571,6 +1622,16 @@ async function applyHotPatch(patchUrl) {
 ipcMain.handle('apply-hot-patch', async (event, { patchUrl }) => {
   const res = await applyHotPatch(patchUrl);
   setTimeout(() => {
+    if (process.platform === 'win32' && process.env.BIODL_FIXED_RUNTIME === '1') {
+      spawn(process.execPath, [], {
+        detached: true,
+        stdio: 'ignore',
+        cwd: path.dirname(process.execPath),
+        env: process.env
+      }).unref();
+      app.exit(0);
+      return;
+    }
     // 针对便携版 Windows: 如果存在 PORTABLE_EXECUTABLE_FILE 则精准唤醒原便携 EXE
     if (process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_FILE && fs.existsSync(process.env.PORTABLE_EXECUTABLE_FILE)) {
       try {
@@ -3289,6 +3350,22 @@ ipcMain.handle('open-downloads-folder', (event, folderPath) => {
     return true;
   }
   return false;
+});
+
+ipcMain.handle('delete-transfer-file', (event, filePath) => {
+  if (!filePath || typeof filePath !== 'string') return { success: false, error: '文件路径为空' };
+  try {
+    if (!fs.existsSync(filePath)) return { success: true, missing: true };
+    const st = fs.statSync(filePath);
+    if (!st.isFile()) return { success: false, error: '目标不是普通文件，已拒绝删除' };
+    fs.unlinkSync(filePath);
+    for (const suffix of ['.st', '.aria2']) {
+      try { if (fs.existsSync(filePath + suffix)) fs.unlinkSync(filePath + suffix); } catch (e) {}
+    }
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
 });
 
 // ---------- 粘贴 cURL 下载:解析 + 带会话(Cookie/请求头)流式下载 ----------

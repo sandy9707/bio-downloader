@@ -14,28 +14,31 @@
     extractionNav: []
   };
 
-  // 1. SSE 实时长连接
-  const sse = new EventSource('/api/events');
-  sse.addEventListener('download-status', (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      listeners.downloadStatus.forEach(fn => fn(data));
-    } catch (err) {}
-  });
-
-  sse.addEventListener('download-progress', (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      listeners.downloadProgress.forEach(fn => fn(data));
-    } catch (err) {}
-  });
-
-  sse.addEventListener('curl-download-progress', (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      listeners.curlProgress.forEach(fn => fn(data));
-    } catch (err) {}
-  });
+  // 1. 登录会话建立后连接 SSE，避免匿名访问下载任务事件。
+  let sse = null;
+  function connectSse() {
+    if (sse) sse.close();
+    sse = new EventSource('/api/events');
+    sse.addEventListener('download-status', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        listeners.downloadStatus.forEach(fn => fn(data));
+      } catch (err) {}
+    });
+    sse.addEventListener('download-progress', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        listeners.downloadProgress.forEach(fn => fn(data));
+      } catch (err) {}
+    });
+    sse.addEventListener('curl-download-progress', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        listeners.curlProgress.forEach(fn => fn(data));
+      } catch (err) {}
+    });
+  }
+  connectSse();
 
   // 2. 通用 IPC 调用映射表 (对齐 preload.js 48 个接口)
   const channelMap = {
@@ -79,6 +82,7 @@
     pauseDownload: (idx) => ({ channel: 'pause-download', payload: idx }),
     resumeDownload: (idx) => ({ channel: 'resume-download', payload: idx }),
     openDownloadsFolder: (dir) => ({ channel: 'open-downloads-folder', payload: dir }),
+    deleteTransferFile: (filePath) => ({ channel: 'delete-transfer-file', payload: filePath }),
     cancelAllDownloadsSignal: () => ({ channel: 'cancel-all-downloads-signal', isSignal: true }),
 
     parseCurl: (text) => ({ channel: 'parse-curl', payload: { text } }),
@@ -126,6 +130,7 @@
     });
     const json = await res.json();
     if (json && json.error) throw new Error(json.error);
+    if ((channel === 'api-login' || channel === 'api-register' || channel === 'api-get-user-info') && json && json.result && json.result.success) connectSse();
     return json ? json.result : undefined;
   }
 

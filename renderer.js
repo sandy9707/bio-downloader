@@ -326,10 +326,20 @@ function switchTab(tabId) {
   if (tabId === 'plugins-tab') refreshPluginsList();
 }
 
-// 云下载只维护网页端一套实现；桌面端将当前登录令牌同步到隔离的官方同源 webview。
+// 云下载只维护官网一套实现；Electron 用 webview，Linux Web 用 iframe + postMessage。
 async function syncCloudWorkspaceLogin() {
   const webview = document.getElementById('cloudWorkspaceWebview');
-  if (!webview || !currentUser?.token || typeof webview.executeJavaScript !== 'function') return;
+  const frame = document.getElementById('cloudWorkspaceFrame');
+  if (!currentUser?.token) return;
+  if (frame) {
+    try {
+      frame.contentWindow.postMessage({ type: 'biodl-auth-token', token: currentUser.token }, 'https://biodown.ye.aimeals.cn');
+    } catch (e) {
+      console.warn('云下载 iframe 登录状态同步失败:', e.message);
+    }
+    return;
+  }
+  if (!webview || typeof webview.executeJavaScript !== 'function') return;
   const token = JSON.stringify(currentUser.token);
   try {
     const changed = await webview.executeJavaScript(`(() => { const next=${token}; if (localStorage.getItem('bd_token') === next) return false; localStorage.setItem('bd_token', next); return true; })()`);
@@ -340,6 +350,8 @@ async function syncCloudWorkspaceLogin() {
 document.addEventListener('DOMContentLoaded', () => {
   const webview = document.getElementById('cloudWorkspaceWebview');
   if (webview) webview.addEventListener('dom-ready', syncCloudWorkspaceLogin);
+  const frame = document.getElementById('cloudWorkspaceFrame');
+  if (frame) frame.addEventListener('load', syncCloudWorkspaceLogin);
 });
 
 function toggleMoreMenu(e) {
@@ -2714,11 +2726,23 @@ function openCompletedFile(savePath) {
   window.api.openDownloadsFolder(savePath);
 }
 
-function deleteCompletedRecord(index) {
+async function deleteCompletedRecord(index) {
+  const item = completedDownloads[index];
+  if (!item) return;
+  const choice = prompt('请选择删除方式：\n1 = 仅删除传输记录\n2 = 删除记录并删除本地文件\n其他 = 取消', '1');
+  if (choice !== '1' && choice !== '2') return;
+  if (choice === '2' && item.savePath) {
+    const result = await window.api.deleteTransferFile(item.savePath);
+    if (!result || !result.success) {
+      showToast('删除本地文件失败: ' + ((result && result.error) || '未知错误'), 'error');
+      return;
+    }
+  }
   completedDownloads.splice(index, 1);
   syncTransfersToStorage();
   renderCompletedList();
   updateTransferCounts();
+  showToast(choice === '2' ? '记录和本地文件已删除' : '传输记录已删除', 'success');
 }
 
 function deleteFailedRecord(index) {

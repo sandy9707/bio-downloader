@@ -2,11 +2,13 @@
 const { program } = require('commander');
 const { BiodlServer } = require('./server');
 const main = require('../../main');
+const os = require('os');
+const path = require('path');
 
 program
   .name('biodl')
   .description('生信原始数据下载器 (BioDownloader) Linux 统一服务端与命令行终端')
-  .version('2.0.38-preview');
+  .version('2.0.39-preview');
 
 // 1. biodl start: 启动 Web 管理面板与下载服务 (默认 0.0.0.0)
 program
@@ -55,7 +57,7 @@ program
 program
   .command('get <type> <accession>')
   .description('快速解析并下载生信数据 (SRA / EBI / GEO / 直链)')
-  .option('-o, --output <dir>', '保存目录', process.cwd())
+  .option('-o, --output <dir>', '保存目录', path.join(os.homedir(), 'Downloads'))
   .option('-c, --concurrent <number>', '并发下载数', 3)
   .action(async (type, accession, options) => {
     const s = await main.callIpcHandler('get-settings');
