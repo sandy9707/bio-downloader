@@ -1,12 +1,14 @@
 # BioDownloader Linux
 
-## Start
+## Recommended: Web UI
 
 ```bash
-biodl start
+./biodl start
 ```
 
-The Web UI listens on `0.0.0.0:43280` by default. Downloads are stored in the account that starts the service:
+The Web UI is recommended for most users. It listens on `0.0.0.0:43280` by default and prints the detected LAN and public URLs. Copy the complete `http://IP:port` address into Chrome or Edge. Do not open it in the Xshell/X-Share file browser.
+
+Downloads are stored in the account that starts the service:
 
 ```text
 $HOME/Downloads
@@ -19,7 +21,7 @@ biodl start --host 127.0.0.1 --port 43280
 biodl get sra SRR390728 --output /data/raw
 ```
 
-## Commands
+## CLI
 
 ```bash
 biodl auth TOKEN

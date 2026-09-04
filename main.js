@@ -332,7 +332,8 @@ function ensureBinaries() {
     filesToCopy.push(
       arch === 'arm64'
         ? { src: path.join(BIN_DIR, 'linux', 'mihomo_linux_arm64'), dest: 'mihomo_linux_arm64' }
-        : { src: path.join(BIN_DIR, 'linux', 'mihomo_linux_amd64'), dest: 'mihomo_linux_amd64' }
+        : { src: path.join(BIN_DIR, 'linux', 'mihomo_linux_amd64'), dest: 'mihomo_linux_amd64' },
+      { src: path.join(BIN_DIR, 'linux', 'axel'), dest: 'axel' }
     );
   }
 

@@ -4,6 +4,33 @@ const { BiodlServer } = require('./server');
 const main = require('../../main');
 const os = require('os');
 const path = require('path');
+const https = require('https');
+
+function privateIpv4Addresses() {
+  const values = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const item of list || []) {
+      if (item.family === 'IPv4' && !item.internal) values.push(item.address);
+    }
+  }
+  return [...new Set(values)];
+}
+
+async function queryPublicIp(timeoutMs = 3000) {
+  for (const url of ['https://api.ipify.org', 'https://ipv4.icanhazip.com']) {
+    const result = await new Promise((resolve) => {
+      const req = https.get(url, { timeout: timeoutMs }, (res) => {
+        let body = '';
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => resolve(body.trim()));
+      });
+      req.on('timeout', () => { req.destroy(); resolve(''); });
+      req.on('error', () => resolve(''));
+    });
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(result)) return result;
+  }
+  return '';
+}
 
 program
   .name('biodl')
@@ -24,12 +51,20 @@ program
 
     try {
       await server.start();
+      const privateIps = privateIpv4Addresses();
+      const publicIp = await queryPublicIp();
+      const port = options.port;
+      const localUrls = privateIps.map((ip) => `http://${ip}:${port}`);
       console.log(`
 ============================================================
 🧬 BioDownloader Linux Server 启动成功！
 ------------------------------------------------------------
-🌐 Web 管理界面 : http://${options.host === '0.0.0.0' ? '服务器IP' : options.host}:${options.port}
-🚀 下载核心状态 : 100% 原生全特性就绪 (与 Windows/Mac 完全一致)
+请在 Windows / macOS / Linux 电脑的 Chrome 或 Edge 地址栏中打开：
+🏠 内网访问 : ${localUrls.length ? localUrls.join('\n             ') : '未检测到内网 IPv4，请执行 hostname -I 查看'}
+🌍 外网访问 : ${publicIp && options.host === '0.0.0.0' ? `http://${publicIp}:${port}（需云服务器安全组/防火墙放行该端口）` : '未检测到或当前仅限本机访问'}
+💻 本机访问 : http://127.0.0.1:${port}
+
+IP 是服务器地址，端口是冒号后的数字 ${port}。请把完整的 http://IP:${port} 输入浏览器地址栏，不要在 Xshell/X-Share 的文件管理器中打开。
 ============================================================
 按 Ctrl+C 可安全停止服务。
 `);
