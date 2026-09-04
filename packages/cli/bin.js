@@ -8,7 +8,7 @@ const path = require('path');
 program
   .name('biodl')
   .description('生信原始数据下载器 (BioDownloader) Linux 统一服务端与命令行终端')
-  .version('2.0.39-preview');
+  .version('2.0.39');
 
 // 1. biodl start: 启动 Web 管理面板与下载服务 (默认 0.0.0.0)
 program
