@@ -508,9 +508,14 @@ async function triggerCheckForUpdates() {
 
         const btnHot = document.getElementById('btnHotPatchUpdate');
         if (btnHot) {
-          if (res.patchUrl) {
+          if (res.platform === 'linux' || (!window.api.isElectron && res.linuxUrl)) {
+            btnHot.style.display = 'inline-block';
+            btnHot.innerText = '⚡ 一键升级并平滑重载服务';
+            btnHot.onclick = startLinuxSelfUpdate;
+          } else if (res.patchUrl) {
             btnHot.style.display = 'inline-block';
             btnHot.innerText = res.hasUpdate ? '⚡ 极速平滑热更新 (仅 3MB)' : '⚡ 回滚到正式版 (热更新)';
+            btnHot.onclick = startHotPatchUpdate;
           } else {
             btnHot.style.display = 'none';
           }
@@ -602,6 +607,42 @@ async function startHotPatchUpdate() {
 }
 
 window.startHotPatchUpdate = startHotPatchUpdate;
+
+async function startLinuxSelfUpdate() {
+  if (isUpdating) {
+    showToast('正在更新中，请勿重复点击', 'warning');
+    return;
+  }
+  if (!updateInfoGlobal || !updateInfoGlobal.linuxUrl) return;
+
+  const btn = document.getElementById('btnHotPatchUpdate');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerText = '⏳ 正在下载并解压 Linux 服务端更新...';
+  }
+  isUpdating = true;
+  showToast('正在下载 Linux 服务端程序包并自动部署...', 'info');
+
+  try {
+    const res = await window.api.linuxSelfUpdate({
+      url: updateInfoGlobal.linuxUrl,
+      sha256: updateInfoGlobal.sha256
+    });
+    showToast((res && res.message) || '更新成功！服务正在平滑重载，页面即将刷新...', 'success');
+    setTimeout(() => {
+      window.location.reload();
+    }, 2500);
+  } catch (err) {
+    showToast('Linux 自更新失败: ' + err.message, 'error');
+    if (btn) {
+      btn.disabled = false;
+      btn.innerText = '⚡ 一键升级并平滑重载服务';
+    }
+    isUpdating = false;
+  }
+}
+
+window.startLinuxSelfUpdate = startLinuxSelfUpdate;
 
 // 2.x 升级桥接:用 upgrade2x.patchUrl 走同一套签名热更新(applyHotPatch 会按补丁版本取对应通道清单校验)
 async function startUpgrade2x() {
@@ -726,15 +767,15 @@ function showContextMenu(x, y, ctx) {
   if (ctx.savePath) items.push(['📂 打开文件所在位置', () => window.api.openDownloadsFolder(ctx.savePath)]);
   if (ctx.status === 'downloading') {
     items.push(['⏸ 暂停任务', () => ctx.isEx ? pauseExtractionDownload(ctx.jobId) : pauseSingleDownload(ctx.originalIndex)]);
-    items.push(['✕ 取消任务', () => ctx.isEx ? cancelExtractionDownload(ctx.jobId) : cancelSingleDownload(ctx.originalIndex), true]);
+    items.push(['🗑 取消/删除任务', () => ctx.isEx ? cancelExtractionDownload(ctx.jobId) : openDeleteTransferModal({ category: 'active', fileId: ctx.originalIndex }), true]);
   } else if (ctx.status === 'paused') {
     items.push(['▶ 恢复下载', () => ctx.isEx ? resumeExtractionDownload(ctx.jobId) : resumeSingleDownload(ctx.originalIndex)]);
-    items.push(['✕ 取消任务', () => ctx.isEx ? cancelExtractionDownload(ctx.jobId) : cancelSingleDownload(ctx.originalIndex), true]);
+    items.push(['🗑 取消/删除任务', () => ctx.isEx ? cancelExtractionDownload(ctx.jobId) : openDeleteTransferModal({ category: 'active', fileId: ctx.originalIndex }), true]);
   } else if (ctx.status === 'failed') {
     items.push(['🔄 立即重试', () => retryFailedDownload(ctx.index)]);
-    items.push(['🗑 删除记录', () => deleteFailedRecord(ctx.index), true]);
+    items.push(['🗑 删除任务', () => openDeleteTransferModal({ category: 'failed', index: ctx.index }), true]);
   } else if (ctx.status === 'completed') {
-    items.push(['🗑 删除记录', () => deleteCompletedRecord(ctx.index), true]);
+    items.push(['🗑 删除任务', () => openDeleteTransferModal({ category: 'completed', index: ctx.index }), true]);
   }
   if (!items.length) return;
   items.forEach(([label, fn, danger]) => _ctxMenu.appendChild(_ctxMenuItem(label, fn, danger)));
@@ -790,7 +831,7 @@ async function downloadUpdate(platform) {
 
   // 根据当前版本号动态生成 GitHub Release 下载直链
   const githubUrl = platform === 'win'
-    ? `https://github.com/sandy9707/bio-downloader/releases/download/v${updateInfoGlobal.latestVersion}/BioDownloader.${updateInfoGlobal.latestVersion}.exe`
+    ? `https://github.com/sandy9707/bio-downloader/releases/download/v${updateInfoGlobal.latestVersion}/BioDownloader-Setup-${updateInfoGlobal.latestVersion}.exe`
     : `https://github.com/sandy9707/bio-downloader/releases/download/v${updateInfoGlobal.latestVersion}/BioDownloader-${updateInfoGlobal.latestVersion}-arm64.dmg`;
 
   // 检测 Clash 内置加速代理是否启动
@@ -2726,44 +2767,170 @@ function openCompletedFile(savePath) {
   window.api.openDownloadsFolder(savePath);
 }
 
-async function deleteCompletedRecord(index) {
-  const item = completedDownloads[index];
-  if (!item) return;
-  const choice = prompt('请选择删除方式：\n1 = 仅删除传输记录\n2 = 删除记录并删除本地文件\n其他 = 取消', '1');
-  if (choice !== '1' && choice !== '2') return;
-  if (choice === '2' && item.savePath) {
-    const result = await window.api.deleteTransferFile(item.savePath);
-    if (!result || !result.success) {
-      showToast('删除本地文件失败: ' + ((result && result.error) || '未知错误'), 'error');
-      return;
-    }
+let currentDeleteTarget = null;
+
+function openDeleteTransferModal(target) {
+  // target: { category: 'completed'|'failed'|'active'|'all_completed'|'all_failed', index, fileId }
+  let name = '';
+  let savePath = '';
+  let title = '删除下载任务';
+
+  if (target.category === 'completed') {
+    const item = completedDownloads[target.index];
+    if (!item) return;
+    name = item.name;
+    savePath = item.savePath || '';
+  } else if (target.category === 'failed') {
+    const item = failedDownloads[target.index];
+    if (!item) return;
+    name = item.name;
+    savePath = item.savePath || '';
+  } else if (target.category === 'active') {
+    const item = activeDownloads.find(d => d.originalIndex === target.fileId);
+    if (!item) return;
+    name = item.name;
+    savePath = item.savePath || (defaultDir ? (item.folder ? `${defaultDir}/${item.folder}/${item.name}` : `${defaultDir}/${item.name}`) : '');
+  } else if (target.category === 'all_completed') {
+    title = '清空全部已完成任务';
+    name = `全部已完成任务 (${completedDownloads.length} 项)`;
+    savePath = '将对所有已完成任务执行操作';
+  } else if (target.category === 'all_failed') {
+    title = '清空全部失败任务';
+    name = `全部失败任务 (${failedDownloads.length} 项)`;
+    savePath = '将对所有失败任务执行操作';
   }
-  completedDownloads.splice(index, 1);
-  syncTransfersToStorage();
-  renderCompletedList();
-  updateTransferCounts();
-  showToast(choice === '2' ? '记录和本地文件已删除' : '传输记录已删除', 'success');
+
+  currentDeleteTarget = { ...target, name, savePath };
+
+  const modal = document.getElementById('deleteTransferModal');
+  const titleEl = document.getElementById('deleteTransferModalTitle');
+  const nameEl = document.getElementById('deleteTransferName');
+  const pathEl = document.getElementById('deleteTransferPath');
+
+  if (titleEl) titleEl.textContent = title;
+  if (nameEl) nameEl.textContent = name || '未命名任务';
+  if (pathEl) pathEl.textContent = savePath ? `本地路径: ${savePath}` : '本地路径: (未获取到本地路径，将仅清理记录)';
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeDeleteTransferModal() {
+  const modal = document.getElementById('deleteTransferModal');
+  if (modal) modal.style.display = 'none';
+  currentDeleteTarget = null;
+}
+
+async function confirmDeleteTransfer(deleteFiles) {
+  const target = currentDeleteTarget;
+  closeDeleteTransferModal();
+  if (!target) return;
+
+  if (target.category === 'all_completed') {
+    const toDelete = [...completedDownloads];
+    completedDownloads = [];
+    syncTransfersToStorage();
+    renderCompletedList();
+    updateTransferCounts();
+    if (deleteFiles) {
+      for (const item of toDelete) {
+        if (item.savePath) {
+          try { await window.api.deleteTransferFile(item.savePath); } catch (e) {}
+        }
+      }
+    }
+    showToast(deleteFiles ? '已清空完成记录并删除对应本地文件' : '已清空完成记录', 'success');
+    return;
+  }
+
+  if (target.category === 'all_failed') {
+    const toDelete = [...failedDownloads];
+    failedDownloads = [];
+    syncTransfersToStorage();
+    renderFailedList();
+    updateTransferCounts();
+    if (deleteFiles) {
+      for (const item of toDelete) {
+        if (item.savePath) {
+          try { await window.api.deleteTransferFile(item.savePath); } catch (e) {}
+        }
+      }
+    }
+    showToast(deleteFiles ? '已清空失败记录并删除残留文件' : '已清空失败记录', 'success');
+    return;
+  }
+
+  if (target.category === 'active') {
+    const fileId = target.fileId;
+    try {
+      await window.api.cancelDownload(fileId);
+    } catch (e) {
+      console.warn('cancelDownload error:', e);
+    }
+    if (deleteFiles) {
+      await new Promise(r => setTimeout(r, 250));
+    }
+    activeDownloads = activeDownloads.filter(d => d.originalIndex !== fileId);
+    renderDownloadingList();
+    updateTransferCounts();
+    if (deleteFiles && target.savePath) {
+      try {
+        await window.api.deleteTransferFile(target.savePath);
+      } catch (e) {
+        console.warn('deleteTransferFile error:', e);
+      }
+    }
+    showToast(deleteFiles ? '已取消任务并删除本地文件' : '已取消任务并移除记录', 'success');
+    return;
+  }
+
+  if (target.category === 'completed') {
+    completedDownloads.splice(target.index, 1);
+    syncTransfersToStorage();
+    renderCompletedList();
+    updateTransferCounts();
+    if (deleteFiles && target.savePath) {
+      try {
+        await window.api.deleteTransferFile(target.savePath);
+      } catch (e) {
+        console.warn('deleteTransferFile error:', e);
+      }
+    }
+    showToast(deleteFiles ? '已删除记录及本地文件' : '已删除传输记录', 'success');
+    return;
+  }
+
+  if (target.category === 'failed') {
+    failedDownloads.splice(target.index, 1);
+    syncTransfersToStorage();
+    renderFailedList();
+    updateTransferCounts();
+    if (deleteFiles && target.savePath) {
+      try {
+        await window.api.deleteTransferFile(target.savePath);
+      } catch (e) {
+        console.warn('deleteTransferFile error:', e);
+      }
+    }
+    showToast(deleteFiles ? '已删除失败记录及残留文件' : '已删除失败记录', 'success');
+    return;
+  }
+}
+
+function deleteCompletedRecord(index) {
+  openDeleteTransferModal({ category: 'completed', index });
 }
 
 function deleteFailedRecord(index) {
-  failedDownloads.splice(index, 1);
-  syncTransfersToStorage();
-  renderFailedList();
-  updateTransferCounts();
+  openDeleteTransferModal({ category: 'failed', index });
 }
 
 function clearCompletedDownloads() {
-  completedDownloads = [];
-  syncTransfersToStorage();
-  renderCompletedList();
-  updateTransferCounts();
+  if (!completedDownloads.length) return showToast('暂无已完成任务', 'info');
+  openDeleteTransferModal({ category: 'all_completed' });
 }
 
 function clearFailedDownloads() {
-  failedDownloads = [];
-  syncTransfersToStorage();
-  renderFailedList();
-  updateTransferCounts();
+  if (!failedDownloads.length) return showToast('暂无失败任务', 'info');
+  openDeleteTransferModal({ category: 'all_failed' });
 }
 
 async function retryFailedDownload(index) {
@@ -2833,19 +3000,8 @@ async function retryAllFailedDownloads() {
   }
 }
 
-async function cancelSingleDownload(fileId) {
-  try {
-    showToast('正在取消下载任务...');
-    const res = await window.api.cancelDownload(fileId);
-    if (res) {
-      activeDownloads = activeDownloads.filter(d => d.originalIndex !== fileId);
-      renderDownloadingList();
-      updateTransferCounts();
-      showToast('任务已成功取消');
-    }
-  } catch (e) {
-    showToast('取消任务失败: ' + e.message, 'error');
-  }
+function cancelSingleDownload(fileId) {
+  openDeleteTransferModal({ category: 'active', fileId });
 }
 
 // 暂停单个普通下载任务:主进程挂起 axel 进程(SIGSTOP 原地冻结,进度零丢失)。
@@ -3863,7 +4019,7 @@ async function refreshPluginsList() {
             : `<span style="background:rgba(156, 163, 175, 0.15); color:var(--text-muted); border:1px solid var(--border-color); padding:0.25rem 0.6rem; border-radius:6px; font-size:0.8rem; font-weight:600; display:flex; align-items:center; gap:0.25rem;">⭕ 未安装</span>`);
 
       const actionBtn = isOk
-        ? `<button class="btn btn-secondary" onclick="handleInstallPlugin('${escapeHtml(p.id)}', this)" style="font-size:0.8rem; padding:0.35rem 0.8rem;">🔄 重新校验 / 覆盖更新</button>`
+        ? `<button class="btn btn-secondary" onclick="refreshPluginsList()" style="font-size:0.8rem; padding:0.35rem 0.8rem;">🔄 重新检测</button>`
         : (p.installed
             ? `<button class="btn btn-primary" onclick="handleInstallPlugin('${escapeHtml(p.id)}', this)" style="font-size:0.8rem; padding:0.35rem 0.8rem; background:linear-gradient(135deg, #f59e0b, #d97706); border:none;">🛠️ 修复并覆盖更新</button>`
             : `<button class="btn btn-primary" onclick="handleInstallPlugin('${escapeHtml(p.id)}', this)" style="font-size:0.8rem; padding:0.35rem 0.8rem;">📥 立即下载并安装</button>`);
@@ -3878,9 +4034,14 @@ async function refreshPluginsList() {
             <div style="font-size:0.82rem; color:var(--text-muted); line-height:1.45; margin-bottom:0.4rem;">${escapeHtml(p.description)}</div>
             <div style="font-size:0.75rem; color:var(--text-muted); font-family:monospace;">
               <span>平台: ${escapeHtml(p.platform)}</span>
+              ${p.source ? `<span style="margin-left:0.8rem;">来源: ${escapeHtml({bundled:'软件内置',system:'系统 PATH',custom:'用户指定'}[p.source] || p.source)}</span>` : ''}
               ${p.path ? `<span style="margin-left:0.8rem;">路径: ${escapeHtml(p.path)}</span>` : ''}
             </div>
             ${p.errorDetail ? `<div style="margin-top:0.4rem; padding:0.4rem 0.6rem; background:rgba(239, 68, 68, 0.1); border-radius:4px; font-size:0.75rem; color:#ef4444; font-family:monospace; word-break:break-all;">报错原因: ${escapeHtml(p.errorDetail)}</div>` : ''}
+            <div style="display:flex; gap:0.5rem; margin-top:0.7rem; align-items:center; flex-wrap:wrap;">
+              <input id="pluginPath-${escapeHtml(p.id)}" type="text" placeholder="填写 ${escapeHtml(p.id === 'axel' ? 'axel' : 'aria2c')} 可执行文件绝对路径" style="flex:1; min-width:260px; padding:0.5rem 0.65rem; font-size:0.78rem;">
+              <button class="btn btn-secondary" onclick="handleSetPluginPath('${escapeHtml(p.id)}', this)" style="font-size:0.78rem; padding:0.4rem 0.7rem;">使用此路径</button>
+            </div>
           </div>
           <div style="display:flex; align-items:center; gap:0.5rem;">
             ${actionBtn}
@@ -3925,8 +4086,28 @@ async function handleInstallPlugin(pluginId, btnEl) {
   }
 }
 
+async function handleSetPluginPath(pluginId, btnEl) {
+  const input = document.getElementById(`pluginPath-${pluginId}`);
+  const binaryPath = input ? input.value.trim() : '';
+  if (!binaryPath) return showToast('请填写可执行文件绝对路径', 'error');
+  if (btnEl) btnEl.disabled = true;
+  try {
+    const res = await window.api.setPluginPath(pluginId, binaryPath);
+    showToast(`路径验证成功${res.version ? ` (v${res.version})` : ''}`, 'success');
+    await refreshPluginsList();
+  } catch (e) {
+    showToast('路径验证失败: ' + e.message, 'error');
+  } finally {
+    if (btnEl) btnEl.disabled = false;
+  }
+}
+
+window.openDeleteTransferModal = openDeleteTransferModal;
+window.closeDeleteTransferModal = closeDeleteTransferModal;
+window.confirmDeleteTransfer = confirmDeleteTransfer;
 window.refreshPluginsList = refreshPluginsList;
 window.handleInstallPlugin = handleInstallPlugin;
+window.handleSetPluginPath = handleSetPluginPath;
 window.cancelExtractionDownload = cancelExtractionDownload;
 window.extractionRunCode = extractionRunCode;
 window.extractionDownloadResource = extractionDownloadResource;

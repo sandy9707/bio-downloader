@@ -1,4 +1,4 @@
-# BioDownloader Linux
+# BioDownloader Server for Linux
 
 ## Recommended: Web UI
 
@@ -25,11 +25,20 @@ biodl get sra SRR390728 --output /data/raw
 
 ```bash
 biodl auth TOKEN
+biodl auth 'https://biodown.ye.aimeals.cn/speedup?token=TOKEN'
+biodl login
+biodl login -u USERNAME
 biodl get sra SRR390728
 biodl get ebi ERR164407
 biodl get geo GSE13575
 biodl status
+biodl update
 ```
+
+## Updates
+
+- **CLI Update**: Run `./biodl update` to check, download, verify SHA-256, and safely upgrade in place without losing downloads or settings.
+- **Web UI Update**: Check for updates in the Web UI Settings view and click to trigger an in-place hot reload.
 
 ## Data And Permissions
 

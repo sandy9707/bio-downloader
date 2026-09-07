@@ -18,7 +18,9 @@
   let sse = null;
   function connectSse() {
     if (sse) sse.close();
-    sse = new EventSource('/api/events');
+    const sid = localStorage.getItem('biodl_session');
+    const sseUrl = sid ? `/api/events?sid=${encodeURIComponent(sid)}` : '/api/events';
+    sse = new EventSource(sseUrl);
     sse.addEventListener('download-status', (e) => {
       try {
         const data = JSON.parse(e.data);
@@ -117,20 +119,35 @@
 
     getPluginStatus: 'plugin-get-status',
     installPlugin: (id) => ({ channel: 'plugin-install', payload: { pluginId: id } }),
+    setPluginPath: (id, binaryPath) => ({ channel: 'plugin-set-path', payload: { pluginId: id, binaryPath } }),
+
+    linuxSelfUpdate: (opts) => ({ channel: 'linux-self-update', payload: opts }),
 
     getTransfersHistory: 'get-transfers-history',
     saveTransfersHistory: (data) => ({ channel: 'save-transfers-history', payload: data })
   };
 
   async function invokeRpc(channel, payload) {
+    const headers = { 'Content-Type': 'application/json' };
+    const savedSid = localStorage.getItem('biodl_session');
+    if (savedSid) headers['X-Biodl-Session'] = savedSid;
+
     const res = await fetch('/api/ipc', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ channel, payload })
     });
     const json = await res.json();
+    if (json && json.sessionId) {
+      localStorage.setItem('biodl_session', json.sessionId);
+    }
+    if (channel === 'save-settings' && payload && payload.token === null) {
+      localStorage.removeItem('biodl_session');
+    }
     if (json && json.error) throw new Error(json.error);
-    if ((channel === 'api-login' || channel === 'api-register' || channel === 'api-get-user-info') && json && json.result && json.result.success) connectSse();
+    if ((channel === 'api-login' || channel === 'api-register' || channel === 'api-get-user-info' || channel === 'get-settings') && json && json.result && (json.result.success || json.result.token)) {
+      connectSse();
+    }
     return json ? json.result : undefined;
   }
 

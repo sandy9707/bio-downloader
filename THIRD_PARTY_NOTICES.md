@@ -11,6 +11,8 @@ BioDownloader invokes the following standalone programs through process, standar
 
 ## Axel
 
+- Windows build: Axel 2.17.14 from https://github.com/uklee/axel-for-windows/releases/tag/v2.17.14
+
 - Project: https://github.com/axel-download-accelerator/axel
 - License: GNU General Public License, version 2 or later
 - Purpose: HTTP/HTTPS segmented downloads on desktop platforms

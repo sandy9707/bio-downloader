@@ -16,6 +16,8 @@ const PUBLIC_CHANNELS = new Set([
   'api-get-packages'
 ]);
 
+const SESSIONS_FILE = path.join(process.env.BIODL_DATA_DIR || path.join(os.homedir(), '.bio-downloader'), 'web_sessions.json');
+
 class BiodlServer {
   constructor(options = {}) {
     this.host = options.host || '0.0.0.0';
@@ -24,6 +26,7 @@ class BiodlServer {
     this.sseClients = new Set();
     this.sessions = new Map();
     this.server = null;
+    this.loadSessions();
 
     // 绑定 main.js 的事件总线，通过 SSE 实时推送到浏览器
     const forwardEvents = [
@@ -94,23 +97,75 @@ class BiodlServer {
     res.end(JSON.stringify(data));
   }
 
-  getSession(req) {
+  loadSessions() {
+    try {
+      if (fs.existsSync(SESSIONS_FILE)) {
+        const data = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8'));
+        if (Array.isArray(data)) {
+          const now = Date.now();
+          for (const s of data) {
+            if (s && s.id && s.expiresAt > now) {
+              this.sessions.set(s.id, s);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[BiodlServer] 读取持久化会话异常:', e.message);
+    }
+  }
+
+  saveSessions() {
+    try {
+      const arr = [];
+      const now = Date.now();
+      for (const [id, s] of this.sessions.entries()) {
+        if (s && s.expiresAt > now) {
+          arr.push({ id, token: s.token, expiresAt: s.expiresAt });
+        }
+      }
+      const dir = path.dirname(SESSIONS_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(SESSIONS_FILE, JSON.stringify(arr, null, 2), 'utf8');
+    } catch (e) {
+      console.warn('[BiodlServer] 保存持久化会话异常:', e.message);
+    }
+  }
+
+  getSessionId(req) {
     const cookie = String(req.headers.cookie || '');
     const match = cookie.match(/(?:^|;\s*)biodl_session=([^;]+)/);
-    if (!match) return null;
-    const session = this.sessions.get(match[1]);
+    if (match) return match[1];
+    const hdr = String(req.headers['x-biodl-session'] || req.headers['authorization'] || '');
+    if (hdr.startsWith('Bearer ')) return hdr.slice(7).trim();
+    if (hdr) return hdr.trim();
+    return '';
+  }
+
+  getSession(req) {
+    const sid = this.getSessionId(req);
+    if (!sid) return null;
+    const session = this.sessions.get(sid);
     if (!session || session.expiresAt < Date.now()) {
-      if (match[1]) this.sessions.delete(match[1]);
+      if (this.sessions.has(sid)) {
+        this.sessions.delete(sid);
+        this.saveSessions();
+      }
       return null;
     }
-    session.expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    session.expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
     return session;
   }
 
   createSession(res, token) {
     const id = crypto.randomBytes(32).toString('hex');
-    this.sessions.set(id, { token, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
-    res.setHeader('Set-Cookie', `biodl_session=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800`);
+    const session = { id, token, expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 };
+    this.sessions.set(id, session);
+    this.saveSessions();
+    if (res && typeof res.setHeader === 'function') {
+      res.setHeader('Set-Cookie', `biodl_session=${id}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`);
+    }
+    return id;
   }
 
   async handleRequest(req, res) {
@@ -128,7 +183,21 @@ class BiodlServer {
 
     // 1. SSE 实时事件长连接
     if (pathname === '/api/events') {
-      if (!this.getSession(req)) {
+      const querySid = parsedUrl.searchParams.get('sid');
+      let session = this.getSession(req);
+      if (!session && querySid) {
+        session = this.sessions.get(querySid);
+      }
+      if (!session) {
+        try {
+          const settings = (typeof main.getSettings === 'function') ? main.getSettings() : {};
+          if (settings && settings.token) {
+            const sid = this.createSession(res, settings.token);
+            session = this.sessions.get(sid);
+          }
+        } catch (e) {}
+      }
+      if (!session || session.expiresAt < Date.now()) {
         return this.sendJson(res, 401, { error: '请先登录' });
       }
       res.writeHead(200, {
@@ -147,22 +216,51 @@ class BiodlServer {
       try {
         const body = await this.parseBody(req);
         const { channel, payload } = body;
-        const session = this.getSession(req);
-        if (!PUBLIC_CHANNELS.has(channel) && !session) {
-          return this.sendJson(res, 401, { success: false, error: '请先登录后再执行该操作' });
-        }
-        if (channel === 'get-settings' && !session) {
+        let session = this.getSession(req);
+
+        if (channel === 'get-settings') {
           const settings = await main.callIpcHandler(channel, payload);
+          if (!session && settings && settings.token) {
+            const newSid = this.createSession(res, settings.token);
+            session = this.sessions.get(newSid);
+          }
+          const activeSession = session;
           return this.sendJson(res, 200, {
             success: true,
-            result: { ...settings, token: null }
+            result: activeSession ? settings : { ...settings, token: null },
+            sessionId: activeSession ? activeSession.id : null
           });
         }
-        const result = await main.callIpcHandler(channel, payload);
-        if ((channel === 'api-login' || channel === 'api-register' || channel === 'api-get-user-info') && result && result.success && result.token) {
-          this.createSession(res, result.token);
+
+        if (!PUBLIC_CHANNELS.has(channel) && !session) {
+          try {
+            const settings = await main.callIpcHandler('get-settings');
+            if (settings && settings.token) {
+              const newSid = this.createSession(res, settings.token);
+              session = this.sessions.get(newSid);
+            }
+          } catch (e) {}
+          if (!session) {
+            return this.sendJson(res, 401, { success: false, error: '请先登录后再执行该操作' });
+          }
         }
-        return this.sendJson(res, 200, { success: true, result });
+
+        // 主动注销支持: 用户在 Web 页面点击注销退出
+        if (channel === 'save-settings' && payload && payload.token === null) {
+          const sid = this.getSessionId(req);
+          if (sid) {
+            this.sessions.delete(sid);
+            this.saveSessions();
+          }
+          res.setHeader('Set-Cookie', 'biodl_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
+        }
+
+        const result = await main.callIpcHandler(channel, payload);
+        let createdSid = null;
+        if ((channel === 'api-login' || channel === 'api-register' || channel === 'api-get-user-info') && result && result.success && result.token) {
+          createdSid = this.createSession(res, result.token);
+        }
+        return this.sendJson(res, 200, { success: true, result, sessionId: createdSid || (session ? session.id : null) });
       } catch (err) {
         return this.sendJson(res, 200, { success: false, error: err.message });
       }

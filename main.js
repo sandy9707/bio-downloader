@@ -380,20 +380,60 @@ function getClashBinaryPath() {
   throw new Error('不支持的操作系统平台: ' + platform);
 }
 
-// 获取 Axel 执行路径
-function getAxelBinaryPath() {
+function systemBinaryPath(binName) {
+  const command = process.platform === 'win32' ? 'where.exe' : 'which';
+  const result = spawnSync(command, [binName], { encoding: 'utf8', timeout: 3000, windowsHide: true });
+  if (result.status !== 0) return '';
+  return String(result.stdout || '').split(/\r?\n/).map((v) => v.trim()).find(Boolean) || '';
+}
+
+function toolCandidates(toolId) {
   const platform = os.platform();
-  if (platform === 'darwin') {
-    return path.join(USER_BIN_DIR, 'axel');
-  } else if (platform === 'win32') {
-    return path.join(USER_BIN_DIR, 'axel.exe');
-  } else if (platform === 'linux') {
-    const bundled = path.join(USER_BIN_DIR, 'axel');
-    if (fs.existsSync(bundled)) return bundled;
-    const aria2 = path.join(BIN_DIR, 'linux', 'aria2', 'aria2c');
-    return fs.existsSync(aria2) ? aria2 : 'aria2c';
+  const settings = getSettings();
+  if (toolId === 'axel') {
+    const binName = platform === 'win32' ? 'axel.exe' : 'axel';
+    return [
+      { path: path.join(USER_BIN_DIR, binName), source: 'bundled' },
+      { path: systemBinaryPath(binName), source: 'system' },
+      { path: settings.axelPath || '', source: 'custom' }
+    ];
   }
-  throw new Error('不支持的操作系统平台: ' + platform);
+  const binName = platform === 'win32' ? 'aria2c.exe' : 'aria2c';
+  const bundled = platform === 'linux'
+    ? path.join(BIN_DIR, 'linux', 'aria2', 'aria2c')
+    : path.join(PLUGIN_DIR, 'aria2', binName);
+  return [
+    { path: bundled, source: 'bundled' },
+    { path: systemBinaryPath(binName), source: 'system' },
+    { path: settings.aria2Path || '', source: 'custom' }
+  ];
+}
+
+function toolCandidateWorks(toolId, candidate) {
+  if (!candidate.path || !fs.existsSync(candidate.path)) return false;
+  const env = { ...process.env };
+  if (toolId === 'aria2' && process.platform === 'linux' && candidate.source === 'bundled') {
+    env.LD_LIBRARY_PATH = [path.join(path.dirname(candidate.path), 'lib'), env.LD_LIBRARY_PATH].filter(Boolean).join(':');
+  }
+  const result = spawnSync(candidate.path, ['--version'], { encoding: 'utf8', timeout: 3000, env, windowsHide: true });
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+  return result.status === 0 && (toolId === 'axel' ? /Axel\s+[\d.]+/i : /aria2\s+version\s+[\d.]+/i).test(output);
+}
+
+function resolveToolBinary(toolId) {
+  for (const candidate of toolCandidates(toolId)) {
+    if (toolCandidateWorks(toolId, candidate)) {
+      ensureExecutable(candidate.path);
+      return candidate;
+    }
+  }
+  return { path: '', source: '' };
+}
+
+function getAxelBinaryPath() {
+  const resolved = resolveToolBinary('axel');
+  if (resolved.path) return resolved.path;
+  throw new Error('未找到 Axel。请在扩展插件中安装 Axel，或填写已安装程序的绝对路径。');
 }
 
 // ==========================================
@@ -407,32 +447,20 @@ if (!fs.existsSync(PLUGIN_DIR)) {
 }
 
 function getAria2BinaryPath() {
-  const platform = os.platform();
-  const isWin = platform === 'win32';
-  if (platform === 'linux') {
-    const linuxBin = path.join(BIN_DIR, 'linux', 'aria2', 'aria2c');
-    if (fs.existsSync(linuxBin)) {
-      ensureExecutable(linuxBin);
-      return linuxBin;
-    }
-    return null;
-  }
-  const binName = isWin ? 'aria2c.exe' : 'aria2c';
-  const pluginBin = path.join(PLUGIN_DIR, 'aria2', binName);
-  if (fs.existsSync(pluginBin)) {
-    ensureExecutable(pluginBin);
-    return pluginBin;
-  }
-  return null;
+  return resolveToolBinary('aria2').path || null;
 }
 
-async function ensureAria2Plugin(forceReinstall = false) {
-  if (!forceReinstall) {
-    const existing = getAria2BinaryPath();
-    if (existing) return existing;
-  }
+async function ensureAria2Plugin() {
+  const existing = getAria2BinaryPath();
+  if (existing) return existing;
 
   const platform = os.platform();
+  if (platform === 'linux') {
+    ensureBinaries();
+    const resolved = resolveToolBinary('aria2');
+    if (resolved.path) return resolved.path;
+    throw new Error('未找到可用 aria2c。请通过 Conda/系统包管理器安装，或在插件中心填写绝对路径。');
+  }
   const isWin = platform === 'win32';
   const binName = isWin ? 'aria2c.exe' : 'aria2c';
   const aria2Dir = path.join(PLUGIN_DIR, 'aria2');
@@ -440,14 +468,6 @@ async function ensureAria2Plugin(forceReinstall = false) {
     fs.mkdirSync(aria2Dir, { recursive: true });
   }
   const destBin = path.join(aria2Dir, binName);
-
-  // 若强制重装或存在损坏的旧文件，清理整个 aria2 插件目录及旧 dylib
-  try {
-    const oldFiles = fs.readdirSync(aria2Dir);
-    for (const f of oldFiles) {
-      try { fs.unlinkSync(path.join(aria2Dir, f)); } catch(e){}
-    }
-  } catch (e) {}
 
   let remoteArchive = '';
   if (platform === 'darwin') {
@@ -588,7 +608,7 @@ function createWindow() {
 }
 
 function launchWindowsPersistentRuntime() {
-  if (!isElectron || process.platform !== 'win32' || !app.isPackaged || process.env.BIODL_FIXED_RUNTIME === '1') return false;
+  if (!isElectron || process.platform !== 'win32' || !app.isPackaged || !process.env.PORTABLE_EXECUTABLE_FILE || process.env.BIODL_FIXED_RUNTIME === '1') return false;
 
   try {
     const fixedDir = path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'BioDownloader', 'runtime');
@@ -630,6 +650,36 @@ function launchWindowsPersistentRuntime() {
     console.error('[WindowsRuntime] 固定运行目录初始化失败:', e.message);
     return false;
   }
+}
+
+function cleanupLegacyWindowsRuntime() {
+  if (process.platform !== 'win32' || process.env.PORTABLE_EXECUTABLE_FILE) return;
+  const userData = app.getPath('userData');
+  const legacyFiles = [
+    'install-fixed-runtime.cmd',
+    'launch-fixed-runtime.cmd',
+    'app.asar',
+    'patch_download.tmp'
+  ];
+  for (const name of legacyFiles) {
+    const filePath = path.join(userData, name);
+    try {
+      if (originalFs.existsSync(filePath)) originalFs.unlinkSync(filePath);
+    } catch (e) {
+      console.warn(`[WindowsRuntime] 清理旧便携版残留失败 ${name}:`, e.message);
+    }
+  }
+  const cleanupScript = [
+    "$names = @('install-fixed-runtime.cmd','launch-fixed-runtime.cmd')",
+    'Get-CimInstance Win32_Process | Where-Object {',
+    "  $_.Name -eq 'cmd.exe' -and $_.CommandLine -and ($names | Where-Object { $_.CommandLine -like ('*' + $_ + '*') })",
+    '} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }'
+  ].join('; ');
+  spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', cleanupScript], {
+    detached: true,
+    windowsHide: true,
+    stdio: 'ignore'
+  }).unref();
 }
 
 function checkPendingAsarUpdates() {
@@ -683,6 +733,7 @@ function checkPendingAsarUpdates() {
 
 app.whenReady().then(() => {
   if (!isElectron) return; // 无头模式下不创建原生窗口，由 Web Server / CLI 调度
+  cleanupLegacyWindowsRuntime();
   if (launchWindowsPersistentRuntime()) {
     setTimeout(() => process.exit(0), 100);
     return;
@@ -1285,7 +1336,8 @@ ipcMain.handle('api-login', async (event, { username, password }) => {
 });
 
 ipcMain.handle('api-get-user-info', async (event, { token }) => {
-  const res = await axios.get(`${BACKEND_BASE_URL}/api/user/info?token=${token}&version=${app.getVersion()}`);
+  const clientVersion = process.env.BIODL_SERVER_VERSION || app.getVersion();
+  const res = await axios.get(`${BACKEND_BASE_URL}/api/user/info?token=${encodeURIComponent(token)}&version=${encodeURIComponent(clientVersion)}`);
   return res.data;
 });
 
@@ -1369,57 +1421,48 @@ ipcMain.handle('api-invite-copy', async (event, { token }) => {
   return res.data;
 });
 
-// 获取插件状态及安装情况
-ipcMain.handle('plugin-get-status', async () => {
-  const platform = os.platform();
-  const isWin = platform === 'win32';
-  const isLinux = platform === 'linux';
-  const aria2Bin = getAria2BinaryPath();
-  const installed = !!(aria2Bin && fs.existsSync(aria2Bin));
-  
-  let version = null;
-  let usable = false;
-  let errorDetail = '';
-
-  if (installed) {
-    try {
-      const verOut = await new Promise((resolve, reject) => {
-        const env = { ...process.env };
-        if (isLinux) {
-          env.LD_LIBRARY_PATH = [path.join(path.dirname(aria2Bin), 'lib'), env.LD_LIBRARY_PATH].filter(Boolean).join(':');
-        }
-        exec(`"${aria2Bin}" -v`, { timeout: 3000, env }, (err, stdout, stderr) => {
-          if (err) {
-            err.stderr = stderr;
-            return reject(err);
-          }
-          resolve(stdout);
-        });
-      });
-      const match = verOut.match(/aria2\s+version\s+([\d.]+)/i);
-      if (match) {
-        version = match[1];
-        usable = true;
-      }
-    } catch (e) {
-      errorDetail = (e.stderr || e.message || '').trim();
-      console.warn('[Plugin] aria2c 检测执行异常:', errorDetail);
-      usable = false;
-    }
+function inspectTool(toolId) {
+  const resolved = resolveToolBinary(toolId);
+  if (!resolved.path) return { installed: false, usable: false, version: null, errorDetail: '', path: '', source: '' };
+  const env = { ...process.env };
+  if (toolId === 'aria2' && process.platform === 'linux' && resolved.source === 'bundled') {
+    env.LD_LIBRARY_PATH = [path.join(path.dirname(resolved.path), 'lib'), env.LD_LIBRARY_PATH].filter(Boolean).join(':');
   }
+  const result = spawnSync(resolved.path, ['--version'], { encoding: 'utf8', timeout: 3000, env, windowsHide: true });
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`.trim();
+  const versionMatch = toolId === 'axel'
+    ? output.match(/Axel\s+([\d.]+)/i)
+    : output.match(/aria2\s+version\s+([\d.]+)/i);
+  return {
+    installed: true,
+    usable: result.status === 0 && !!versionMatch,
+    version: versionMatch ? versionMatch[1] : null,
+    errorDetail: result.status === 0 ? '' : (output || result.error?.message || `退出码 ${result.status}`),
+    path: resolved.path,
+    source: resolved.source
+  };
+}
 
+ipcMain.handle('plugin-get-status', async () => {
+  ensureBinaries();
+  const platform = `${os.platform()} ${os.arch()}`;
+  const axel = inspectTool('axel');
+  const aria2 = inspectTool('aria2');
   return {
     plugins: [
       {
+        id: 'axel',
+        name: 'HTTP / HTTPS 多线程下载引擎 (Axel)',
+        description: 'SRA、EBI、GEO 与普通直链的默认下载引擎。依次检测软件内置、系统 PATH 和用户指定路径。',
+        platform,
+        ...axel
+      },
+      {
         id: 'aria2',
         name: 'FTP / SFTP 高速下载插件 (aria2)',
-        description: '支持 FTP 原生多连接并发与 SFTP 隧道代理加速传输，断点续传。',
-        platform: isLinux ? `Linux ${os.arch()}` : (isWin ? 'Windows x64' : 'macOS Apple Silicon'),
-        installed,
-        usable,
-        version: version || '1.37.0',
-        errorDetail,
-        path: aria2Bin || ''
+        description: '用于 FTP/SFTP 多连接与断点续传。依次检测软件内置、系统 PATH 和用户指定路径。',
+        platform,
+        ...aria2
       }
     ]
   };
@@ -1427,11 +1470,35 @@ ipcMain.handle('plugin-get-status', async () => {
 
 // 手动触发插件安装/重装
 ipcMain.handle('plugin-install', async (event, { pluginId }) => {
+  if (pluginId === 'axel') {
+    ensureBinaries();
+    const resolved = inspectTool('axel');
+    if (!resolved.usable) throw new Error('未找到可恢复的内置 Axel。请按教程安装 Axel 后填写绝对路径。');
+    return { success: true, path: resolved.path };
+  }
   if (pluginId === 'aria2') {
-    const binPath = await ensureAria2Plugin(true);
+    const existing = inspectTool('aria2');
+    if (existing.usable) return { success: true, path: existing.path };
+    const binPath = await ensureAria2Plugin();
     return { success: true, path: binPath };
   }
   throw new Error('未知的插件 ID: ' + pluginId);
+});
+
+ipcMain.handle('plugin-set-path', async (event, { pluginId, binaryPath }) => {
+  if (!['axel', 'aria2'].includes(pluginId)) throw new Error('未知的插件 ID: ' + pluginId);
+  const normalized = path.resolve(String(binaryPath || '').trim());
+  if (!binaryPath || !fs.existsSync(normalized) || !fs.statSync(normalized).isFile()) {
+    throw new Error('请输入存在的可执行文件绝对路径');
+  }
+  const key = pluginId === 'axel' ? 'axelPath' : 'aria2Path';
+  if (!toolCandidateWorks(pluginId, { path: normalized, source: 'custom' })) {
+    throw new Error(`该文件不是可用的 ${pluginId === 'axel' ? 'Axel' : 'aria2c'} 可执行程序`);
+  }
+  saveSettings({ [key]: normalized });
+  const output = spawnSync(normalized, ['--version'], { encoding: 'utf8', timeout: 3000, windowsHide: true }).stdout || '';
+  const match = pluginId === 'axel' ? output.match(/Axel\s+([\d.]+)/i) : output.match(/aria2\s+version\s+([\d.]+)/i);
+  return { success: true, path: normalized, version: match ? match[1] : null };
 });
 
 // --- Clash 控制 ---
@@ -1620,6 +1687,101 @@ async function applyHotPatch(patchUrl) {
   return { success: true, direct: successDirect, message: '代码热更新补丁已就绪！应用即将重启...' };
 }
 
+// 执行 Linux 自更新流程（下载新 tar.gz -> 校验 sha256 -> 就地安全解压覆盖代码 -> 保留用户数据）
+async function performLinuxSelfUpdate(tarballUrl, expectedSha256) {
+  if (process.platform !== 'linux') throw new Error('仅支持在 Linux 系统执行此更新');
+  const fullUrl = tarballUrl.startsWith('http') ? tarballUrl : `${BACKEND_BASE_URL}${tarballUrl}`;
+  const appRoot = path.resolve(__dirname);
+  const tempDir = path.join(os.tmpdir(), `biodl_update_${Date.now()}`);
+  fs.mkdirSync(tempDir, { recursive: true });
+  const downloadPath = path.join(tempDir, 'update.tar.gz');
+
+  try {
+    console.log('[LinuxUpdate] 正在下载最新程序包:', fullUrl);
+    const response = await axios({
+      url: fullUrl,
+      method: 'GET',
+      responseType: 'stream',
+      timeout: 120000,
+      proxy: axiosProxyFor(fullUrl)
+    });
+
+    const writer = fs.createWriteStream(downloadPath);
+    await new Promise((resolve, reject) => {
+      response.data.pipe(writer);
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
+
+    // 校验 sha256
+    if (expectedSha256) {
+      const actualSha = fileSha256(downloadPath);
+      if (actualSha.toLowerCase() !== String(expectedSha256).toLowerCase()) {
+        throw new Error(`更新包校验失败: 期望 ${expectedSha256}, 实际 ${actualSha}`);
+      }
+      console.log('[LinuxUpdate] sha256 校验通过');
+    }
+
+    // 解压到临时目录
+    const extractDir = path.join(tempDir, 'extracted');
+    fs.mkdirSync(extractDir, { recursive: true });
+    const tarRes = spawnSync('tar', ['-xzf', downloadPath, '-C', extractDir], { timeout: 30000 });
+    if (tarRes.status !== 0) {
+      throw new Error('解压更新包失败: ' + (tarRes.stderr || tarRes.stdout || '未知错误'));
+    }
+
+    // 识别解压出的顶级目录
+    const entries = fs.readdirSync(extractDir);
+    const rootName = entries.find(e => fs.statSync(path.join(extractDir, e)).isDirectory()) || '';
+    const newSourceDir = rootName ? path.join(extractDir, rootName) : extractDir;
+
+    // 核心代码与静态资源增量安全替换（排除用户私有数据和 runtime）
+    const safeOverwrite = ['main.js', 'renderer.js', 'preload.js', 'package.json', 'package-lock.json', 'THIRD_PARTY_NOTICES.md'];
+    for (const file of safeOverwrite) {
+      const src = path.join(newSourceDir, file);
+      const dest = path.join(appRoot, file);
+      if (fs.existsSync(src)) {
+        fs.copyFileSync(src, dest);
+      }
+    }
+
+    const safeDirs = ['packages', 'shared', 'img', 'icons', 'bin'];
+    for (const dir of safeDirs) {
+      const src = path.join(newSourceDir, dir);
+      const dest = path.join(appRoot, dir);
+      if (fs.existsSync(src)) {
+        spawnSync('cp', ['-a', `${src}/.`, dest]);
+      }
+    }
+
+    const biodlBin = path.join(appRoot, 'biodl');
+    if (fs.existsSync(biodlBin)) ensureExecutable(biodlBin);
+
+    console.log('[LinuxUpdate] 核心代码更新完成！');
+    return { success: true, message: '程序已成功更新就绪！' };
+  } finally {
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
+  }
+}
+
+ipcMain.handle('linux-self-update', async (event, { url, sha256 } = {}) => {
+  let targetUrl = url;
+  let targetSha = sha256;
+  if (!targetUrl) {
+    const vRes = await axios.get(`${BACKEND_BASE_URL}/api/client/version?channel=2&platform=linux`, { timeout: 8000 });
+    targetUrl = vRes.data && vRes.data.linuxUrl;
+    targetSha = vRes.data && vRes.data.sha256;
+  }
+  if (!targetUrl) throw new Error('未获取到 Linux 更新包下载地址');
+
+  const res = await performLinuxSelfUpdate(targetUrl, targetSha);
+  setTimeout(() => {
+    console.log('[LinuxUpdate] 服务重启加载新版本中...');
+    process.exit(0);
+  }, 1200);
+  return res;
+});
+
 ipcMain.handle('apply-hot-patch', async (event, { patchUrl }) => {
   const res = await applyHotPatch(patchUrl);
   setTimeout(() => {
@@ -1655,7 +1817,7 @@ ipcMain.handle('check-for-updates', async (event, { advancedMode } = {}) => {
     // 【通道隔离】按主版本号请求各自通道:1.x → channel=1,2.x → channel=2。
     // 高级模式(advancedMode)额外请求 channel=P2(Preview 预览版独立通道),用于"稳定版 + 预览版"双选。
     const major = parseInt(String(currentVersion).split('.')[0], 10) || 1;
-    const versionUrl = `${BACKEND_BASE_URL}/api/client/version?channel=${major}`;
+    const versionUrl = `${BACKEND_BASE_URL}/api/client/version?channel=${major}&platform=${encodeURIComponent(process.platform)}`;
     // 后端是境内服务 → 直连(axiosProxyFor 对境内返回 false,强制直连并忽略系统代理),避免绕代理变慢
     const res = await axios.get(versionUrl, { timeout: 6000, proxy: axiosProxyFor(versionUrl) });
     const latestVersion = res.data.version || currentVersion;
@@ -1732,6 +1894,9 @@ ipcMain.handle('check-for-updates', async (event, { advancedMode } = {}) => {
       patchUrl: res.data.patchUrl ? (res.data.patchUrl.startsWith('http') ? res.data.patchUrl : `${BACKEND_BASE_URL}${res.data.patchUrl}`) : null,
       winUrl: res.data.winUrl ? `${BACKEND_BASE_URL}${res.data.winUrl}` : null,
       macUrl: res.data.macUrl ? `${BACKEND_BASE_URL}${res.data.macUrl}` : null,
+      linuxUrl: res.data.linuxUrl ? (res.data.linuxUrl.startsWith('http') ? res.data.linuxUrl : `${BACKEND_BASE_URL}${res.data.linuxUrl}`) : null,
+      sha256: res.data.sha256 || null,
+      platform: process.platform,
       releaseNotes: res.data.releaseNotes,
       upgrade2x,
       preview,
@@ -2072,7 +2237,7 @@ ipcMain.handle('clash-status', () => {
 });
 
 ipcMain.handle('get-app-version', () => {
-  return app.getVersion();
+  return process.env.BIODL_SERVER_VERSION || app.getVersion();
 });
 
 // --- 文件大小检验 ---
@@ -2420,7 +2585,6 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
 
   const axelBin = getAxelBinaryPath();
   ensureExecutable(axelBin);
-  const useAria2ForHttp = process.platform === 'linux' && /aria2c$/.test(axelBin);
 
   const MAX_RETRIES = 3;
   const maxConcurrentCount = parseInt(maxConcurrent, 10) || 3;
@@ -2436,13 +2600,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
 
   async function downloadSingleFile(file, fileIndex) {
     if (cancelled) return;
-    if (cancelledFiles.has(fileIndex)) {
-      // 任务在排队期间已被用户取消:直接回传取消状态,不再起下载进程
-      cancelledFiles.delete(fileIndex);
-      mainWindow.webContents.send('download-status', { index: fileIndex, fileName: file.name, status: 'cancelled', percentage: 0, speed: '已取消' });
-      return;
-    }
-    
+
     let fileDestFolder;
     if (file.isUpdate) {
       fileDestFolder = app.getPath('downloads');
@@ -2459,28 +2617,21 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     const safeName = sanitizePathSegment(file.name) || (`download_${Date.now()}`);
     const savePath = path.join(fileDestFolder, safeName);
 
+    if (cancelledFiles.has(fileIndex)) {
+      // 任务在排队期间已被用户取消:直接回传取消状态,不再起下载进程
+      cancelledFiles.delete(fileIndex);
+      mainWindow.webContents.send('download-status', { index: fileIndex, fileName: file.name, status: 'cancelled', percentage: 0, speed: '已取消', savePath });
+      return;
+    }
+
     // 1. 去重与文件完整性大小核验
     if (fs.existsSync(savePath)) {
       try {
         const localStats = fs.statSync(savePath);
-        const hasStateFile = fs.existsSync(savePath + '.st');
-        let shouldSkip = false;
-        let skipReason = '已校验(跳过)';
-
-        if (file.size && file.size > 0) {
-          if (localStats.size === file.size) {
-            shouldSkip = true;
-          }
-        } else {
-          // 如果远程大小校验失败返回 0 或未定义 (常见于网络拥堵/NCBI FTP 握手失败)，但本地已存在该文件且无 Axel 临时 st 分片文件，则判定为已完整下载
-          if (localStats.size > 0 && !hasStateFile) {
-            shouldSkip = true;
-            skipReason = '已存在(跳过)';
-          }
-        }
-
-        if (shouldSkip) {
-          console.log(`File ${file.name} already exists. Skipping download (${skipReason}).`);
+        // 严格安全去重：必须为普通文件、远程大小明确已知且 >0，且本地字节数与远程完全吻合才允许跳过
+        if (localStats.isFile() && file.size && file.size > 0 && localStats.size === file.size) {
+          const skipReason = '已存在且大小匹配(跳过)';
+          console.log(`File ${file.name} already fully exists (${localStats.size} B). Skipping download.`);
           mainWindow.webContents.send('download-status', {
             index: fileIndex,
             fileName: file.name,
@@ -2512,7 +2663,8 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
           fileName: file.name,
           status: 'downloading',
           percentage: null,
-          speed: `网络波动重试中 (${attempt}/${MAX_RETRIES})...`
+          speed: `网络波动重试中 (${attempt}/${MAX_RETRIES})...`,
+          savePath
         });
         
         // 等待重试或被取消
@@ -2863,7 +3015,8 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         fileName: file.name,
         status: 'downloading',
         percentage: 0,
-        speed: '正在高速下载...'
+        speed: '正在高速下载...',
+        savePath
       });
 
       const env = { ...process.env };
@@ -2881,6 +3034,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         delete env.HTTP_PROXY;
         delete env.HTTPS_PROXY;
         delete env.ALL_PROXY;
+        console.warn('⚠️ [Downloader] 加速内核未启动(clashProcess=null)，当前任务正在使用【直连】下载，未启用高速加速节点。');
       }
 
       let threads = 16;
@@ -2956,28 +3110,6 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
             console.error('Failed to create target directory:', dirErr);
           }
 
-          if (useAria2ForHttp) {
-            const ariaArgs = [
-              '-x', String(Math.min(16, threads || 8)),
-              '-s', String(Math.min(16, threads || 8)),
-              '-k', '1M',
-              '--file-allocation=none',
-              '--summary-interval=1',
-              '--console-log-level=warn',
-              '--auto-file-renaming=false',
-              '--allow-overwrite=true',
-              '-d', fileDestFolder,
-              '-o', safeName,
-              file.url
-            ];
-            if (clashProcess) ariaArgs.splice(ariaArgs.length - 1, 0, '--all-proxy=http://127.0.0.1:43289');
-            args.splice(0, args.length, ...ariaArgs);
-          }
-
-          if (useAria2ForHttp) {
-            const ariaLibDir = path.join(path.dirname(axelBin), 'lib');
-            env.LD_LIBRARY_PATH = [ariaLibDir, env.LD_LIBRARY_PATH].filter(Boolean).join(':');
-          }
           const proc = spawn(axelBin, args, { env });
           activeAxelProcesses.set(fileIndex, proc);
 
@@ -3012,19 +3144,13 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
             // Axel 可每秒输出数百次回车进度；所有模式统一最多 1Hz 解析和刷新。
             if (!isTerminalMessage && now - lastProgressHandledAt < 1000) return;
             lastProgressHandledAt = now;
-            const pctMatches = useAria2ForHttp
-              ? [...output.matchAll(/\((\d+)%\)/g)]
-              : [...output.matchAll(/\[\s*(\d+)%\]/g)];
-            const speedMatches = useAria2ForHttp
-              ? [...output.matchAll(/DL:([\d.]+[KMGT]?i?B(?:\/s)?)/ig)]
-              : [...output.matchAll(/\[\s*([\d\.]+\s*[KMGT]*B\/s)\]/g)];
+            const pctMatches = [...output.matchAll(/\[\s*(\d+)%\]/g)];
+            const speedMatches = [...output.matchAll(/\[\s*([\d\.]+\s*[KMGT]*B\/s)\]/g)];
             const pctMatch = pctMatches[pctMatches.length - 1];
             const speedMatch = speedMatches[speedMatches.length - 1];
 
             let percentage = pctMatch ? parseInt(pctMatch[1]) : null;
             let speed = speedMatch ? speedMatch[1] : null;
-            if (useAria2ForHttp && speed && !speed.endsWith('/s')) speed += '/s';
-
             if (percentage !== null || speed !== null) {
               if (logStream && (percentage === 100 || now - lastProgressLoggedAt >= 5000)) {
                 lastProgressLoggedAt = now;
@@ -3181,7 +3307,8 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           fileName: file.name,
           status: 'paused',
           percentage: null,
-          speed: '已暂停'
+          speed: '已暂停',
+          savePath
         });
         return;
       }
@@ -3207,7 +3334,8 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         fileName: file.name,
         status: wasCancelled ? 'cancelled' : 'failed',
         percentage: 0,
-        speed: wasCancelled ? '已取消' : failReason
+        speed: wasCancelled ? '已取消' : failReason,
+        savePath
       });
     }
   }
@@ -3356,14 +3484,25 @@ ipcMain.handle('open-downloads-folder', (event, folderPath) => {
 ipcMain.handle('delete-transfer-file', (event, filePath) => {
   if (!filePath || typeof filePath !== 'string') return { success: false, error: '文件路径为空' };
   try {
-    if (!fs.existsSync(filePath)) return { success: true, missing: true };
-    const st = fs.statSync(filePath);
-    if (!st.isFile()) return { success: false, error: '目标不是普通文件，已拒绝删除' };
-    fs.unlinkSync(filePath);
-    for (const suffix of ['.st', '.aria2']) {
-      try { if (fs.existsSync(filePath + suffix)) fs.unlinkSync(filePath + suffix); } catch (e) {}
+    let deletedCount = 0;
+    // 1. 删除主文件(如果存在)
+    if (fs.existsSync(filePath)) {
+      const st = fs.statSync(filePath);
+      if (!st.isFile()) return { success: false, error: '目标不是普通文件，已拒绝删除' };
+      fs.unlinkSync(filePath);
+      deletedCount++;
     }
-    return { success: true };
+    // 2. 彻底清理分片、断点与未完成缓存文件 (.st / .aria2 / .aria2c / .tmp / .part)
+    for (const suffix of ['.st', '.aria2', '.aria2c', '.tmp', '.part']) {
+      const partialPath = filePath + suffix;
+      try {
+        if (fs.existsSync(partialPath)) {
+          fs.unlinkSync(partialPath);
+          deletedCount++;
+        }
+      } catch (e) {}
+    }
+    return { success: true, deletedCount };
   } catch (e) {
     return { success: false, error: e.message };
   }

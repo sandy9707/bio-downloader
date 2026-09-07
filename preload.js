@@ -87,6 +87,8 @@ contextBridge.exposeInMainWorld('api', {
   // 扩展插件生态 (FTP / SFTP 等)
   getPluginStatus: () => ipcRenderer.invoke('plugin-get-status'),
   installPlugin: (pluginId) => ipcRenderer.invoke('plugin-install', { pluginId }),
+  setPluginPath: (pluginId, binaryPath) => ipcRenderer.invoke('plugin-set-path', { pluginId, binaryPath }),
+  linuxSelfUpdate: (options) => ipcRenderer.invoke('linux-self-update', options),
 
   // 传输记录物理文件持久化 (防止重启/便携版解压后丢记录)
   getTransfersHistory: () => ipcRenderer.invoke('get-transfers-history'),

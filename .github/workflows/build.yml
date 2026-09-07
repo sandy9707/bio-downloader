@@ -68,24 +68,6 @@ jobs:
         with:
           node-version: '20'
 
-      - name: 下载并解压现代版 axel.exe + MSYS2 DLLs
-        shell: pwsh
-        run: |
-          $dest = "bin\win32"
-          New-Item -ItemType Directory -Force -Path $dest
-
-          Write-Host "下载 axel-2.17.14.zip..."
-          Invoke-WebRequest -Uri "https://github.com/uklee/axel-for-windows/releases/download/v2.17.14/axel-2.17.14.zip" -OutFile "axel.zip"
-
-          Write-Host "解压 axel.zip..."
-          Expand-Archive -Path "axel.zip" -DestinationPath "temp_axel" -Force
-
-          Write-Host "复制到 bin/win32..."
-          Copy-Item -Path "temp_axel\axel-2.17.14\*" -Destination "$dest" -Recurse -Force
-
-          Write-Host "完成，bin/win32 目录内容："
-          Get-ChildItem "$dest"
-
       - name: 安装 npm 依赖
         run: npm install
 
@@ -108,11 +90,13 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: 上传 EXE 产物
+      - name: 上传 Windows 安装包
         uses: actions/upload-artifact@v4
         with:
-          name: windows-exe
-          path: dist/*.exe
+          name: windows-installer
+          path: |
+            dist/BioDownloader-Setup-*.exe
+            dist/BioDownloader-Setup-*.exe.blockmap
 
   # ============================================================
   # Job 3: 发布到 GitHub Releases (仅推 tag 时执行)
@@ -130,10 +114,10 @@ jobs:
           name: mac-dist
           path: ./release-files
 
-      - name: 下载 Windows EXE
+      - name: 下载 Windows 安装包
         uses: actions/download-artifact@v4
         with:
-          name: windows-exe
+          name: windows-installer
           path: ./release-files
 
       - name: 查看产物
@@ -161,10 +145,10 @@ jobs:
             | 平台 | 文件 | 说明 |
             |------|------|------|
             | 🍎 macOS (M1/M2/M3/M4/Intel) | `BioDownloader-*-arm64.dmg` | DMG 安装包 (双击打开后拖动到应用程序文件夹) |
-            | 🪟 Windows 64位 | `BioDownloader*.exe` | 绿色免安装版 (单文件免安装，双击直接运行) |
+            | 🪟 Windows 64位 | `BioDownloader-Setup-*.exe` | 按用户安装版，支持自选目录并创建桌面快捷方式 |
 
             ## 安装与运行步骤
-            - **Windows**: 下载 `BioDownloader*.exe` → 双击直接启动运行。
+            - **Windows**: 下载 `BioDownloader-Setup-*.exe` → 双击安装 → 从桌面快捷方式启动。
             - **macOS**: 下载 DMG → 双击打开 → 将 `BioDownloader.app` 拖入 Applications (应用程序) 文件夹。
 
             ---
