@@ -1772,17 +1772,26 @@
           <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.25rem;">设置同时下载的最大文件个数。并发过高可能会导致宽带饱和。</div>
         </div>
 
-        <!-- 低功耗模式 -->
+        <!-- 低功耗与稳定下载模式 -->
         <div class="form-group" style="margin-top:1.5rem;">
-          <label style="font-weight:600;">🌿 低功耗模式（性能优化）</label>
-          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.75rem; margin-top:0.5rem; padding:0.75rem; background:var(--bg-input); border-radius:6px; border:1px solid var(--border-color);">
-            <div style="font-size:0.9rem; color:var(--text-muted); flex:1 1 420px;">适合笔记本、机械硬盘或容易发热的电脑。开启后单文件最多16线程、所有下载任务合计最多32连接；关闭时使用正常高速模式，单文件最高32线程、合计最高64连接。</div>
-            <label class="switch">
-              <input type="checkbox" id="settingsLowPowerToggle" onchange="toggleLowPowerMode(this.checked)">
-              <span class="switch-slider"></span>
-            </label>
+          <label style="font-weight:600;">🌿 低功耗与稳定下载模式</label>
+          <div style="display:flex; flex-direction:column; gap:0.5rem; margin-top:0.5rem; padding:0.75rem; background:var(--bg-input); border-radius:6px; border:1px solid var(--border-color);">
+            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.75rem;">
+              <div style="font-size:0.9rem; color:var(--text-muted); flex:1 1 420px;"><strong>低功耗模式：</strong>适合笔记本或容易发热的电脑。开启后单文件最多16线程、合计最多32连接。</div>
+              <label class="switch">
+                <input type="checkbox" id="settingsLowPowerToggle" onchange="toggleLowPowerMode(this.checked)">
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.75rem; border-top:1px solid var(--border-color); padding-top:0.5rem;">
+              <div style="font-size:0.9rem; color:var(--text-muted); flex:1 1 420px;"><strong>稳定下载模式：</strong>适合网络环境恶劣、下载经常中断或服务器容易被封禁 IP 的场景。开启后强制所有文件只使用 1 个线程单连下载，大幅降低服务器连接压力，但速度可能会受限。</div>
+              <label class="switch">
+                <input type="checkbox" id="settingsStableModeToggle" onchange="toggleStableMode(this.checked)">
+                <span class="switch-slider"></span>
+              </label>
+            </div>
           </div>
-          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">进度每秒刷新一次，诊断日志每5秒记录一次；切换后对下一批下载生效。</div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">切换设置后，仅对下一批新开始的下载任务生效，正在下载的任务不受影响。</div>
         </div>
 
         <!-- 下载诊断日志 -->

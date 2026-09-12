@@ -2482,6 +2482,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
   const maxConcurrentCount = parseInt(maxConcurrent, 10) || 3;
   const actualConcurrentCount = Math.max(1, Math.min(maxConcurrentCount, files.length));
   const lowPowerMode = Boolean(getSettings().lowPowerMode);
+  const stableMode = Boolean(getSettings().stableMode);
 
   let activeCount = 0;
   let fileIndexInQueue = 0;
@@ -2947,8 +2948,9 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       }
       // 正常模式追求速度：单文件可到32线程、全任务合计64连接。
       // 低功耗模式优先温度与响应：单文件最多16线程、全任务合计32连接。
-      const perFileLimit = lowPowerMode ? 16 : 32;
-      const totalConnectionLimit = lowPowerMode ? 32 : 64;
+      // 稳定模式：强制所有任务单线程单连接。
+      const perFileLimit = stableMode ? 1 : (lowPowerMode ? 16 : 32);
+      const totalConnectionLimit = stableMode ? actualConcurrentCount : (lowPowerMode ? 32 : 64);
       threads = Math.max(1, Math.min(threads, perFileLimit, Math.floor(totalConnectionLimit / actualConcurrentCount)));
 
       const args = ['-n', threads.toString(), '-T', '20', '-U', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', '-k', '-o', savePath, file.url];

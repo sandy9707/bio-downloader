@@ -41,6 +41,7 @@ let activeDownloads = [];
 let completedDownloads = [];
 let maxConcurrentDownloadsSetting = 3;
 let lowPowerModeSetting = false;
+let stableModeSetting = false;
 
 // 存储下载中心不同 Tab 的独立状态，防止切换时状态丢失与互相覆盖
 const tabStates = {
@@ -1087,6 +1088,9 @@ function renderQueue() {
       }
     }
     if (lowPowerModeSetting) threads = Math.min(threads, 16);
+    if (stableModeSetting) threads = 1;
+
+    const threadHint = stableModeSetting ? '<span style="color:#ef4444; font-weight:bold;">稳定模式 (1线程)</span>' : `Axel ${threads} 线程`;
 
     itemEl.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -1115,7 +1119,7 @@ function renderQueue() {
       </div>
       <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text-muted);">
         <span id="speed-text-${index}">-</span>
-        <span>Axel ${threads} 线程</span>
+        <span>${threadHint}</span>
       </div>
     `;
     listEl.appendChild(itemEl);
@@ -3190,6 +3194,10 @@ async function initTransfersAndSettings(settings) {
   const lowPowerToggle = document.getElementById('settingsLowPowerToggle');
   if (lowPowerToggle) lowPowerToggle.checked = lowPowerModeSetting;
 
+  stableModeSetting = Boolean(settings && settings.stableMode);
+  const stableModeToggle = document.getElementById('settingsStableModeToggle');
+  if (stableModeToggle) stableModeToggle.checked = stableModeSetting;
+
   // 3. 载入诊断日志开关设置
   const toggle = document.getElementById('settingsLoggingToggle');
   if (toggle) {
@@ -3461,6 +3469,19 @@ async function toggleLowPowerMode(checked) {
   }
 }
 
+async function toggleStableMode(checked) {
+  try {
+    stableModeSetting = Boolean(checked);
+    await window.api.saveSettings({ stableMode: stableModeSetting });
+    showToast(stableModeSetting
+      ? '已开启稳定下载模式：强制单线程单连接'
+      : '已关闭稳定下载模式');
+    if (currentQueue.length) renderQueue();
+  } catch (err) {
+    console.error('Failed to toggle stable mode:', err);
+  }
+}
+
 let localLogsList = [];
 let selectedLogFilename = '';
 
@@ -3581,6 +3602,8 @@ async function uploadSelectedLog() {
 window.runUstcSpeedTest = runUstcSpeedTest;
 window.checkNodeConnection = checkNodeConnection;
 window.toggleLogging = toggleLogging;
+window.toggleLowPowerMode = toggleLowPowerMode;
+window.toggleStableMode = toggleStableMode;
 window.openLogManagerModal = openLogManagerModal;
 window.closeLogManagerModal = closeLogManagerModal;
 window.viewLocalLogDetail = viewLocalLogDetail;
