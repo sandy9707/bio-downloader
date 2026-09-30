@@ -23,10 +23,12 @@
 
 | 平台 | 下载地址 | 说明 |
 |------|----------|------|
-| 🍎 **macOS** (Apple Silicon / Intel) | [下载 .dmg](https://biodown.yeyeziblog.eu.org/downloads/BioDownloader-1.4.6-arm64.dmg) | 双击打开后拖入「应用程序」文件夹 |
-| 🪟 **Windows** 64位 | [下载 .exe](https://biodown.yeyeziblog.eu.org/downloads/BioDownloader-1.4.6.exe) | 单文件免安装，双击直接运行 |
+| 🍎 **macOS** (Apple Silicon / arm64) | [下载 .dmg](https://github.com/sandy9707/bio-downloader/releases/latest/download/BioDownloader-latest-arm64.dmg) | 双击打开后拖入「应用程序」文件夹 |
+| 🪟 **Windows** 64位 | [下载 .exe](https://github.com/sandy9707/bio-downloader/releases/latest/download/BioDownloader-latest.exe) | 单文件免安装，双击直接运行 |
 
-> 也可以在 [GitHub Releases](https://github.com/sandy9707/bio-downloader/releases/latest) 页面下载最新版本。
+> 以上链接指向 GitHub 最新发布版本，也可以在 [GitHub Releases](https://github.com/sandy9707/bio-downloader/releases/latest) 页面选择下载文件。
+>
+> 当前 macOS 安装包仅支持 Apple Silicon（arm64），暂未提供 Intel Mac 安装包。
 
 ---
 

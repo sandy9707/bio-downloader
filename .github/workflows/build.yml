@@ -160,7 +160,7 @@ jobs:
 
             | 平台 | 文件 | 说明 |
             |------|------|------|
-            | 🍎 macOS (M1/M2/M3/M4/Intel) | `BioDownloader-*-arm64.dmg` | DMG 安装包 (双击打开后拖动到应用程序文件夹) |
+            | 🍎 macOS (Apple Silicon / arm64) | `BioDownloader-*-arm64.dmg` | 仅支持 Apple Silicon，暂未提供 Intel Mac 安装包；双击打开后拖动到应用程序文件夹 |
             | 🪟 Windows 64位 | `BioDownloader*.exe` | 绿色免安装版 (单文件免安装，双击直接运行) |
 
             ## 安装与运行步骤
