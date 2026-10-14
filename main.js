@@ -37,6 +37,12 @@ const app = electron.app || {
   quit: () => process.exit(0)
 };
 
+// Share the CLI's explicit data-directory override for isolated desktop checks.
+if (isElectron && process.env.BIODL_DATA_DIR) {
+  fs.mkdirSync(process.env.BIODL_DATA_DIR, { recursive: true });
+  app.setPath('userData', path.resolve(process.env.BIODL_DATA_DIR));
+}
+
 const ipcMain = electron.ipcMain || {
   handle: (channel, fn) => { headlessHandlers[channel] = fn; },
   on: (channel, fn) => { (headlessListeners[channel] = headlessListeners[channel] || []).push(fn); },
@@ -234,33 +240,14 @@ function ensureExecutable(filePath) {
 }
 
 const TRANSFERS_FILE = path.join(app.getPath('userData'), 'transfers.json');
+const transfersStore = require('./src/main/transfers-store').createTransfersStore(TRANSFERS_FILE);
 
 function getTransfersData() {
-  try {
-    if (fs.existsSync(TRANSFERS_FILE)) {
-      return JSON.parse(fs.readFileSync(TRANSFERS_FILE, 'utf8'));
-    }
-  } catch (e) {
-    console.error('Failed to read transfers.json:', e.message);
-  }
-  return { completed: [], failed: [] };
+  return transfersStore.read();
 }
 
 function saveTransfersData(data) {
-  try {
-    const current = getTransfersData();
-    const updated = {
-      completed: Array.isArray(data?.completed) ? data.completed : current.completed,
-      failed: Array.isArray(data?.failed) ? data.failed : current.failed
-    };
-    const tmp = TRANSFERS_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(updated, null, 2), 'utf8');
-    fs.renameSync(tmp, TRANSFERS_FILE);
-    return updated;
-  } catch (e) {
-    console.error('Failed to save transfers.json:', e.message);
-    return { completed: [], failed: [] };
-  }
+  return transfersStore.save(data);
 }
 
 ipcMain.handle('get-transfers-history', () => {
@@ -269,6 +256,10 @@ ipcMain.handle('get-transfers-history', () => {
 
 ipcMain.handle('save-transfers-history', (event, data) => {
   return saveTransfersData(data);
+});
+ipcMain.on('flush-transfers-history', (event, data) => {
+  try { saveTransfersData(data); event.returnValue = { success: true }; }
+  catch (e) { event.returnValue = { success: false, error: e.message }; }
 });
 
 // ==========================================
@@ -1806,6 +1797,10 @@ ipcMain.handle('check-for-updates', async (event, { advancedMode } = {}) => {
 
 ipcMain.handle('open-external-url', async (event, { url }) => {
   try {
+    const target = new URL(url);
+    if (!['https:', 'http:'].includes(target.protocol) || target.username || target.password) {
+      return { success: false, message: '仅支持打开 HTTP/HTTPS 网页链接' };
+    }
     await shell.openExternal(url);
     return { success: true };
   } catch (err) {
@@ -2543,6 +2538,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     let attempt = 0;
     let downloadSuccess = false;
     let lastErrorMsg = '';
+    let preservePartialFile = false;
 
     while (attempt < MAX_RETRIES && !downloadSuccess && !cancelled) {
       if (pausedAxelFiles.has(fileIndex)) break; // 重试间隙收到暂停请求:不再起新尝试,等待用户恢复
@@ -2578,12 +2574,10 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
         }
       }
 
-      if (attempt === 1 && fs.existsSync(savePath) && !fs.existsSync(savePath + '.st')) {
-        try {
-          fs.unlinkSync(savePath);
-        } catch (e) {
-          console.warn(`Failed to clean initial broken file ${savePath}:`, e.message);
-        }
+      if (attempt === 1 && fs.existsSync(savePath) && fs.statSync(savePath).size > 0 && !fs.existsSync(savePath + '.st')) {
+        preservePartialFile = true;
+        lastErrorMsg = '已有部分文件缺少 Axel 断点信息，已保留文件；请恢复 .st 文件或选择其他目录重新下载';
+        break;
       }
 
 async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, totalSize, logStream) {
@@ -3131,7 +3125,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
 
     // 所有 axel 重试均失败后,最后用 Node 保底引擎兜底一次(清除 axel 断点状态,从头下载)
     // 注意:用户暂停/取消的任务不走保底,否则暂停会被后台偷偷续跑
-    if (!downloadSuccess && !cancelled && lastErrorMsg !== 'Paused' && !pausedAxelFiles.has(fileIndex) && !cancelledFiles.has(fileIndex)) {
+    if (!downloadSuccess && !preservePartialFile && !cancelled && lastErrorMsg !== 'Paused' && !pausedAxelFiles.has(fileIndex) && !cancelledFiles.has(fileIndex)) {
       try {
         try { fs.unlinkSync(savePath + '.st'); } catch (e) {}
         console.warn(`All axel retries failed for ${file.name}, final fallback to Node engine.`);
@@ -3299,38 +3293,23 @@ ipcMain.handle('cancel-download', (event, fileIndex) => {
   }
 });
 
-// 挂起/恢复子进程(Unix 用 SIGSTOP/SIGCONT 原地冻结,进度与连接状态零丢失;
-// Windows 用系统自带 Suspend-Process/Resume-Process。实测 axel 的 .st 断点在信号终止时
-// 记录不完整会触发重复下载甚至卡死,故暂停绝不能杀进程,只能挂起)
-function pauseProcess(proc) {
-  if (!proc || proc.killed) return false;
-  try {
-    if (process.platform === 'win32') {
-      exec(`powershell -NoProfile -Command "Suspend-Process -Id ${proc.pid}"`, (err) => { if (err) console.warn('Suspend-Process failed:', err.message); });
-    } else {
-      process.kill(proc.pid, 'SIGSTOP');
-    }
-    return true;
-  } catch (e) { console.error('pauseProcess error:', e.message); return false; }
+// Confirm the operating-system pause/resume operation before updating the UI.
+const { controlProcess } = require('./src/main/process-control');
+async function pauseProcess(proc) {
+  try { return await controlProcess(proc, true); }
+  catch (e) { console.warn('暂停进程失败:', e.message); return false; }
 }
-
-function resumeProcess(proc) {
-  if (!proc || proc.killed) return false;
-  try {
-    if (process.platform === 'win32') {
-      exec(`powershell -NoProfile -Command "Resume-Process -Id ${proc.pid}"`, (err) => { if (err) console.warn('Resume-Process failed:', err.message); });
-    } else {
-      process.kill(proc.pid, 'SIGCONT');
-    }
-    return true;
-  } catch (e) { console.error('resumeProcess error:', e.message); return false; }
+async function resumeProcess(proc) {
+  try { return await controlProcess(proc, false); }
+  catch (e) { console.warn('恢复进程失败:', e.message); return false; }
 }
 
 // 暂停单个下载任务:挂起 axel 进程(原地冻结,断点/连接全保留);排队/重试间隙的任务打标记,由重试循环检查点退出
-ipcMain.handle('pause-download', (event, fileIndex) => {
+ipcMain.handle('pause-download', async (event, fileIndex) => {
   if (cancelledFiles.has(fileIndex)) return { success: false, error: '该任务正在取消' };
   const proc = activeAxelProcesses.get(fileIndex);
-  if (proc && !proc.killed && pauseProcess(proc)) {
+  if (proc && !proc.killed) {
+    if (!(await pauseProcess(proc))) return { success:false, error:'无法暂停下载进程，请重试' };
     pausedAxelFiles.add(fileIndex);
     return { success: true, suspended: true };
   }
@@ -3340,11 +3319,11 @@ ipcMain.handle('pause-download', (event, fileIndex) => {
 });
 
 // 恢复单个下载任务:优先唤醒被挂起的进程(原任务原地继续);无挂起进程时由渲染层重新发起下载走断点续传
-ipcMain.handle('resume-download', (event, fileIndex) => {
+ipcMain.handle('resume-download', async (event, fileIndex) => {
   const proc = activeAxelProcesses.get(fileIndex);
   if (proc && !proc.killed) {
+    if (!(await resumeProcess(proc))) return { success:false, error:'无法恢复下载进程，请重试' };
     pausedAxelFiles.delete(fileIndex);
-    resumeProcess(proc);
     return { success: true, resumed: true };
   }
   pausedAxelFiles.delete(fileIndex);
@@ -3867,6 +3846,8 @@ async function streamDownloadToDisk({ id, url, name, headers, cookie, saveDir, s
   const crTotal = contentRange.match(/\/(\d+)\s*$/);
   const total = (crTotal ? parseInt(crTotal[1], 10) : (parseInt(response.headers['content-length'] || '0', 10) + start)) || (sizeHint || 0);
 
+  sendExtraction({ type: 'download', id, status: 'progress', name: finalName, saveDir: dir, received: start, total });
+
   const writer = fs.createWriteStream(savePath, { flags: resumed ? 'a' : 'w' });
   return await new Promise((resolve, reject) => {
     let downloaded = start, lastB = start, timer = null, firstChunk = true, done = false;
@@ -3912,11 +3893,11 @@ async function streamDownloadToDisk({ id, url, name, headers, cookie, saveDir, s
 }
 
 // 统一入口:把一个资源(拦截/嗅探点击/代码框解析)交给下载引擎,并回传传输列表
-async function runExtractionDownload({ url, name, headers, cookie, saveDir, size }, jobTitle) {
+async function runExtractionDownload({ url, name, headers, cookie, saveDir, size, replacesId }, jobTitle) {
   const id = 'ex' + (extractionJobSeq++);
   const dir = saveDir || app.getPath('downloads');
   const cookieStr = cookie || (await cookiesForUrl(url));
-  sendExtraction({ type: 'download', id, status: 'started', url, name: name || fileNameFromUrl(url), size: size || 0, title: jobTitle || '' });
+  sendExtraction({ type: 'download', id, status: 'started', url, name: name || fileNameFromUrl(url), size: size || 0, saveDir: dir, replacesId, title: jobTitle || '' });
   try {
     // NCBI 会话式链接 → efetch 分页下载(逐页重试 + 记录数完整性校验)
     if (isSessionBoundNcbiLink(url) && queryParam(url, 'query_key') && extractCookieValue(cookieStr, 'WebEnv')) {
@@ -3970,7 +3951,7 @@ async function downloadBroadConfig(code, saveDir) {
     const j = jobs[i];
     const id = 'ex' + (extractionJobSeq++);
     const nm = j.name || fileNameFromUrl(j.url);
-    sendExtraction({ type: 'download', id, status: 'started', url: j.url, name: nm, size: 0, title: `Broad ${i + 1}/${jobs.length}` });
+    sendExtraction({ type: 'download', id, status: 'started', url: j.url, name: nm, size: 0, saveDir: dir, title: `Broad ${i + 1}/${jobs.length}` });
     try {
       results.push(await streamDownloadToDisk({ id, url: j.url, name: nm, headers: {}, cookie, saveDir: dir, sizeHint: 0 }));
     } catch (e) {
@@ -4006,7 +3987,7 @@ function setupExtractionBrowser() {
     const saveDir = saved.defaultDir || app.getPath('downloads');
     const savePath = path.join(saveDir, sanitizePathSegment(name) || ('download_' + Date.now()));
     try { item.setSavePath(savePath); } catch (e) { writeClashLog('[will-download] setSavePath err: ' + e.message); }
-    sendExtraction({ type: 'download', id, status: 'started', url, name, size, title: '网页拦截' });
+    sendExtraction({ type: 'download', id, status: 'started', url, name, size, saveDir, title: '网页拦截' });
 
     item.on('updated', () => {
       try {
@@ -4108,8 +4089,8 @@ ipcMain.handle('extraction-cancel', (event, { id }) => {
   // NCBI 分页下载无 AbortController:标记位会在每页循环开头被检查;这里不删除标记,由任务结束时清理
   return { success: true };
 });
-ipcMain.handle('extraction-download', async (event, { url, name, headers, cookie, saveDir, size }) => {
-  return await runExtractionDownload({ url, name, headers: headers || {}, cookie, saveDir, size }, '嗅探下载');
+ipcMain.handle('extraction-download', async (event, { url, name, headers, cookie, saveDir, size, replacesId }) => {
+  return await runExtractionDownload({ url, name, headers: headers || {}, cookie, saveDir, size, replacesId }, '嗅探下载');
 });
 ipcMain.handle('extraction-run-code', async (event, { code, saveDir }) => {
   const dir = saveDir || app.getPath('downloads');

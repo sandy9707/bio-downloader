@@ -124,7 +124,8 @@
     linuxSelfUpdate: (opts) => ({ channel: 'linux-self-update', payload: opts }),
 
     getTransfersHistory: 'get-transfers-history',
-    saveTransfersHistory: (data) => ({ channel: 'save-transfers-history', payload: data })
+    saveTransfersHistory: (data) => ({ channel: 'save-transfers-history', payload: data }),
+    flushTransfersHistory: (data) => ({ channel: 'save-transfers-history', payload: data })
   };
 
   async function invokeRpc(channel, payload) {

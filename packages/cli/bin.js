@@ -6,7 +6,7 @@ const path = require('path');
 const https = require('https');
 const readline = require('readline');
 
-const SERVER_VERSION = '2.0.42-preview.1';
+const SERVER_VERSION = '2.0.43';
 process.env.BIODL_SERVER_VERSION = SERVER_VERSION;
 const main = require('../../main');
 

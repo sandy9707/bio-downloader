@@ -130,6 +130,10 @@ document.addEventListener('keydown', (e) => {
 
 // 初始化加载 settings 和验证登录
 window.addEventListener('DOMContentLoaded', async () => {
+  // Local history must be available even while authentication is offline or slow.
+  let settings = {};
+  try { settings = await window.api.getSettings() || {}; } catch (e) { console.warn('读取设置失败:', e.message); }
+  await initTransfersAndSettings(settings);
   renderLocalDownloadSources();
   // 初始化登录/注册表单显示状态
   switchAuthTab('login');
@@ -165,7 +169,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 
   // 1. 获取本地设置
-  const settings = await window.api.getSettings();
   if (settings.defaultDir) {
     defaultDir = settings.defaultDir;
     document.getElementById('targetDirInput').value = defaultDir;
@@ -183,8 +186,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   loadPackages();
   updateCheckinButton();
 
-  // 4. 初始化传输中心历史记录与并发限制
-  await initTransfersAndSettings(settings);
 
   // 4.5 恢复高级模式开关状态
   const advToggle = document.getElementById('settingsAdvancedModeToggle');
@@ -323,11 +324,35 @@ function switchTab(tabId) {
     'settings-tab': '全局设置'
   };
   document.getElementById('tabTitle').innerText = titles[tabId] || '下载中心';
-  if (tabId === 'cloud-tab') syncCloudWorkspaceLogin();
+  if (tabId === 'cloud-tab') {
+    const guest = document.getElementById('cloudWorkspaceWebview') || document.getElementById('cloudWorkspaceFrame');
+    if (guest && !guest.dataset.started) requestAnimationFrame(reloadCloudWorkspace);
+    else syncCloudWorkspaceLogin();
+  }
   if (tabId === 'plugins-tab') refreshPluginsList();
 }
 
 // 云下载只维护官网一套实现；Electron 用 webview，Linux Web 用 iframe + postMessage。
+let cloudWorkspaceTimer;
+function cloudWorkspaceState(state, message) {
+  const status = document.getElementById('cloudWorkspaceStatus');
+  if (!status) return;
+  clearTimeout(cloudWorkspaceTimer);
+  status.dataset.state = state;
+  status.textContent = message || ({ loading:'正在加载云下载…', ready:'云下载已连接', error:'云下载加载失败，请重试或在浏览器打开。' }[state]);
+  if (state === 'loading') cloudWorkspaceTimer = setTimeout(() => cloudWorkspaceState('error', '云下载加载超时，请重试或在浏览器打开。'), 20000);
+}
+function reloadCloudWorkspace() {
+  const guest = document.getElementById('cloudWorkspaceWebview') || document.getElementById('cloudWorkspaceFrame');
+  if (!guest) return;
+  cloudWorkspaceState('loading');
+  guest.dataset.started = 'true';
+  guest.setAttribute('src', guest.dataset.src);
+}
+function openCloudWorkspaceInBrowser() {
+  const guest = document.getElementById('cloudWorkspaceWebview') || document.getElementById('cloudWorkspaceFrame');
+  if (guest) window.api.openExternalUrl(guest.dataset.src.replace('?embed=cloud', ''));
+}
 async function syncCloudWorkspaceLogin() {
   const webview = document.getElementById('cloudWorkspaceWebview');
   const frame = document.getElementById('cloudWorkspaceFrame');
@@ -341,18 +366,47 @@ async function syncCloudWorkspaceLogin() {
     return;
   }
   if (!webview || typeof webview.executeJavaScript !== 'function') return;
+  // Never inject an account token after the guest has navigated off our page.
+  try { if (new URL(webview.getURL()).origin !== new URL(webview.dataset.src).origin) return; } catch (_) { return; }
   const token = JSON.stringify(currentUser.token);
   try {
     const changed = await webview.executeJavaScript(`(() => { const next=${token}; if (localStorage.getItem('bd_token') === next) return false; localStorage.setItem('bd_token', next); return true; })()`);
     if (changed) webview.reload();
-  } catch (e) { console.warn('云下载登录状态同步失败:', e.message); }
+  } catch (e) { cloudWorkspaceState('error', '云下载登录同步失败，请重新加载。'); }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   const webview = document.getElementById('cloudWorkspaceWebview');
-  if (webview) webview.addEventListener('dom-ready', syncCloudWorkspaceLogin);
+  if (webview) {
+    webview.addEventListener('dom-ready', syncCloudWorkspaceLogin);
+    webview.addEventListener('did-start-loading', () => cloudWorkspaceState('loading'));
+    webview.addEventListener('did-fail-load', (event) => {
+      if (event.isMainFrame && event.errorCode !== -3) cloudWorkspaceState('error', `云下载页面加载失败（${event.errorCode}），请重试或在浏览器打开。`);
+    });
+    webview.addEventListener('render-process-gone', () => cloudWorkspaceState('error'));
+    webview.addEventListener('ipc-message', async (event) => {
+      try { if (new URL(webview.getURL()).origin !== new URL(webview.dataset.src).origin) return; } catch (_) { return; }
+      if (event.channel === 'biodl-cloud-state') cloudWorkspaceState(event.args[0] === 'ready' ? 'ready' : 'error');
+      if (event.channel === 'biodl-cloud-open-external') {
+        try {
+          const url = new URL(event.args[0]);
+          if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return;
+          const result = await window.api.openExternalUrl(url.href);
+          if (result && result.success === false) showToast('打开失败，请复制分享链接到浏览器。', 'error');
+        } catch (_) { showToast('打开失败，请复制分享链接到浏览器。', 'error'); }
+      }
+    });
+  }
   const frame = document.getElementById('cloudWorkspaceFrame');
-  if (frame) frame.addEventListener('load', syncCloudWorkspaceLogin);
+  if (frame) {
+    frame.addEventListener('load', syncCloudWorkspaceLogin);
+    window.addEventListener('message', (event) => {
+      if (event.source !== frame.contentWindow || event.origin !== new URL(frame.dataset.src).origin) return;
+      if (event.data?.type === 'biodl-cloud-state') cloudWorkspaceState(event.data.status === 'ready' ? 'ready' : 'error');
+    });
+  }
+  // Attach the guest only after the cloud tab is visible. Hidden webviews can
+  // remain blank until navigation is restarted after attachment.
 });
 
 function toggleMoreMenu(e) {
@@ -1166,6 +1220,7 @@ async function startDownload() {
   // 初始化传输任务属性与正在下载队列
   currentQueue.forEach((file, index) => {
     file.originalIndex = index;
+    file.targetDir = defaultDir;
     file.percentage = 0;
     file.status = 'waiting';
     file.speed = '排队中...';
@@ -2353,6 +2408,7 @@ async function downloadSingle(index) {
 
   // 初始化属性
   file.originalIndex = index;
+  file.targetDir = defaultDir;
   file.percentage = 0;
   file.status = 'waiting';
   file.speed = '排队中...';
@@ -2494,6 +2550,7 @@ function switchTransferSubTab(subTab) {
 }
 
 function updateTransferCounts() {
+  syncTransfersToStorage();
   const downloadingCount = activeDownloads.length + Object.keys(extractionJobs).length;
   const downloadingCountEl = document.getElementById('downloadingCount');
   const completedCountEl = document.getElementById('completedCount');
@@ -2937,71 +2994,73 @@ function clearFailedDownloads() {
   openDeleteTransferModal({ category: 'all_failed' });
 }
 
+let transferConnectionPromise = null;
+let nextTransferId = Date.now();
+const resumingTransferIds = new Set();
+const resumingExtractionIds = new Set();
+function allocateTransferId() {
+  while (activeDownloads.some(t => t.originalIndex === nextTransferId)) nextTransferId++;
+  return nextTransferId++;
+}
+async function ensureTransferConnection() {
+  if (!currentUser || !currentUser.token) {
+    showToast('请登录账户后继续下载', 'error');
+    switchTab('profile-tab');
+    return false;
+  }
+  if (!transferConnectionPromise) {
+    transferConnectionPromise = (async () => {
+      if (!(await window.api.getClashStatus())) await window.api.startClash(currentUser.token);
+      return true;
+    })().catch(error => { showToast('无法建立下载加速连接：' + error.message, 'error'); return false; })
+      .finally(() => { transferConnectionPromise = null; });
+  }
+  return transferConnectionPromise;
+}
+
 async function retryFailedDownload(index) {
   const item = failedDownloads[index];
-  if (!item) return;
-
-  failedDownloads.splice(index, 1);
-  syncTransfersToStorage();
+  if (!item || !(await ensureTransferConnection())) return;
+  const oldFile = item.fileObj || {};
+  const dir = oldFile.targetDir || item.targetDir || item.saveDir || defaultDir;
+  if (!dir) return showToast('请先选择下载保存目录', 'error');
+  const position = failedDownloads.indexOf(item);
+  if (position < 0) return; // A second click must not queue the same failed record twice.
+  failedDownloads.splice(position, 1);
   renderFailedList();
-  updateTransferCounts();
-
-  showToast(`正在重新启动任务: ${item.name}...`);
-  const fileObj = item.fileObj || {
-    name: item.name,
-    url: item.url,
-    size: item.size,
-    folder: item.folder,
-    type: item.type || 'direct',
-    originalIndex: item.originalIndex || Date.now()
-  };
-
-  activeDownloads.push(fileObj);
-  renderDownloadingList();
-  updateTransferCounts();
   switchTransferSubTab('downloading');
-
-  const defaultDir = document.getElementById('targetDirInput').value.trim();
-  try {
-    await window.api.startDownload([fileObj], defaultDir, currentUser.token, maxConcurrentDownloadsSetting);
-  } catch (e) {
-    showToast(e.message, 'error');
+  if (item.type === 'extraction') {
+    updateTransferCounts();
+    try {
+      const result = await window.api.extractionDownload({ url:item.url, name:item.name, saveDir:dir, size:item.size });
+      if (result && result.success === false) showToast(result.error || '重试失败，请查看失败列表', 'error');
+    } catch (error) {
+      failedDownloads.unshift(item); renderFailedList(); updateTransferCounts();
+      showToast(error.message, 'error');
+    }
+    return;
+  }
+  const file = { ...item, ...oldFile, name:oldFile.name || item.name, url:oldFile.url || item.url,
+    originalIndex:allocateTransferId(), targetDir:dir, status:'waiting', speed:'准备重试...' };
+  activeDownloads.push(file);
+  renderDownloadingList(); updateTransferCounts();
+  try { await window.api.startDownload([file], dir, currentUser.token, maxConcurrentDownloadsSetting); }
+  catch (error) {
+    file.status='paused'; file.speed=''; renderDownloadingList(); updateTransferCounts();
+    showToast('启动失败，任务已保留：' + error.message, 'error');
   }
 }
 
 async function retryAllFailedDownloads() {
-  if (failedDownloads.length === 0) return;
-  const listToRetry = [...failedDownloads];
-  failedDownloads = [];
-  syncTransfersToStorage();
-  renderFailedList();
-  updateTransferCounts();
-
-  showToast(`正在批量重试 ${listToRetry.length} 个失败任务...`);
-  switchTransferSubTab('downloading');
-
-  const filesToDownload = [];
-  for (const item of listToRetry) {
-    const fileObj = item.fileObj || {
-      name: item.name,
-      url: item.url,
-      size: item.size,
-      folder: item.folder,
-      type: item.type || 'direct',
-      originalIndex: item.originalIndex || Date.now()
-    };
-    activeDownloads.push(fileObj);
-    filesToDownload.push(fileObj);
+  if (!failedDownloads.length || !(await ensureTransferConnection())) return;
+  const queue = [...failedDownloads];
+  async function worker() {
+    while (queue.length) {
+      const item=queue.shift(), index=failedDownloads.indexOf(item);
+      if (index >= 0) await retryFailedDownload(index);
+    }
   }
-  renderDownloadingList();
-  updateTransferCounts();
-
-  const defaultDir = document.getElementById('targetDirInput').value.trim();
-  try {
-    await window.api.startDownload(filesToDownload, defaultDir, currentUser.token, maxConcurrentDownloadsSetting);
-  } catch (e) {
-    showToast(e.message, 'error');
-  }
+  await Promise.all(Array.from({length:Math.min(maxConcurrentDownloadsSetting || 3, queue.length)}, worker));
 }
 
 function cancelSingleDownload(fileId) {
@@ -3034,11 +3093,18 @@ async function pauseSingleDownload(fileId) {
 
 // 恢复单个已暂停任务:优先唤醒被挂起的进程(原地继续);无挂起进程时重新发起下载走断点续传
 async function resumeSingleDownload(fileId) {
+  if (resumingTransferIds.has(fileId)) return;
+  resumingTransferIds.add(fileId);
+  try { await resumeTransferFile(fileId); }
+  finally { resumingTransferIds.delete(fileId); }
+}
+async function resumeTransferFile(fileId) {
   const file = activeDownloads.find(d => d.originalIndex === fileId);
   if (!file) return;
   if (file.status !== 'paused') return;
   try {
     const r = await window.api.resumeDownload(fileId);
+    if (r && r.success === false) { showToast(r.error || '恢复失败，任务已保留', 'error'); return; }
     if (r && r.resumed) {
       file.status = 'downloading';
       file.speed = '恢复中...';
@@ -3047,17 +3113,18 @@ async function resumeSingleDownload(fileId) {
       showToast(`已恢复 ${file.name}`, 'success');
       return;
     }
-  } catch (e) { /* 落入下方"重新发起"路径 */ }
+  } catch (e) { showToast('恢复失败，任务已保留：' + e.message, 'error'); return; }
   if (!currentUser) {
     showToast('请登录账户后恢复下载', 'error');
     switchTab('profile-tab');
     return;
   }
-  const dir = defaultDir || (document.getElementById('targetDirInput') ? document.getElementById('targetDirInput').value.trim() : '');
+  const dir = file.targetDir || defaultDir || (document.getElementById('targetDirInput') ? document.getElementById('targetDirInput').value.trim() : '');
   if (!dir) {
     showToast('请先选择下载的保存目标路径', 'error');
     return;
   }
+  if (!(await ensureTransferConnection())) return;
   file.status = 'waiting';
   file.speed = '准备恢复...';
   renderDownloadingList();
@@ -3066,7 +3133,9 @@ async function resumeSingleDownload(fileId) {
   try {
     await window.api.startDownload([{ name: file.name, url: file.url, size: file.size || 0, folder: file.folder, type: file.type, originalIndex: file.originalIndex }], dir, currentUser.token, maxConcurrentDownloadsSetting);
   } catch (e) {
-    showToast(e.message, 'error');
+    file.status = 'paused'; file.speed = '';
+    renderDownloadingList(); updateTransferCounts();
+    showToast('启动失败，任务已保留：' + e.message, 'error');
   }
 }
 
@@ -3142,46 +3211,91 @@ async function changeMaxConcurrent(val) {
   }
 }
 
-// 物理同步保存传输历史数据 (transfers.json)
-function syncTransfersToStorage() {
-  try {
-    localStorage.setItem('completed_downloads', JSON.stringify(completedDownloads));
-    localStorage.setItem('failed_downloads', JSON.stringify(failedDownloads));
-  } catch (e) {}
+// Persist every transfer category, independently of the current login/network state.
+let transfersReady = false;
+let transferSaveTimer = null;
+let lastTransferSnapshot = '';
+let transferSaveErrorShown = false;
 
+function transferSnapshot() {
+  return {
+    version: 2,
+    completed: completedDownloads,
+    failed: failedDownloads,
+    active: activeDownloads.filter(t => !t.isUpdate).map(t => ({ ...t, targetDir: t.targetDir || defaultDir })),
+    extraction: Object.values(extractionJobs).map(t => ({ ...t, saveDir: t.saveDir || defaultDir }))
+  };
+}
+
+function syncTransfersToStorage() {
+  if (!transfersReady) return;
+  clearTimeout(transferSaveTimer); transferSaveTimer = null;
+  const snapshot = transferSnapshot();
+  const serialized = JSON.stringify(snapshot);
+  if (serialized === lastTransferSnapshot) return;
+  lastTransferSnapshot = serialized;
+  try { localStorage.setItem('transfer_history_v2', serialized); } catch (_) {}
   if (window.api && window.api.saveTransfersHistory) {
-    window.api.saveTransfersHistory({
-      completed: completedDownloads,
-      failed: failedDownloads
-    }).catch(err => console.error('Failed to sync transfers to physical file:', err));
+    window.api.saveTransfersHistory(snapshot).catch(err => {
+      lastTransferSnapshot = '';
+      console.error('保存传输记录失败:', err.message);
+      if (!transferSaveErrorShown) {
+        transferSaveErrorShown = true;
+        showToast('传输记录保存失败，请检查数据目录权限或剩余空间', 'error');
+      }
+    });
   }
 }
 
-// 载入已下载历史与并发数
-async function initTransfersAndSettings(settings) {
-  // 1. 优先从主进程物理 transfers.json 载入历史记录, 兜底读取 localStorage
-  try {
-    let loadedFromDisk = false;
-    if (window.api && window.api.getTransfersHistory) {
-      const history = await window.api.getTransfersHistory();
-      if (history && (Array.isArray(history.completed) || Array.isArray(history.failed))) {
-        completedDownloads = Array.isArray(history.completed) ? history.completed : [];
-        failedDownloads = Array.isArray(history.failed) ? history.failed : [];
-        loadedFromDisk = completedDownloads.length > 0 || failedDownloads.length > 0;
-      }
-    }
+function scheduleTransferSave() {
+  if (transfersReady && !transferSaveTimer) transferSaveTimer = setTimeout(syncTransfersToStorage, 1000);
+}
 
-    if (!loadedFromDisk) {
-      const storedCompleted = localStorage.getItem('completed_downloads');
-      if (storedCompleted) completedDownloads = JSON.parse(storedCompleted);
-      const storedFailed = localStorage.getItem('failed_downloads');
-      if (storedFailed) failedDownloads = JSON.parse(storedFailed);
-      // 迁移写入物理文件
-      syncTransfersToStorage();
-    }
-  } catch (e) {
-    console.error('Failed to load transfer histories:', e);
+window.addEventListener('beforeunload', () => {
+  if (!transfersReady) return;
+  syncTransfersToStorage();
+  // Electron waits for this synchronous acknowledgement before destroying the renderer.
+  try {
+    const result = window.api.flushTransfersHistory(transferSnapshot());
+    if (result && typeof result.catch === 'function') result.catch(() => {});
+  } catch (_) {}
+});
+
+async function loadTransferHistory(settings = {}) {
+  if (transfersReady) return;
+  let history;
+  try {
+    if (window.api && window.api.getTransfersHistory) history = await window.api.getTransfersHistory();
+  } catch (e) { console.error('读取传输记录失败:', e.message); }
+  // An existing empty file is authoritative: clearing history must not resurrect old localStorage data.
+  if (!history || history.exists === false || (history.legacy && !history.completed.length && !history.failed.length && !history.active.length && !history.extraction.length)) {
+    try {
+      const cached = localStorage.getItem('transfer_history_v2');
+      history = cached ? JSON.parse(cached) : {
+        completed: JSON.parse(localStorage.getItem('completed_downloads') || '[]'),
+        failed: JSON.parse(localStorage.getItem('failed_downloads') || '[]')
+      };
+    } catch (e) { console.error('读取备用传输记录失败:', e.message); }
   }
+  const entries = key => Array.isArray(history && history[key]) ? history[key].filter(t => t && typeof t === 'object') : [];
+  completedDownloads = entries('completed');
+  failedDownloads = entries('failed');
+  // Old process handles no longer exist. Restore unfinished work as paused without charging or starting it.
+  const firstId = Date.now();
+  activeDownloads = entries('active').filter(t => !t.isUpdate && !['completed','failed','cancelled'].includes(t.status)).map((t, i) => ({
+    ...t, originalIndex: firstId + i, status: 'paused', speed: '',
+    targetDir: t.targetDir || settings.defaultDir || '', restored: true
+  }));
+  extractionJobs = Object.fromEntries(entries('extraction').map((t, i) => {
+    const id = 'restored-' + firstId + '-' + i;
+    return [id, { ...t, id, paused: true, speed: '', saveDir: t.saveDir || settings.defaultDir || '', restored: true }];
+  }));
+  transfersReady = true;
+}
+
+// 载入历史与并发数
+async function initTransfersAndSettings(settings) {
+  await loadTransferHistory(settings || {});
 
   // 2. 载入并发数量设置
   if (settings && settings.maxConcurrent) {
@@ -3207,6 +3321,7 @@ async function initTransfersAndSettings(settings) {
   renderCompletedList();
   renderFailedList();
   renderDownloadingList();
+  renderExtractionTransferCards();
   updateTransferCounts();
 }
 
@@ -3266,11 +3381,9 @@ window.api.onDownloadStatus((data) => {
         skip: (data.speed && data.speed.includes('跳过')),
         folder: activeItem.folder,
         type: activeItem.type,
-        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex }
+        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir }
       };
       completedDownloads.unshift(completedItem);
-      syncTransfersToStorage();
-      
       activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
       renderCompletedList();
       renderDownloadingList();
@@ -3284,11 +3397,9 @@ window.api.onDownloadStatus((data) => {
         originalIndex: activeItem.originalIndex,
         folder: activeItem.folder,
         type: activeItem.type,
-        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex }
+        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir }
       };
       failedDownloads.unshift(failedItem);
-      syncTransfersToStorage();
-      
       activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
       renderFailedList();
       renderDownloadingList();
@@ -3367,6 +3478,7 @@ window.api.onDownloadProgress((data) => {
       etaEl.innerText = computeEta(totalSize > 0 ? totalSize - receivedSize : 0, activeItem.speed);
     }
     updateGlobalTotalSpeed();
+    scheduleTransferSave();
   }
 });
 
@@ -3821,7 +3933,8 @@ function handleExtractionEvent(d) {
 function handleExtractionDownload(d) {
   const id = d.id;
   if (d.status === 'started') {
-    extractionJobs[id] = { id, name: d.name || '下载', url: d.url || '', size: d.size || 0, received: 0, total: d.size || 0, percentage: 0, speed: '连接中…', eta: '', title: d.title || '', paused: false };
+    if (d.replacesId) delete extractionJobs[d.replacesId];
+    extractionJobs[id] = { id, name: d.name || '下载', url: d.url || '', size: d.size || 0, received: 0, total: d.size || 0, percentage: 0, speed: '连接中…', eta: '', title: d.title || '', saveDir: d.saveDir || defaultDir, paused: false };
     renderExtractionTransferCards();
     updateTransferCounts();
     return;
@@ -3839,6 +3952,7 @@ function handleExtractionDownload(d) {
     if (d.percentage != null) j.percentage = d.percentage;
     if (d.speed) j.speed = d.speed;
     if (d.name) j.name = d.name;
+    if (d.saveDir) j.saveDir = d.saveDir;
     if (d.received != null) j.received = d.received;
     if (d.total != null) j.total = d.total;
     j.eta = (d.speedBps > 0 && j.total > 0 && j.received < j.total) ? formatEta((j.total - j.received) / d.speedBps) : '';
@@ -3850,12 +3964,12 @@ function handleExtractionDownload(d) {
     if (sz) sz.innerText = j.total > 0 ? `${formatBytes(j.received)} / ${formatBytes(j.total)}` : formatBytes(j.received || 0);
     const st = document.getElementById('ex-status-' + id); if (st) st.innerText = '引导式提取 · 下载中';
     updateGlobalTotalSpeed();
+    scheduleTransferSave();
     return;
   }
   if (d.status === 'completed') {
     const rec = { name: d.name || (j && j.name) || '下载', url: (j && j.url) || '', size: d.size || (j && j.size) || 0, savePath: d.savePath || '', completedAt: new Date().toLocaleString(), skip: false, folder: '', type: 'extraction', fileObj: {} };
     completedDownloads.unshift(rec);
-    syncTransfersToStorage();
     delete extractionJobs[id];
     const card = document.getElementById('ex-card-' + id); if (card) card.remove();
     renderCompletedList(); renderExtractionTransferCards(); updateTransferCounts();
@@ -3877,9 +3991,8 @@ function handleExtractionDownload(d) {
       const card = document.getElementById('ex-card-' + id); if (card) card.remove();
       return;
     }
-    const rec = { name: (j && j.name) || '下载', url: (j && j.url) || '', size: (j && j.size) || 0, failedReason: d.message || '下载失败', failedAt: new Date().toLocaleString(), folder: '', type: 'extraction', fileObj: {} };
+    const rec = { name: (j && j.name) || '下载', url: (j && j.url) || '', size: (j && j.size) || 0, failedReason: d.message || '下载失败', failedAt: new Date().toLocaleString(), saveDir: j.saveDir, folder: '', type: 'extraction', fileObj: {} };
     failedDownloads.unshift(rec);
-    syncTransfersToStorage();
     delete extractionJobs[id];
     const card = document.getElementById('ex-card-' + id); if (card) card.remove();
     renderFailedList(); renderExtractionTransferCards(); updateTransferCounts();
@@ -3955,6 +4068,12 @@ async function pauseExtractionDownload(id) {
   }
 }
 async function resumeExtractionDownload(id) {
+  if (resumingExtractionIds.has(id)) return;
+  resumingExtractionIds.add(id);
+  try { await resumeExtractionJob(id); }
+  finally { resumingExtractionIds.delete(id); }
+}
+async function resumeExtractionJob(id) {
   const j = extractionJobs[id];
   if (!j) return;
   if (!j.paused) { pauseExtractionDownload(id); return; }
@@ -3970,16 +4089,13 @@ async function resumeExtractionDownload(id) {
       return;
     }
   } catch (e) {}
-  // axios 流式暂停(连接已断开):重新发起下载,自动 Range 断点续传
+  // Restore the same acceleration path after restarting the application.
+  if (!(await ensureTransferConnection())) return;
   const url = j.url, name = j.name;
-  delete extractionJobs[id];
-  const card = document.getElementById('ex-card-' + id); if (card) card.remove();
-  renderExtractionTransferCards();
-  updateTransferCounts();
   if (url) {
     try {
-      await window.api.extractionDownload({ url, name, saveDir: defaultDir });
-      showToast('已恢复下载(断点续传)', 'success');
+      const result = await window.api.extractionDownload({ url, name, saveDir: j.saveDir || defaultDir, size: j.total || j.size, replacesId: id });
+      if (result && result.success === false) throw new Error(result.error || '下载未完成，请查看传输列表');
     } catch (e) {
       showToast('恢复失败: ' + e.message, 'error');
     }

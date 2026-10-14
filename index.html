@@ -1478,7 +1478,12 @@
 
     <!-- VIEW: 云下载（复用线上同一套模块，避免桌面端/网页端双份维护） -->
     <div class="tab-view" id="cloud-tab">
-      <webview id="cloudWorkspaceWebview" src="https://biodown.ye.aimeals.cn/user/cloud?embed=cloud" partition="persist:biodl-cloud" style="width:100%;height:calc(100vh - 115px);border:0;border-radius:12px;background:#f7f8fc;"></webview>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+        <span id="cloudWorkspaceStatus" role="status" style="flex:1;">正在加载云下载…</span>
+        <button class="btn btn-secondary" onclick="reloadCloudWorkspace()">重新加载</button>
+        <button class="btn btn-secondary" onclick="openCloudWorkspaceInBrowser()">在浏览器打开</button>
+      </div>
+      <webview id="cloudWorkspaceWebview" data-src="https://biodown.ye.aimeals.cn/user/cloud?embed=cloud" partition="persist:biodl-cloud" preload="./cloud-preload.js" style="width:100%;height:calc(100vh - 160px);border:0;border-radius:12px;background:#f7f8fc;"></webview>
     </div>
 
     <!-- VIEW: 我的 (个人中心与设置) -->

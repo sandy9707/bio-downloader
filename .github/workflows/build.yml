@@ -22,13 +22,16 @@ jobs:
           node-version: '20'
 
       - name: 安装依赖
-        run: npm install
+        run: npm ci
 
       - name: 给二进制文件添加执行权限
         run: |
           chmod +x bin/darwin/mihomo_aarch64
           chmod +x bin/darwin/mihomo_x86_64
           chmod +x bin/darwin/axel
+
+      - name: 传输记录、恢复和操作系统暂停回归
+        run: npm test
 
       - name: 依据 Git Tag 同步 package.json 版本号
         run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
@@ -69,7 +72,10 @@ jobs:
           node-version: '20'
 
       - name: 安装 npm 依赖
-        run: npm install
+        run: npm ci
+
+      - name: 传输记录、恢复和操作系统暂停回归
+        run: npm test
 
       - name: 依据 Git Tag 同步 package.json 版本号
         run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
@@ -144,7 +150,7 @@ jobs:
 
             | 平台 | 文件 | 说明 |
             |------|------|------|
-            | 🍎 macOS (M1/M2/M3/M4/Intel) | `BioDownloader-*-arm64.dmg` | DMG 安装包 (双击打开后拖动到应用程序文件夹) |
+            | 🍎 macOS (Apple Silicon) | `BioDownloader-*-arm64.dmg` | DMG 安装包 (双击打开后拖动到应用程序文件夹) |
             | 🪟 Windows 64位 | `BioDownloader-Setup-*.exe` | 按用户安装版，支持自选目录并创建桌面快捷方式 |
 
             ## 安装与运行步骤

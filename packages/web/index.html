@@ -1478,7 +1478,12 @@
 
     <!-- VIEW: 云下载（浏览器使用 iframe，Token 通过 URL fragment 传递，不进入服务端日志） -->
     <div class="tab-view" id="cloud-tab">
-      <iframe id="cloudWorkspaceFrame" src="https://biodown.ye.aimeals.cn/user/cloud?embed=cloud" allow="clipboard-write" style="width:100%;height:calc(100vh - 115px);border:0;border-radius:12px;background:#f7f8fc;"></iframe>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+        <span id="cloudWorkspaceStatus" role="status" style="flex:1;">正在加载云下载…</span>
+        <button class="btn btn-secondary" onclick="reloadCloudWorkspace()">重新加载</button>
+        <button class="btn btn-secondary" onclick="openCloudWorkspaceInBrowser()">在浏览器打开</button>
+      </div>
+      <iframe id="cloudWorkspaceFrame" data-src="https://biodown.ye.aimeals.cn/user/cloud?embed=cloud" allow="clipboard-write" style="width:100%;height:calc(100vh - 160px);border:0;border-radius:12px;background:#f7f8fc;"></iframe>
     </div>
 
     <!-- VIEW: 我的 (个人中心与设置) -->

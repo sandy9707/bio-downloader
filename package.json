@@ -1,11 +1,11 @@
 {
   "name": "bio-downloader",
-  "version": "2.0.42-preview.1",
+  "version": "2.0.43",
   "description": "Commercial Biology Raw Data Downloader Desktop Client",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node scripts/check-shared-sources.js && node scripts/check-web-bridge-contract.js && node scripts/check-linux-cli-contract.js",
+    "test": "node scripts/check-shared-sources.js && node scripts/check-web-bridge-contract.js && node scripts/check-linux-cli-contract.js && node scripts/check-cloud-workspace.js && node scripts/check-transfer-persistence.js && node scripts/check-transfer-resume.js && node scripts/check-partial-file.js && node scripts/check-process-control.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder"
   },
@@ -43,7 +43,9 @@
       "speedtest.html",
       "shared/**/*",
       "package.json",
-      "icons/**/*"
+      "icons/**/*",
+      "src/**/*",
+      "cloud-preload.js"
     ],
     "mac": {
       "icon": "icons/icon.icns",
