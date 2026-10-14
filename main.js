@@ -306,8 +306,10 @@ function ensureBinaries() {
   const filesToCopy = [];
 
   if (platform === 'darwin') {
+    // Keep the portable arm64 engine inside the signed patch so hot updates also repair old installs.
+    const portableAxel = path.join(__dirname, 'src', 'bin', 'darwin', 'axel');
     filesToCopy.push(
-      { src: path.join(BIN_DIR, 'darwin', 'axel'), dest: 'axel' },
+      { src: arch === 'arm64' && fs.existsSync(portableAxel) ? portableAxel : path.join(BIN_DIR, 'darwin', 'axel'), dest: 'axel', fromAsar: true },
       { src: path.join(BIN_DIR, 'darwin', 'mihomo_aarch64'), dest: 'mihomo_aarch64' },
       { src: path.join(BIN_DIR, 'darwin', 'mihomo_x86_64'), dest: 'mihomo_x86_64' }
     );
@@ -333,7 +335,8 @@ function ensureBinaries() {
     if (fs.existsSync(item.src)) {
       if (!fs.existsSync(destPath) || fs.statSync(item.src).size !== fs.statSync(destPath).size) {
         try {
-          fs.copyFileSync(item.src, destPath);
+          if (item.fromAsar) fs.writeFileSync(destPath, fs.readFileSync(item.src));
+          else fs.copyFileSync(item.src, destPath);
           console.log(`Successfully copied binary ${item.dest} to user space`);
         } catch (copyErr) {
           console.error(`Failed to copy binary ${item.dest}:`, copyErr.message);
