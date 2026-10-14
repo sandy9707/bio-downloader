@@ -3,6 +3,7 @@ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'biodl-partial-test-'));
 process.env.BIODL_DATA_DIR=path.join(temp,'data');
 const engine=require('../main');
 (async()=>{
+  engine.ensureBinaries(); // Match application startup in the isolated test profile.
   const dest=path.join(temp,'downloads');fs.mkdirSync(dest);
   const file=path.join(dest,'partial.sra'),bytes=Buffer.from('existing-partial-data');fs.writeFileSync(file,bytes);
   const events=[];engine.eventBus.on('download-status',e=>events.push(e));
