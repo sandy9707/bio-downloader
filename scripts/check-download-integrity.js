@@ -26,6 +26,9 @@ axios.post = async (url, data) => {
   charges.push(data.bytes);
   return { data: { success: true } };
 };
+// Transport is exercised against real HTTP/Axel in check-bio-transfer-guard.
+// Keep these ENA metadata fixtures offline and focused on checksum policy.
+require('../src/main/bio-transfer-guard').bioSource = () => null;
 const engine = require('../main');
 const events = [];
 engine.eventBus.on('download-status', event => events.push(event));
@@ -103,7 +106,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     }
     return result;
   }
-  await check('existing-bad.fastq.gz', { existing: bad, status: 'completed', verification: 'mismatch' });
+  await check('existing-bad.fastq.gz', { existing: bad, status: 'failed', verification: 'mismatch' });
   const badResult = await check('new-bad.fastq.gz', { status: 'completed', verification: 'mismatch', charged: 1 });
   assert.equal(badResult.verification.actualMd5, md5(bad));
   assert.deepEqual(fs.readFileSync(path.join(dest, 'new-bad.fastq.gz')), bad, 'mismatch must preserve downloaded bytes');
@@ -116,7 +119,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   await check('unknown-size.bin', { expected: null, size: 0, status: 'completed', verification: 'unchecked', charged: 1 });
 
   // Old histories/direct links without MD5 obtain the correct ENA mate reference.
-  await check('SRR123456_1.fastq.gz', { url: enaUrl('SRR123456'), expected: null, existing: bad, status: 'completed', verification: 'mismatch' });
+  await check('SRR123456_1.fastq.gz', { url: enaUrl('SRR123456'), expected: null, existing: bad, status: 'failed', verification: 'mismatch' });
   const metaBefore = metadataCalls;
   const secondMate = await check('SRR123456_2.fastq.gz', { url: enaUrl('SRR123456', 2), expected: null, existing: bad, status: 'completed', verification: 'verified' });
   assert.equal(metadataCalls, metaBefore, 'metadata must be cached across paired tasks');

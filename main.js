@@ -14,6 +14,7 @@ const os = require('os');
 const crypto = require('crypto');
 const EventEmitter = require('events');
 const { createEnaResolver, verifyFile } = require('./src/main/download-integrity');
+const { bioSource, createBioTransferGuard } = require('./src/main/bio-transfer-guard');
 const enaIntegrity = createEnaResolver(async (accession) => {
   const url = `https://www.ebi.ac.uk/ena/portal/api/filereport?accession=${encodeURIComponent(accession)}&result=read_run&fields=run_accession,fastq_ftp,fastq_md5,fastq_bytes&format=json`;
   if (clashProcess !== null) {
@@ -2513,9 +2514,11 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       return;
     }
 
+    let bioGuard = null;
+    let verification = null;
+    try {
     // Fetch metadata alongside the transfer, including old saved tasks/direct ENA links.
     const referencePromise = enaIntegrity.reference(file, { deep: deepIntegrityCheck });
-    let verification = null;
     let diagnosticLogPath = null;
     const checkControl = async () => {
       if (cancelled || cancelledFiles.has(fileIndex)) throw new Error('Cancelled');
@@ -2527,7 +2530,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       }
     };
     const integrityFields = () => ({ verification, md5: file.md5 || null, size: file.size });
-    async function checkIntegrity() {
+    async function checkIntegrity(existing = false) {
       activeIntegrityChecks.set(fileIndex, { wake: () => {} });
       let lastProgressAt = 0;
       try {
@@ -2535,8 +2538,13 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
         mainWindow.webContents.send('download-status', { index: fileIndex, status: 'downloading', phase: 'verifying', speed: deepIntegrityCheck ? '正在获取文件校验信息…' : '正在快速检查文件…', savePath });
         const reference = await referencePromise;
         await checkControl();
+        if (bioGuard && !reference.expectedSize) reference.expectedSize = bioGuard.size;
         if (reference.expectedMd5) file.md5 = reference.expectedMd5;
         if (reference.expectedSize) file.size = reference.expectedSize;
+        if (existing && !deepIntegrityCheck && bioGuard?.previousVerification?.status === 'mismatch') {
+          throw new Error('该文件此前 MD5 与参考值不一致，不能仅凭大小跳过；请开启深度校验重新核对或选择其他目录下载');
+        }
+        const transport = bioGuard ? await bioGuard.verify({ existing }) : null;
         verification = await verifyFile(savePath, reference, {
           deep: deepIntegrityCheck, checkControl,
           onProgress: (bytes, total) => {
@@ -2549,6 +2557,13 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
             });
           }
         });
+        if (transport) verification.transport = transport;
+        if (bioGuard) await bioGuard.complete(verification);
+        if (existing && verification.status === 'mismatch') {
+          const error = new Error('已有文件 MD5 与参考值不一致，已保留文件但不作为成功跳过；请核对参考值或选择其他目录下载');
+          error.verification = verification;
+          throw error;
+        }
         await checkControl();
         return verification;
       } catch (error) {
@@ -2566,13 +2581,29 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       }
     }
 
+    const guardedUrl = bioSource(file.url);
+    if (guardedUrl && !file.isUpdate) {
+      activeIntegrityChecks.set(fileIndex, { wake: () => {} });
+      try {
+        mainWindow.webContents.send('download-status', { index: fileIndex, fileName: file.name, status: 'downloading', phase: 'verifying', speed: '正在核对源文件与断点…', savePath });
+        bioGuard = await createBioTransferGuard({
+          url: guardedUrl, filename: savePath, expectedSize: file.size,
+          proxy: clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false,
+          checkControl,
+          isPaused: () => pausedAxelFiles.has(fileIndex),
+          onFatal: () => { const proc = activeAxelProcesses.get(fileIndex); if (proc) killProcess(proc); }
+        });
+        file.size = bioGuard.size;
+      } finally { activeIntegrityChecks.delete(fileIndex); }
+    }
+
     // A full-size file with an Axel .st sidecar can still contain unwritten blocks.
     // Only consider a file without resume metadata for deduplication; verify before skipping.
     if (fs.existsSync(savePath) && !fs.existsSync(savePath + '.st')) {
       const localStats = fs.statSync(savePath);
       if (localStats.isFile() && file.size > 0 && localStats.size === Number(file.size)) {
         try {
-          await checkIntegrity();
+          await checkIntegrity(true);
           mainWindow.webContents.send('download-status', {
             index: fileIndex, fileName: file.name, status: 'completed', percentage: 100, savePath,
             speed: verification.status === 'verified' ? 'MD5 与参考值一致(跳过)' : verification.status === 'mismatch' ? '已保留（MD5 与参考值不一致，跳过）' : verification.status === 'unavailable' ? '已存在（MD5 未核验，跳过）' : '快速检查通过(跳过)',
@@ -3001,7 +3032,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       const totalConnectionLimit = stableMode ? actualConcurrentCount : (lowPowerMode ? 32 : 64);
       threads = Math.max(1, Math.min(threads, perFileLimit, Math.floor(totalConnectionLimit / actualConcurrentCount)));
 
-      const args = ['-n', threads.toString(), '-T', '20', '-U', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', '-k', '-o', savePath, file.url];
+      const args = ['-n', threads.toString(), '-T', '20', '-U', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', '-k', '-o', savePath, bioGuard ? bioGuard.url : file.url];
       console.log(`Running Axel (Attempt ${attempt}): ${axelBin} ${args.join(' ')}`);
 
       let logStream = null;
@@ -3055,7 +3086,12 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
             console.error('Failed to create target directory:', dirErr);
           }
 
-          const proc = spawn(axelBin, args, { env });
+          const engineEnv = { ...env };
+          // Only the loopback hop bypasses proxies. The gateway retains the exact
+          // upstream Mihomo route and never falls back to a direct connection.
+          if (bioGuard) for (const key of Object.keys(engineEnv)) if (/^(http|https|all|no)_proxy$/i.test(key)) delete engineEnv[key];
+          if (bioGuard) { engineEnv.no_proxy = '*'; engineEnv.NO_PROXY = '*'; }
+          const proc = spawn(axelBin, args, { env: engineEnv });
           activeAxelProcesses.set(fileIndex, proc);
 
           // 注册当前文件任务的取消执行逻辑
@@ -3139,6 +3175,10 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
               if (logStream) { logStream.write(`\n=== 任务被用户暂停,断点已保留(可随时恢复) ===\n`); logStream.end(); }
               return reject(new Error('Paused'));
             }
+            if (bioGuard?.error) {
+              if (logStream) { logStream.write(`分段保护: ${bioGuard.error.message}\n`); logStream.end(); }
+              return reject(bioGuard.error);
+            }
             if (code === 0 && !axelHasDyldError) {
               // 检测是否误下了 HTML 错误页(如 NCBI 会话型链接无浏览器会话时返回网页),避免把网页当文件"成功"
               if (looksLikeHtmlError(savePath)) {
@@ -3150,6 +3190,10 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
               if (logStream) logStream.end();
               resolve();
             } else if (axelHasDyldError) {
+              if (bioGuard) {
+                if (logStream) logStream.end();
+                return reject(new Error('Axel 内核无法启动，已保留数据与断点，请修复内核后继续'));
+              }
               // axel 二进制/动态库级错误,重试无意义,直接走 Node 保底引擎
               if (logStream) {
                 logStream.write(`Axel 动态库缺失,触发纯 Node.js 保底下载引擎...\n`);
@@ -3172,6 +3216,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       } catch (err) {
         lastErrorMsg = err.message;
         console.warn(`Attempt ${attempt} for ${file.name} failed: ${lastErrorMsg}`);
+        if (bioGuard?.error) { preservePartialFile = true; break; }
         if (lastErrorMsg === 'Cancelled' || lastErrorMsg === 'Paused' || cancelledFiles.has(fileIndex)) {
           break; // 被取消/暂停时立即中断重试循环(暂停须保留断点,重试会破坏语义)
         }
@@ -3182,7 +3227,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
 
     // 所有 axel 重试均失败后,最后用 Node 保底引擎兜底一次(清除 axel 断点状态,从头下载)
     // 注意:用户暂停/取消的任务不走保底,否则暂停会被后台偷偷续跑
-    if (!downloadSuccess && !preservePartialFile && !cancelled && lastErrorMsg !== 'Paused' && !pausedAxelFiles.has(fileIndex) && !cancelledFiles.has(fileIndex)) {
+    if (!downloadSuccess && !bioGuard && !preservePartialFile && !cancelled && lastErrorMsg !== 'Paused' && !pausedAxelFiles.has(fileIndex) && !cancelledFiles.has(fileIndex)) {
       try {
         try { fs.unlinkSync(savePath + '.st'); } catch (e) {}
         console.warn(`All axel retries failed for ${file.name}, final fallback to Node engine.`);
@@ -3288,6 +3333,18 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         speed: wasCancelled ? '已取消' : failReason,
         savePath, ...integrityFields()
       });
+    }
+    } catch (error) {
+      const wasCancelled = cancelled || cancelledFiles.has(fileIndex) || error.message === 'Cancelled';
+      if (getSettings().loggingEnabled && !wasCancelled) {
+        try { fs.appendFileSync(path.join(LOG_DIR, `download_guard_${safeName.replace(/[^a-zA-Z0-9._-]/g, '_')}_${Date.now()}.log`), `版本: ${app.getVersion()}\n时间: ${new Date().toISOString()}\n文件名: ${file.name}\n预期字节数: ${file.size || '未知'}\n分段/断点保护: ${error.message}\n`); } catch (_) {}
+      }
+      mainWindow.webContents.send('download-status', { index: fileIndex, fileName: file.name, status: wasCancelled ? 'cancelled' : 'failed', speed: wasCancelled ? '已取消' : error.message, savePath, verification: { status: 'failed', reason: error.message }, size: file.size, md5: file.md5 || null });
+    } finally {
+      if (bioGuard) await bioGuard.close().catch(error => console.warn('关闭分段保护失败:', error.message));
+      activeIntegrityChecks.delete(fileIndex);
+      pausedAxelFiles.delete(fileIndex);
+      cancelledFiles.delete(fileIndex);
     }
   }
 
@@ -3446,7 +3503,7 @@ ipcMain.handle('delete-transfer-file', (event, filePath) => {
       deletedCount++;
     }
     // 2. 彻底清理分片、断点与未完成缓存文件 (.st / .aria2 / .aria2c / .tmp / .part)
-    for (const suffix of ['.st', '.aria2', '.aria2c', '.tmp', '.part']) {
+    for (const suffix of ['.st', '.biodl.json', '.aria2', '.aria2c', '.tmp', '.part']) {
       const partialPath = filePath + suffix;
       try {
         if (fs.existsSync(partialPath)) {

@@ -1,11 +1,11 @@
 {
   "name": "bio-downloader",
-  "version": "2.0.44-preview.2",
+  "version": "2.0.44-preview.3",
   "description": "Commercial Biology Raw Data Downloader Desktop Client",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node scripts/check-shared-sources.js && node scripts/check-web-bridge-contract.js && node scripts/check-linux-cli-contract.js && node scripts/check-cloud-workspace.js && node scripts/check-transfer-persistence.js && node scripts/check-transfer-resume.js && node scripts/check-partial-file.js && node scripts/check-download-integrity.js && node scripts/check-process-control.js",
+    "test": "node scripts/check-shared-sources.js && node scripts/check-web-bridge-contract.js && node scripts/check-linux-cli-contract.js && node scripts/check-cloud-workspace.js && node scripts/check-transfer-persistence.js && node scripts/check-transfer-resume.js && node scripts/check-partial-file.js && node scripts/check-download-integrity.js && node scripts/check-bio-transfer-guard.js && node scripts/check-process-control.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder"
   },
