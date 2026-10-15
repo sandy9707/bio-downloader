@@ -14,7 +14,7 @@ const fixture = {
   completed: [{ name: 'done.sra', savePath: 'D:\\data\\done.sra' }],
   failed: [{ name: 'retry.sra', url: 'https://example.invalid/retry' }],
   active: [
-    { name: 'running.sra', url: 'https://example.invalid/running', originalIndex: 0, status: 'downloading', percentage: 25, receivedBytes: 256, targetDir: 'D:\\original' },
+    { name: 'running.sra', url: 'https://example.invalid/running', originalIndex: 0, status: 'downloading', percentage: 25, receivedBytes: 256, targetDir: 'D:\\original', md5: '12345678901234567890123456789012' },
     { name: 'queued.sra', originalIndex: 1, status: 'waiting', targetDir: 'D:\\original' },
     { name: 'paused.sra', originalIndex: 2, status: 'paused', targetDir: 'D:\\original' }
   ],
@@ -72,16 +72,41 @@ function harness(historyStore, cache = new Map()) {
   assert.equal(Object.values(h.context.extractionJobs)[0].received, 128);
 
   const active = h.context.activeDownloads[0];
+  assert.equal(active.md5, fixture.active[0].md5, 'checksum must survive history recovery');
   h.listeners.progress({ index: active.originalIndex, percentage: 50, speed: '1 MB/s', receivedBytes: 512, totalBytes: 1024 });
   h.events.beforeunload();
   assert.equal(store.read().active[0].receivedBytes, 512, 'quit must flush progress without waiting for debounce');
-  h.listeners.status({ index: active.originalIndex, status: 'completed', savePath: 'D:\\original\\running.sra' });
+  h.listeners.status({ index: active.originalIndex, status: 'completed', savePath: 'D:\\original\\running.sra', verification: { status: 'verified', actualMd5: active.md5 } });
   assert.equal(store.read().active.length, 2);
   assert.equal(store.read().completed.length, 2, 'terminal event must persist only one final category');
+  assert.equal(store.read().completed[0].verification.status, 'verified');
+  assert.equal(store.read().completed[0].fileObj.md5, active.md5);
   const extractionId = Object.keys(h.context.extractionJobs)[0];
   h.context.handleExtractionDownload({ id: extractionId, status: 'completed', savePath: 'E:\\extracted\\extracted.fastq', size: 512 });
   assert.equal(store.read().extraction.length, 0);
   assert.equal(store.read().completed.length, 3);
+
+  const pending = h.context.activeDownloads[0];
+  h.listeners.status({ index: pending.originalIndex, status: 'failed', savePath: 'D:\\original\\bad.fastq.gz', md5: active.md5, verification: { status: 'failed', actualMd5: 'bad-checksum' } });
+  assert.equal(store.read().failed[0].fileObj.md5, active.md5);
+  assert.equal(store.read().failed[0].verification.actualMd5, 'bad-checksum');
+  assert.equal(store.read().failed[0].savePath, 'D:\\original\\bad.fastq.gz');
+
+  // Persisted verification warnings must remain visible in the completed list.
+  const cards = [];
+  const ui = vm.createContext({
+    completedDownloads: [{ name: 'unverified.fastq.gz', verification: { status: 'unavailable' } }, { name: 'old.bin', skip: true }],
+    document: {
+      getElementById: id => id === 'transferCompletedList' ? { querySelectorAll: () => [], appendChild: card => cards.push(card) } : null,
+      createElement: () => ({ dataset: {} })
+    },
+    matchesTransferSearch: () => true, getFileTypeIcon: () => '', getFileTypeBadge: () => '', formatBytes: () => '', escapeHtml: value => value
+  });
+  vm.runInContext(renderer.slice(renderer.indexOf('function renderCompletedList()'), renderer.indexOf('function renderFailedList()')), ui);
+  ui.renderCompletedList();
+  assert.match(cards[0].innerHTML, /MD5 未核验/);
+  assert.match(cards[1].innerHTML, /大小匹配/);
+  assert.ok(!cards[1].innerHTML.includes('已校验'), 'old size-only skips must not claim checksum verification');
 
   // Existing empty histories are not repopulated from stale browser cache.
   store.save({ completed: [], failed: [], active: [], extraction: [] });

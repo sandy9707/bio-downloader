@@ -14,19 +14,20 @@ function harness(overrides={}) {
   return {context,calls,api};
 }
 (async()=>{
-  const h=harness(), task={name:'partial.sra',url:'https://example.invalid/a',originalIndex:9,status:'paused',targetDir:'original-dir',receivedBytes:100};
+  const h=harness(), task={name:'partial.sra',url:'https://example.invalid/a',originalIndex:9,status:'paused',targetDir:'original-dir',receivedBytes:100,md5:'12345678901234567890123456789012'};
   h.context.activeDownloads.push(task);
   await Promise.all([h.context.resumeSingleDownload(9),h.context.resumeSingleDownload(9)]);
   const starts=h.calls.filter(x=>Array.isArray(x)&&x[0]==='download');
   assert.equal(starts.length,1,'rapid double click must start only one transfer');
   assert.equal(starts[0][2],'original-dir');
+  assert.equal(starts[0][1][0].md5,task.md5,'resume must retain checksum across application restarts');
   assert.ok(h.calls.indexOf('connect')<h.calls.indexOf(starts[0]),'accelerator must reconnect before download');
   h.api.startDownload=async()=>{throw Error('fixture startup failure');};task.status='paused';
   await h.context.resumeSingleDownload(9);
   assert.equal(task.status,'paused');assert.equal(task.receivedBytes,100);
   h.api.resumeDownload=async()=>({success:false,error:'OS resume failed'});
   await h.context.resumeSingleDownload(9);assert.equal(task.status,'paused');
-  const f={name:'failed.sra',url:'https://example.invalid/b',targetDir:'failed-dir',fileObj:{}};
+  const f={name:'failed.sra',url:'https://example.invalid/b',targetDir:'failed-dir',fileObj:{md5:task.md5}};
   h.context.failedDownloads.push(f);h.context.currentUser=null;
   await h.context.retryFailedDownload(0);assert.equal(h.context.failedDownloads.length,1);
   h.context.currentUser={token:'fixture'};
@@ -35,6 +36,7 @@ function harness(overrides={}) {
   assert.equal(h.context.activeDownloads[1].name,'failed.sra');
   assert.equal(h.context.activeDownloads[1].url,f.url);
   assert.equal(h.context.activeDownloads[1].targetDir,'failed-dir');
+  assert.equal(h.context.activeDownloads[1].md5,task.md5,'retry must retain the expected checksum');
   assert.equal(h.context.activeDownloads[1].status,'paused');
   const ex={id:'restored-ex',url:'https://example.invalid/c',name:'extract.fastq',paused:true,saveDir:'ex-dir',received:200,total:900};
   h.context.extractionJobs[ex.id]=ex;

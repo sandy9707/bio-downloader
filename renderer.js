@@ -1254,9 +1254,10 @@ async function startDownload() {
     const addedCompleted = Math.max(0, completedDownloads.length - beforeCompleted);
     const addedFailed = Math.max(0, failedDownloads.length - beforeFailed);
     const skippedCount = completedDownloads.slice(0, addedCompleted).filter((c) => c.skip).length;
+    const unverifiedCount = completedDownloads.slice(0, addedCompleted).filter(c => c.verification && c.verification.status === 'unavailable').length;
     const successCount = addedCompleted - skippedCount;
     const pausedLeft = activeDownloads.filter((d) => d.status === 'paused').length;
-    showToast(`本批下载结束:成功 ${successCount} · 跳过 ${skippedCount} · 失败 ${addedFailed}${pausedLeft > 0 ? ' · 暂停 ' + pausedLeft : ''}`, addedFailed > 0 ? 'warning' : 'success');
+    showToast(`本批下载结束:保存 ${successCount} · 跳过 ${skippedCount} · 失败 ${addedFailed}${unverifiedCount ? ' · MD5 未核验 ' + unverifiedCount : ''}${pausedLeft > 0 ? ' · 暂停 ' + pausedLeft : ''}`, addedFailed > 0 || unverifiedCount > 0 ? 'warning' : 'success');
 
     isDownloading = false;
     // 清空下载中的残留(已暂停的任务保留卡片与断点,可随时恢复)
@@ -2668,7 +2669,7 @@ function renderDownloadingList() {
     const receivedSize = totalSize > 0 ? (totalSize * percentage) / 100 : 0;
     const speedText = paused ? '—' : (file.speed || (file.status === 'waiting' ? '排队中...' : ''));
     const eta = paused ? '' : computeEta(totalSize > 0 ? totalSize - receivedSize : 0, file.speed);
-    const statusText = paused ? '已暂停 · 可续传' : (file.status === 'waiting' ? '排队中...' : '正在高速下载');
+    const statusText = paused ? '已暂停 · 可续传' : (file.status === 'waiting' ? '排队中...' : file.phase === 'verifying' ? '正在校验文件' : '正在高速下载');
 
     const itemEl = document.createElement('div');
     itemEl.className = 'transfer-item tl-card' + (paused ? ' tl-paused' : '');
@@ -2738,7 +2739,7 @@ function renderCompletedList() {
         </div>
         <div class="transfer-item-meta">
           <span class="transfer-item-size">${formatBytes(item.size || 0)}</span>
-          <span class="transfer-item-status completed">${item.skip ? '已校验 (跳过)' : '下载完成'}</span>
+          <span class="transfer-item-status completed"${item.verification && item.verification.status === 'unavailable' ? ' style="color: #d97706;"' : ''}>${item.verification && item.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : item.verification && item.verification.status === 'verified' ? 'MD5 校验通过' : item.skip ? '大小匹配 (跳过)' : '下载完成'}</span>
           <span class="transfer-item-time">${item.completedAt}</span>
         </div>
       </div>
@@ -3131,7 +3132,7 @@ async function resumeTransferFile(fileId) {
   updateTransferCounts();
   showToast(`正在恢复 ${file.name},从断点继续下载...`, 'info');
   try {
-    await window.api.startDownload([{ name: file.name, url: file.url, size: file.size || 0, folder: file.folder, type: file.type, originalIndex: file.originalIndex }], dir, currentUser.token, maxConcurrentDownloadsSetting);
+    await window.api.startDownload([{ name: file.name, url: file.url, size: file.size || 0, md5: file.md5, folder: file.folder, type: file.type, originalIndex: file.originalIndex }], dir, currentUser.token, maxConcurrentDownloadsSetting);
   } catch (e) {
     file.status = 'paused'; file.speed = '';
     renderDownloadingList(); updateTransferCounts();
@@ -3339,14 +3340,14 @@ window.api.onDownloadStatus((data) => {
   if (txt) {
     if (status === 'downloading') {
       txt.className = 'item-status status-downloading';
-      txt.innerText = '正在高速下载';
-      if (data.speed && data.speed.includes('重试')) {
+      txt.innerText = data.phase === 'verifying' ? '正在校验文件' : '正在高速下载';
+      if (data.speed) {
         const speedEl = document.getElementById(`speed-text-${index}`);
         if (speedEl) speedEl.innerText = data.speed;
       }
     } else if (status === 'completed') {
       txt.className = 'item-status status-completed';
-      txt.innerText = '下载完成';
+      txt.innerText = data.verification && data.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : '下载完成';
       if (fill) fill.style.width = '100%';
       if (pct) pct.innerText = '100%';
       const speedEl = document.getElementById(`speed-text-${index}`);
@@ -3368,6 +3369,10 @@ window.api.onDownloadStatus((data) => {
   const activeItem = activeDownloads.find(d => d.originalIndex === index);
   if (activeItem) {
     activeItem.status = status;
+    activeItem.phase = data.phase || null;
+    if (data.md5) activeItem.md5 = data.md5;
+    if (data.size > 0) activeItem.size = data.size;
+    if (data.verification) activeItem.verification = data.verification;
     if (data.speed) activeItem.speed = data.speed;
     
     if (status === 'completed') {
@@ -3381,7 +3386,8 @@ window.api.onDownloadStatus((data) => {
         skip: (data.speed && data.speed.includes('跳过')),
         folder: activeItem.folder,
         type: activeItem.type,
-        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir }
+        md5: activeItem.md5, verification: activeItem.verification,
+        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir }
       };
       completedDownloads.unshift(completedItem);
       activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
@@ -3397,7 +3403,8 @@ window.api.onDownloadStatus((data) => {
         originalIndex: activeItem.originalIndex,
         folder: activeItem.folder,
         type: activeItem.type,
-        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir }
+        savePath: savePath || '', md5: activeItem.md5, verification: activeItem.verification,
+        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir }
       };
       failedDownloads.unshift(failedItem);
       activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
@@ -3418,7 +3425,7 @@ window.api.onDownloadStatus((data) => {
       const transStatus = document.getElementById(`trans-status-${index}`);
       const transSpeed = document.getElementById(`trans-speed-${index}`);
       if (transStatus) {
-        transStatus.innerText = status === 'waiting' ? '排队中...' : '正在高速下载';
+        transStatus.innerText = status === 'waiting' ? '排队中...' : data.phase === 'verifying' ? '正在校验文件' : '正在高速下载';
       }
       if (transSpeed && data.speed) {
         transSpeed.innerText = data.speed;

@@ -13,6 +13,16 @@ const cheerio = require('cheerio');
 const os = require('os');
 const crypto = require('crypto');
 const EventEmitter = require('events');
+const { createEnaResolver, verifyFile } = require('./src/main/download-integrity');
+const enaIntegrity = createEnaResolver(async (accession) => {
+  const url = `https://www.ebi.ac.uk/ena/portal/api/filereport?accession=${encodeURIComponent(accession)}&result=read_run&fields=run_accession,fastq_ftp,fastq_md5,fastq_bytes&format=json`;
+  if (clashProcess !== null) {
+    try {
+      return (await axios.get(url, { timeout: 6000, proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 } })).data;
+    } catch (_) { /* Metadata only: retain the existing direct-query fallback. */ }
+  }
+  return (await axios.get(url, { timeout: 6000, proxy: false })).data;
+});
 
 const eventBus = new EventEmitter();
 const headlessHandlers = {};
@@ -193,6 +203,7 @@ let clashProcess = null;
 let currentRealNodeCount = 0;
 let currentAxelProcess = null;
 const activeAxelProcesses = new Map();
+const activeIntegrityChecks = new Map();
 const pausedAxelFiles = new Set(); // 用户手动暂停的 fileIndex:kill 进程但保留 axel 断点(.st),进程退出不自动重试,状态回传 paused
 const cancelledFiles = new Set();  // 用户手动取消的 fileIndex:立即中止重试与 Node 保底,状态回传 cancelled
 
@@ -2150,25 +2161,11 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
   } else if (type === 'ebi_raw' || type === 'ena_raw') {
     const promises = ids.map(async (acc) => {
       try {
-        const enaUrl = `https://www.ebi.ac.uk/ena/portal/api/filereport?accession=${acc}&result=read_run&fields=fastq_ftp&format=json`;
-        let res;
-        try {
-          res = await axios.get(enaUrl, {
-            timeout: 15000,
-            proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 }
-          });
-        } catch (proxyErr) {
-          console.warn(`Failed to fetch EBI via proxy: ${proxyErr.message}, falling back to direct connection`);
-          res = await axios.get(enaUrl, { timeout: 10000 });
-        }
-        if (res.data && res.data[0] && res.data[0].fastq_ftp) {
-          const urls = res.data[0].fastq_ftp.split(';');
-          const subPromises = urls.map(async (u) => {
-            const cleanUrl = u.startsWith('http') ? u : 'https://' + u;
-            const size = await headRequestSize(cleanUrl);
-            const fname = cleanUrl.substring(cleanUrl.lastIndexOf('/') + 1);
-            return { name: fname, url: cleanUrl, size, folder: acc };
-          });
+        const enaFiles = await enaIntegrity.list(acc);
+        if (enaFiles.length) {
+          const subPromises = enaFiles.map(async (file) => ({
+            ...file, folder: acc, size: file.size || await headRequestSize(file.url)
+          }));
           return await Promise.all(subPromises);
         } else {
           // 回退 AWS SRA
@@ -2515,26 +2512,79 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       return;
     }
 
-    // 1. 去重与文件完整性大小核验
-    if (fs.existsSync(savePath)) {
+    // Fetch metadata alongside the transfer, including old saved tasks/direct ENA links.
+    const referencePromise = enaIntegrity.reference(file);
+    let verification = null;
+    let diagnosticLogPath = null;
+    const checkControl = async () => {
+      if (cancelled || cancelledFiles.has(fileIndex)) throw new Error('Cancelled');
+      // Keep the same task alive while hashing is paused, as with a suspended Axel.
+      // Resuming must not start a second download or bypass consumption reporting.
+      while (pausedAxelFiles.has(fileIndex)) {
+        await new Promise(resolve => { activeIntegrityChecks.get(fileIndex).wake = resolve; });
+        if (cancelled || cancelledFiles.has(fileIndex)) throw new Error('Cancelled');
+      }
+    };
+    const integrityFields = () => ({ verification, md5: file.md5 || null, size: file.size });
+    async function checkIntegrity() {
+      activeIntegrityChecks.set(fileIndex, { wake: () => {} });
+      let lastProgressAt = 0;
       try {
-        const localStats = fs.statSync(savePath);
-        // 严格安全去重：必须为普通文件、远程大小明确已知且 >0，且本地字节数与远程完全吻合才允许跳过
-        if (localStats.isFile() && file.size && file.size > 0 && localStats.size === file.size) {
-          const skipReason = '已存在且大小匹配(跳过)';
-          console.log(`File ${file.name} already fully exists (${localStats.size} B). Skipping download.`);
-          mainWindow.webContents.send('download-status', {
-            index: fileIndex,
-            fileName: file.name,
-            status: 'completed',
-            percentage: 100,
-            speed: skipReason,
-            savePath
-          });
-          return;
+        await checkControl();
+        mainWindow.webContents.send('download-status', { index: fileIndex, status: 'downloading', phase: 'verifying', speed: '正在获取文件校验信息…', savePath });
+        const reference = await referencePromise;
+        await checkControl();
+        if (reference.expectedMd5) file.md5 = reference.expectedMd5;
+        if (reference.expectedSize) file.size = reference.expectedSize;
+        verification = await verifyFile(savePath, reference, {
+          checkControl,
+          onProgress: (bytes, total) => {
+            const now = Date.now();
+            if (now - lastProgressAt < 500 && bytes !== total) return;
+            lastProgressAt = now;
+            mainWindow.webContents.send('download-status', {
+              index: fileIndex, status: 'downloading', phase: 'verifying', savePath,
+              speed: `正在校验 MD5：${total ? Math.floor(bytes * 100 / total) : 100}%`, md5: file.md5, size: file.size
+            });
+          }
+        });
+        await checkControl();
+        return verification;
+      } catch (error) {
+        verification = error.verification || { status: ['Paused', 'Cancelled'].includes(error.message) ? 'interrupted' : 'failed', reason: error.message };
+        throw error;
+      } finally {
+        activeIntegrityChecks.delete(fileIndex);
+        if (getSettings().loggingEnabled) {
+          try {
+            // Append after the engine log has closed, also logging existing-file checks.
+            if (!diagnosticLogPath) diagnosticLogPath = path.join(LOG_DIR, `download_${safeName.replace(/[^a-zA-Z0-9._-]/g, '_')}_${Date.now()}.log`);
+            fs.appendFileSync(diagnosticLogPath, `\n=== 完整性校验 ===\n版本: ${app.getVersion()}\n时间: ${new Date().toISOString()}\n文件名: ${file.name}\n${JSON.stringify(verification)}\n`);
+          } catch (error) { console.warn('Failed to write integrity log:', error.message); }
         }
-      } catch (err) {
-        console.warn(`Failed to verify file integrity for ${file.name}, proceeding with download:`, err.message);
+      }
+    }
+
+    // A full-size file with an Axel .st sidecar can still contain unwritten blocks.
+    // Only consider a file without resume metadata for deduplication; verify before skipping.
+    if (fs.existsSync(savePath) && !fs.existsSync(savePath + '.st')) {
+      const localStats = fs.statSync(savePath);
+      if (localStats.isFile() && file.size > 0 && localStats.size === Number(file.size)) {
+        try {
+          await checkIntegrity();
+          mainWindow.webContents.send('download-status', {
+            index: fileIndex, fileName: file.name, status: 'completed', percentage: 100, savePath,
+            speed: verification.status === 'verified' ? 'MD5 校验通过(跳过)' : verification.status === 'unavailable' ? '已存在（MD5 未核验，跳过）' : '已存在且大小匹配(跳过)',
+            ...integrityFields()
+          });
+        } catch (error) {
+          const status = error.message === 'Paused' ? 'paused' : error.message === 'Cancelled' ? 'cancelled' : 'failed';
+          mainWindow.webContents.send('download-status', { index: fileIndex, fileName: file.name, status, percentage: null, speed: status === 'paused' ? '已暂停' : status === 'cancelled' ? '已取消' : error.message, savePath, ...integrityFields() });
+        } finally {
+          pausedAxelFiles.delete(fileIndex);
+          cancelledFiles.delete(fileIndex);
+        }
+        return;
       }
     }
 
@@ -2959,15 +3009,18 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         try {
           const logFileName = `download_${file.name.replace(/[^a-zA-Z0-9\._-]/g, '_')}_${Date.now()}.log`;
           const logFilePath = path.join(LOG_DIR, logFileName);
+          diagnosticLogPath = logFilePath;
           logStream = fs.createWriteStream(logFilePath, { flags: 'a', encoding: 'utf8' });
           logStream.write(`=== 下载任务诊断日志 ===\n`);
           logStream.write(`时间: ${new Date().toISOString()}\n`);
+          logStream.write(`版本: ${app.getVersion()}\n`);
+          logStream.write(`预期字节数: ${file.size || '未知'}\n预期 MD5: ${file.md5 || '待获取'}\n`);
           logStream.write(`文件名: ${file.name}\n`);
           logStream.write(`URL: ${file.url}\n`);
           logStream.write(`目标保存路径: ${savePath}\n`);
           logStream.write(`尝试次数: ${attempt}\n`);
           logStream.write(`线程数: ${threads}\n`);
-          logStream.write(`代理环境: ${JSON.stringify(env)}\n`);
+          logStream.write(`代理环境: ${JSON.stringify(Object.fromEntries(['http_proxy', 'https_proxy', 'all_proxy'].filter(key => env[key]).map(key => [key, env[key]])))}\n`);
           logStream.write(`Axel 命令: ${axelBin} ${args.join(' ')}\n\n`);
         } catch (logErr) {
           console.error('Failed to create download log stream:', logErr);
@@ -3149,6 +3202,12 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       }
     }
 
+    // Integrity errors never enter the network retry/fallback path: retain all bytes.
+    if (downloadSuccess) {
+      try { await checkIntegrity(); }
+      catch (error) { downloadSuccess = false; lastErrorMsg = error.message; }
+    }
+
     if (downloadSuccess) {
       pausedAxelFiles.delete(fileIndex); // 任务成功后清理暂停/取消标记,防止残留影响后续同下标任务
       cancelledFiles.delete(fileIndex);
@@ -3182,8 +3241,8 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         fileName: file.name,
         status: 'completed',
         percentage: 100,
-        speed: file.isUpdate ? '已下载(更新包)' : '已保存',
-        savePath
+        speed: file.isUpdate ? '已下载(更新包)' : verification.status === 'verified' ? '已保存（MD5 校验通过）' : verification.status === 'unavailable' ? '已保存（MD5 未核验）' : '已保存',
+        savePath, ...integrityFields()
       });
     } else {
       const wasPaused = pausedAxelFiles.has(fileIndex) || lastErrorMsg === 'Paused';
@@ -3199,7 +3258,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           status: 'paused',
           percentage: null,
           speed: '已暂停',
-          savePath
+          savePath, ...integrityFields()
         });
         return;
       }
@@ -3226,7 +3285,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         status: wasCancelled ? 'cancelled' : 'failed',
         percentage: 0,
         speed: wasCancelled ? '已取消' : failReason,
-        savePath
+        savePath, ...integrityFields()
       });
     }
   }
@@ -3234,13 +3293,17 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
   // 开始并行执行队列池
   return new Promise((resolve) => {
     let completedCount = 0;
+    function finish(result) {
+      event.sender.removeListener('cancel-all-downloads-signal', cancelAll);
+      resolve(result);
+    }
 
     async function startNext() {
       if (cancelled) return;
       
       if (fileIndexInQueue >= files.length) {
         if (activeCount === 0) {
-          resolve({ success: true, completed: completedCount });
+          finish({ success: true, completed: completedCount });
         }
         return;
       }
@@ -3262,13 +3325,15 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
     }
 
     // 注册全局取消钩子
-    event.sender.on('cancel-all-downloads-signal', () => {
+    function cancelAll() {
       cancelled = true;
       // 确保被杀进程不再触发重试/保底;清除暂停标记,避免被挂起的任务取消后误报 paused
       for (const idx of activeAxelProcesses.keys()) { cancelledFiles.add(idx); pausedAxelFiles.delete(idx); }
+      for (const check of activeIntegrityChecks.values()) check.wake();
       killAllAxelProcesses();
-      resolve({ success: true, cancelled: true });
-    });
+      finish({ success: true, cancelled: true });
+    }
+    event.sender.on('cancel-all-downloads-signal', cancelAll);
 
     for (let w = 0; w < Math.min(maxConcurrentCount, files.length); w++) {
       startNext();
@@ -3281,6 +3346,7 @@ ipcMain.handle('cancel-download', (event, fileIndex) => {
     // 标记取消:无论进程是否正在跑(排队中同样生效),重试循环与保底引擎见到标记立即终止
     pausedAxelFiles.delete(fileIndex);
     cancelledFiles.add(fileIndex);
+    if (activeIntegrityChecks.has(fileIndex)) activeIntegrityChecks.get(fileIndex).wake();
     const proc = activeAxelProcesses.get(fileIndex);
     if (proc) {
       console.log(`Cancelling single task at index: ${fileIndex}`);
@@ -3290,7 +3356,8 @@ ipcMain.handle('cancel-download', (event, fileIndex) => {
     return true;
   } else {
     console.log('Cancelling all active downloads...');
-    for (const idx of activeAxelProcesses.keys()) cancelledFiles.add(idx);
+    for (const idx of [...activeAxelProcesses.keys(), ...activeIntegrityChecks.keys()]) cancelledFiles.add(idx);
+    for (const check of activeIntegrityChecks.values()) check.wake();
     killAllAxelProcesses();
     return true;
   }
@@ -3310,6 +3377,10 @@ async function resumeProcess(proc) {
 // 暂停单个下载任务:挂起 axel 进程(原地冻结,断点/连接全保留);排队/重试间隙的任务打标记,由重试循环检查点退出
 ipcMain.handle('pause-download', async (event, fileIndex) => {
   if (cancelledFiles.has(fileIndex)) return { success: false, error: '该任务正在取消' };
+  if (activeIntegrityChecks.has(fileIndex)) {
+    pausedAxelFiles.add(fileIndex);
+    return { success: true, suspended: true };
+  }
   const proc = activeAxelProcesses.get(fileIndex);
   if (proc && !proc.killed) {
     if (!(await pauseProcess(proc))) return { success:false, error:'无法暂停下载进程，请重试' };
@@ -3323,6 +3394,11 @@ ipcMain.handle('pause-download', async (event, fileIndex) => {
 
 // 恢复单个下载任务:优先唤醒被挂起的进程(原任务原地继续);无挂起进程时由渲染层重新发起下载走断点续传
 ipcMain.handle('resume-download', async (event, fileIndex) => {
+  if (activeIntegrityChecks.has(fileIndex)) {
+    pausedAxelFiles.delete(fileIndex);
+    activeIntegrityChecks.get(fileIndex).wake();
+    return { success: true, resumed: true };
+  }
   const proc = activeAxelProcesses.get(fileIndex);
   if (proc && !proc.killed) {
     if (!(await resumeProcess(proc))) return { success:false, error:'无法恢复下载进程，请重试' };
