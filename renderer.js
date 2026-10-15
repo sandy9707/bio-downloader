@@ -153,9 +153,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (versionEl) versionEl.innerText = 'v' + version;
     const sidebarVerEl = document.getElementById('sidebarVersion');
     if (sidebarVerEl) sidebarVerEl.innerText = 'v' + version;
-    // 预览版(含 -preview)才显示 BioSample 查询按钮(抢先体验功能)
+    // BioSample 查询随 2.0.44 转正式，保留预览版已确认的入口。
     const biosampleBtn = document.getElementById('biosampleBtn');
-    if (biosampleBtn) biosampleBtn.style.display = /preview/i.test(String(version)) ? 'inline-block' : 'none';
+    if (biosampleBtn) biosampleBtn.style.display = 'inline-block';
   } catch (e) {
     console.error('获取版本号失败:', e);
   }
