@@ -1200,7 +1200,7 @@ async function headRequestSize(url) {
     if (targetUrl.startsWith('ftp://ftp.ncbi.nlm.nih.gov/') || targetUrl.startsWith('ftps://ftp.ncbi.nlm.nih.gov/')) {
       targetUrl = targetUrl.replace(/^ftps?:\/\/ftp\.ncbi\.nlm\.nih\.gov\//, 'https://ftp.ncbi.nlm.nih.gov/');
     } else if (targetUrl.startsWith('ftp://ftp.sra.ebi.ac.uk/') || targetUrl.startsWith('ftps://ftp.sra.ebi.ac.uk/')) {
-      targetUrl = targetUrl.replace(/^ftps?:\/\/ftp\.sra\.ebi\.ac\.uk\//, 'https://ftp.sra.ebi.ac.uk/');
+      targetUrl = targetUrl.replace(/^ftps?:\/\/ftp\.sra\.ebi\.ac\.uk\//, 'http://ftp.sra.ebi.ac.uk/');
     }
 
     const isFtp = targetUrl.startsWith('ftp://') || targetUrl.startsWith('ftps://');
@@ -2625,153 +2625,95 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     let lastErrorMsg = '';
     let preservePartialFile = false;
 
-    while (attempt < MAX_RETRIES && !downloadSuccess && !cancelled) {
-      if (pausedAxelFiles.has(fileIndex)) break; // 重试间隙收到暂停请求:不再起新尝试,等待用户恢复
-      attempt++;
-
-      if (attempt > 1) {
-        const backoffTime = Math.pow(2, attempt) * 1000;
-        console.log(`Retrying download for ${file.name} in ${backoffTime}ms (Attempt ${attempt}/${MAX_RETRIES})`);
-        mainWindow.webContents.send('download-status', {
-          index: fileIndex,
-          fileName: file.name,
-          status: 'downloading',
-          percentage: null,
-          speed: `网络波动重试中 (${attempt}/${MAX_RETRIES})...`,
-          savePath
-        });
-        
-        // 等待重试或被取消
-        let sleepFinished = false;
-        await Promise.race([
-          new Promise(resolve => setTimeout(() => { sleepFinished = true; resolve(); }, backoffTime)),
-          new Promise((resolve, reject) => {
-            cancelTokens.set(fileIndex, () => {
-              reject(new Error('Cancelled'));
-            });
-          })
-        ]).catch(() => {
-          lastErrorMsg = '任务已取消';
-        });
-
-        if (!sleepFinished) {
-          break; // 已经被取消
-        }
-      }
-
-      if (attempt === 1 && fs.existsSync(savePath) && fs.statSync(savePath).size > 0 && !fs.existsSync(savePath + '.st')) {
-        preservePartialFile = true;
-        lastErrorMsg = '已有部分文件缺少 Axel 断点信息，已保留文件；请恢复 .st 文件或选择其他目录重新下载';
-        break;
-      }
-
-async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, totalSize, logStream) {
-  const targetDir = path.dirname(savePath);
-  if (!fs.existsSync(targetDir)) {
-    try { fs.mkdirSync(targetDir, { recursive: true }); } catch (e) {
-      throw new Error(`无法创建保存目录 ${targetDir}: ${e.message}`);
+    const env = { ...process.env };
+    if (clashProcess !== null) {
+      env.http_proxy = 'http://127.0.0.1:43289';
+      env.https_proxy = 'http://127.0.0.1:43289';
+      env.all_proxy = 'http://127.0.0.1:43289';
+      env.HTTP_PROXY = 'http://127.0.0.1:43289';
+      env.HTTPS_PROXY = 'http://127.0.0.1:43289';
+      env.ALL_PROXY = 'http://127.0.0.1:43289';
+    } else {
+      delete env.http_proxy;
+      delete env.https_proxy;
+      delete env.all_proxy;
+      delete env.HTTP_PROXY;
+      delete env.HTTPS_PROXY;
+      delete env.ALL_PROXY;
+      console.warn('⚠️ [Downloader] 加速内核未启动(clashProcess=null)，当前任务正在使用【直连】下载，未启用高速加速节点。');
     }
-  }
 
-  let downloadedBytes = 0;
-  let lastEmitTime = Date.now();
-  let lastBytes = 0;
-  let speedTimer = null;
 
-  const axiosOptions = {
-    url: fileUrl,
-    method: 'GET',
-    responseType: 'stream',
-    timeout: 30000,
-    maxRedirects: 5,
-    validateStatus: (s) => (s >= 200 && s < 400), // 4xx/5xx 走 catch,给出明确失败原因
-    proxy: (env && env.http_proxy) ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false
-  };
-
-  if (logStream) {
-    logStream.write(`\n=== 触发 Node.js 纯内置极速回退引擎下载 ===\nURL: ${fileUrl}\nSavePath: ${savePath}\n`);
-  }
-
-  const response = await axios(axiosOptions);
-  // 误下 HTML 错误页检测(如 NCBI 会话型链接无浏览器会话时返回网页而非文件)
-  const ct = String(response.headers['content-type'] || '').toLowerCase();
-  if (ct.includes('text/html') && !/\.(html?|xhtml)$/i.test(path.basename(savePath))) {
-    throw new Error('服务器返回网页(错误页/需登录会话),非可下载文件');
-  }
-  const headerLen = parseInt(response.headers['content-length'] || '0', 10);
-  const finalTotalSize = totalSize || headerLen || 0;
-
-  // 关键:拿到响应后再创建写流,并在 Promise 执行器内"立即同步"绑定错误处理,
-  // 杜绝此前 createWriteStream 与错误处理之间存在 await 空窗而导致的未捕获异常崩溃。
-  const writer = fs.createWriteStream(savePath);
-  return new Promise((resolve, reject) => {
-    const fail = (err) => {
-      if (speedTimer) clearInterval(speedTimer);
-      if (logStream) {
-        logStream.write(`\n=== Node.js 回退引擎错误: ${err.message} ===\n`);
-        logStream.end();
+    async function downloadFileWithNodeStream(fileUrl, savePath, env, fileIndex, totalSize, logStream) {
+      // Never turn sparse Axel data into a sequential overwrite, including the
+      // immediate dynamic-library fallback and a race with another task.
+      if (fs.existsSync(savePath + '.st') || (fs.existsSync(savePath) && fs.statSync(savePath).size > 0)) {
+        throw new Error('原文件和 Axel 断点已保留，不能覆盖为单连接下载');
       }
-      reject(err);
-    };
-    writer.on('error', fail);        // 最先绑定,覆盖任何异步空窗
-    response.data.on('error', fail);
-
-    speedTimer = setInterval(() => {
-      const now = Date.now();
-      const bytesDiff = downloadedBytes - lastBytes;
-      lastBytes = downloadedBytes;
-      const speedBps = (bytesDiff / ((now - lastEmitTime || 1000) / 1000));
-      lastEmitTime = now;
-
-      let speedStr = '0 B/s';
-      if (speedBps > 1024 * 1024) {
-        speedStr = (speedBps / (1024 * 1024)).toFixed(2) + ' MB/s';
-      } else if (speedBps > 1024) {
-        speedStr = (speedBps / 1024).toFixed(1) + ' KB/s';
-      } else {
-        speedStr = Math.round(speedBps) + ' B/s';
-      }
-
-      let percentage = finalTotalSize > 0 ? Math.min(99, Math.floor((downloadedBytes / finalTotalSize) * 100)) : 50;
-
-      mainWindow.webContents.send('download-progress', {
-        index: fileIndex,
-        percentage,
-        speed: speedStr,
-        receivedBytes: downloadedBytes,
-        totalBytes: finalTotalSize || null
-      });
-    }, 500);
-
-    response.data.on('data', (chunk) => {
-      downloadedBytes += chunk.length;
-    });
-
-    response.data.pipe(writer);
-
-    writer.on('finish', () => {
-      if (speedTimer) clearInterval(speedTimer);
-      // 完整性校验:防止流被中途截断却误报成功(会留下坏文件)
-      if (finalTotalSize > 0 && downloadedBytes !== finalTotalSize) {
-        if (logStream) {
-          logStream.write(`\n=== Node.js 回退引擎下载不完整 (${downloadedBytes}/${finalTotalSize} 字节),判定失败 ===\n`);
-          logStream.end();
+      const controller = new AbortController();
+      let response, downloadedBytes = 0, lastBytes = 0, lastEmitTime = Date.now();
+      activeIntegrityChecks.set(fileIndex, { wake: () => {
+        if (cancelled || cancelledFiles.has(fileIndex)) controller.abort();
+      } });
+      try {
+        await checkControl();
+        response = await axios({
+          url: fileUrl, method: 'GET', responseType: 'stream', timeout: 30000,
+          maxRedirects: 5, signal: controller.signal,
+          headers: { 'Accept-Encoding': 'identity' }, decompress: false,
+          validateStatus: status => status === 200,
+          proxy: env.http_proxy ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false
+        });
+        const ct = String(response.headers['content-type'] || '').toLowerCase();
+        if (ct.includes('text/html') && !/\.(html?|xhtml)$/i.test(path.basename(savePath))) {
+          throw new Error('服务器返回网页(错误页/需登录会话),非可下载文件');
         }
-        return reject(new Error(`下载不完整: ${downloadedBytes}/${finalTotalSize} 字节`));
+        if (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity') {
+          throw new Error('服务器改变了下载内容编码，不能安全保存');
+        }
+        const headerLen = Number(response.headers['content-length']) || 0;
+        const finalTotalSize = Number(totalSize) || headerLen;
+        if (totalSize > 0 && headerLen > 0 && Number(totalSize) !== headerLen) {
+          throw new Error(`下载大小与预期不一致: ${headerLen}/${totalSize} 字节`);
+        }
+        await checkControl();
+        if (fs.existsSync(savePath)) {
+          if (fs.statSync(savePath).size > 0) throw new Error('目标文件已存在，已保留原文件');
+          fs.unlinkSync(savePath); // Axel may leave an empty file after a failed connection.
+        }
+        if (logStream) logStream.write('\n=== 启动 Node.js 备用下载引擎 ===\n');
+        // pipeline closes BOTH streams before returning on error (including Windows
+        // write handles). Backpressure, pause and cancellation remain in this task.
+        await require('stream/promises').pipeline(response.data, async function* (source) {
+          for await (const chunk of source) {
+            await checkControl();
+            downloadedBytes += chunk.length;
+            if (finalTotalSize > 0 && downloadedBytes > finalTotalSize) throw new Error('下载数据超过预期大小');
+            const now = Date.now();
+            if (now - lastEmitTime >= 500) {
+              mainWindow.webContents.send('download-progress', {
+                index: fileIndex,
+                percentage: finalTotalSize > 0 ? Math.min(99, Math.floor(downloadedBytes * 100 / finalTotalSize)) : null,
+                speed: ((downloadedBytes - lastBytes) / (now - lastEmitTime) * 1000 / 1024).toFixed(1) + ' KB/s',
+                receivedBytes: downloadedBytes, totalBytes: finalTotalSize || null
+              });
+              lastBytes = downloadedBytes; lastEmitTime = now;
+            }
+            yield chunk;
+          }
+        }, fs.createWriteStream(savePath, { flags: 'wx' }));
+        await checkControl();
+        if (finalTotalSize > 0 && downloadedBytes !== finalTotalSize) throw new Error(`下载不完整: ${downloadedBytes}/${finalTotalSize} 字节`);
+      } catch (error) {
+        if (cancelled || cancelledFiles.has(fileIndex)) throw new Error('Cancelled');
+        throw error;
+      } finally {
+        controller.abort();
+        if (response) response.data.destroy();
+        activeIntegrityChecks.delete(fileIndex);
+        if (logStream && !logStream.writableEnded) logStream.end();
       }
-      mainWindow.webContents.send('download-progress', {
-        index: fileIndex,
-        percentage: 100,
-        speed: '0 B/s'
-      });
-      if (logStream) {
-        logStream.write(`\n=== Node.js 回退引擎下载成功 ===\n`);
-        logStream.end();
-      }
-      resolve();
-    });
-  });
-}
+    }
 
 // ==========================================
 // 【插件化 FTP / SFTP 协议下载引擎】
@@ -2982,6 +2924,47 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
     });
   });
 }
+
+    while (attempt < MAX_RETRIES && !downloadSuccess && !cancelled) {
+      if (pausedAxelFiles.has(fileIndex)) break; // 重试间隙收到暂停请求:不再起新尝试,等待用户恢复
+      attempt++;
+
+      if (attempt > 1) {
+        const backoffTime = Math.pow(2, attempt) * 1000;
+        console.log(`Retrying download for ${file.name} in ${backoffTime}ms (Attempt ${attempt}/${MAX_RETRIES})`);
+        mainWindow.webContents.send('download-status', {
+          index: fileIndex,
+          fileName: file.name,
+          status: 'downloading',
+          percentage: null,
+          speed: `网络波动重试中 (${attempt}/${MAX_RETRIES})...`,
+          savePath
+        });
+
+        // 等待重试或被取消
+        let sleepFinished = false;
+        await Promise.race([
+          new Promise(resolve => setTimeout(() => { sleepFinished = true; resolve(); }, backoffTime)),
+          new Promise((resolve, reject) => {
+            cancelTokens.set(fileIndex, () => {
+              reject(new Error('Cancelled'));
+            });
+          })
+        ]).catch(() => {
+          lastErrorMsg = '任务已取消';
+        });
+
+        if (!sleepFinished) {
+          break; // 已经被取消
+        }
+      }
+
+      if (attempt === 1 && fs.existsSync(savePath) && fs.statSync(savePath).size > 0 && !fs.existsSync(savePath + '.st')) {
+        preservePartialFile = true;
+        lastErrorMsg = '已有部分文件缺少 Axel 断点信息，已保留文件；请恢复 .st 文件或选择其他目录重新下载';
+        break;
+      }
+
       mainWindow.webContents.send('download-status', {
         index: fileIndex,
         fileName: file.name,
@@ -2991,23 +2974,6 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         savePath
       });
 
-      const env = { ...process.env };
-      if (clashProcess !== null) {
-        env.http_proxy = 'http://127.0.0.1:43289';
-        env.https_proxy = 'http://127.0.0.1:43289';
-        env.all_proxy = 'http://127.0.0.1:43289';
-        env.HTTP_PROXY = 'http://127.0.0.1:43289';
-        env.HTTPS_PROXY = 'http://127.0.0.1:43289';
-        env.ALL_PROXY = 'http://127.0.0.1:43289';
-      } else {
-        delete env.http_proxy;
-        delete env.https_proxy;
-        delete env.all_proxy;
-        delete env.HTTP_PROXY;
-        delete env.HTTPS_PROXY;
-        delete env.ALL_PROXY;
-        console.warn('⚠️ [Downloader] 加速内核未启动(clashProcess=null)，当前任务正在使用【直连】下载，未启用高速加速节点。');
-      }
 
       let threads = 16;
       if (file.size) {
@@ -3063,7 +3029,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         const isFtpProtocol = file.isFtp || String(file.url).startsWith('ftp://') || String(file.url).startsWith('ftps://');
         const isSftpProtocol = file.isSftp || String(file.url).startsWith('sftp://');
 
-        if (isFtpProtocol || isSftpProtocol) {
+        if (!bioGuard && (isFtpProtocol || isSftpProtocol)) {
           // FTP / SFTP 协议走插件化加速引擎 (支持 aria2c 多连接加速与 curl 断点续传)
           await downloadFileWithPlugin({ file, fileIndex, savePath, env, logStream, fileDestFolder, safeName, threads });
         } else {
@@ -3194,6 +3160,10 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
                 if (logStream) logStream.end();
                 return reject(new Error('Axel 内核无法启动，已保留数据与断点，请修复内核后继续'));
               }
+              if (fs.existsSync(savePath + '.st') || (fs.existsSync(savePath) && fs.statSync(savePath).size > 0)) {
+                if (logStream) logStream.end();
+                return reject(new Error('Axel 内核无法启动，原文件和断点已保留'));
+              }
               // axel 二进制/动态库级错误,重试无意义,直接走 Node 保底引擎
               if (logStream) {
                 logStream.write(`Axel 动态库缺失,触发纯 Node.js 保底下载引擎...\n`);
@@ -3205,6 +3175,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
               // 普通失败:交给外层重试循环重新用 axel(可断点续传),不立即降级到单连接 Node 引擎,避免断崖降速
               if (logStream) {
                 logStream.write(`Axel 本次失败(code=${code}),将重试并保留断点...\n`);
+                logStream.end();
               }
               reject(new Error(`Axel exited with code ${code}`));
             }
@@ -3225,25 +3196,19 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
 
     cancelTokens.delete(fileIndex);
 
-    // 所有 axel 重试均失败后,最后用 Node 保底引擎兜底一次(清除 axel 断点状态,从头下载)
-    // 注意:用户暂停/取消的任务不走保底,否则暂停会被后台偷偷续跑
+    // A sequential stream cannot resume Axel's sparse ranges. Keep any partial
+    // data/checkpoint and retry with Axel; fallback is only safe for a fresh file.
     if (!downloadSuccess && !bioGuard && !preservePartialFile && !cancelled && lastErrorMsg !== 'Paused' && !pausedAxelFiles.has(fileIndex) && !cancelledFiles.has(fileIndex)) {
-      try {
-        try { fs.unlinkSync(savePath + '.st'); } catch (e) {}
-        console.warn(`All axel retries failed for ${file.name}, final fallback to Node engine.`);
-        await downloadFileWithNodeStream(file.url, savePath, env, fileIndex, file.size, null);
-        downloadSuccess = true;
-      } catch (nodeErr) {
-        lastErrorMsg = nodeErr.message;
-        // 若 Node 引擎因为代理连接被拒绝 (ECONNREFUSED 127.0.0.1:43289) 失败，自动清除代理直连兜底一次
-        if (nodeErr.message && nodeErr.message.includes('ECONNREFUSED')) {
-          try {
-            console.warn(`Node proxy failed with ECONNREFUSED, retrying directly without proxy for ${file.name}...`);
-            await downloadFileWithNodeStream(file.url, savePath, {}, fileIndex, file.size, null);
-            downloadSuccess = true;
-          } catch (eDirect) {
-            lastErrorMsg = eDirect.message;
-          }
+      const hasPartial = fs.existsSync(savePath + '.st') || (fs.existsSync(savePath) && fs.statSync(savePath).size > 0);
+      if (hasPartial) {
+        lastErrorMsg += '；原文件和 Axel 断点已保留，请重试继续下载';
+      } else if (/^https?:/i.test(file.url)) {
+        try {
+          console.warn(`All axel retries failed for ${file.name}, final fallback to Node engine.`);
+          await downloadFileWithNodeStream(file.url, savePath, env, fileIndex, file.size, null);
+          downloadSuccess = true;
+        } catch (nodeErr) {
+          lastErrorMsg = nodeErr.message;
         }
       }
     }

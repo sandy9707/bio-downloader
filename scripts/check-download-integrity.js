@@ -62,6 +62,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 (async () => {
   const files = parseEnaReport([row()]);
   assert.equal(files[0].md5, md5(good));
+  assert.ok(files[0].url.startsWith('http://ftp.sra.ebi.ac.uk/'), 'use ENA documented HTTP archive transport');
   assert.equal(files[1].md5, md5(bad));
   assert.equal(files[1].size, bad.length);
   assert.equal(parseEnaReport([{ ...row(), fastq_md5: md5(good) }])[1].md5, null, 'misaligned arrays must not borrow another mate checksum');

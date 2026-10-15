@@ -33,6 +33,15 @@ jobs:
       - name: 传输记录、恢复和操作系统暂停回归
         run: npm test
 
+      - name: 完整下载真实 EBI 文件并独立校验 MD5
+        run: node scripts/check-live-ebi-download.js
+
+      - name: 保存真实下载验证结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-ebi-macos
+          path: .evidence/live-ebi-*.json
+
       - name: 依据 Git Tag 同步 package.json 版本号
         run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
 
@@ -76,6 +85,15 @@ jobs:
 
       - name: 传输记录、恢复和操作系统暂停回归
         run: npm test
+
+      - name: 完整下载真实 EBI 文件并独立校验 MD5
+        run: node scripts/check-live-ebi-download.js
+
+      - name: 保存真实下载验证结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-ebi-windows
+          path: .evidence/live-ebi-*.json
 
       - name: 依据 Git Tag 同步 package.json 版本号
         run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"

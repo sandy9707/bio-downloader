@@ -35,3 +35,6 @@ build_patch.js
 .claude/
 诊断报告_*.md
 AGENT_HANDOFF.md
+
+# Isolated live release-check output
+.evidence/

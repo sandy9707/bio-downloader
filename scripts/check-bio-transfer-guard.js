@@ -12,11 +12,17 @@ engine.ensureBinaries();
 const binary = path.join(process.env.BIODL_DATA_DIR, 'bin', process.platform === 'win32' ? 'axel.exe' : 'axel');
 const bytes = require('zlib').gzipSync(crypto.randomBytes(2 * 1024 * 1024));
 let etag = '"generation-1"', mode = 'good', received = [], slow = false, holdBody = false;
+const transientFailures = new Map();
 const server = http.createServer((req, res) => {
   const m = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || '');
   const a = m ? +m[1] : 0, b = m && m[2] ? Math.min(+m[2], bytes.length - 1) : bytes.length - 1;
   received.push({ a, b, ifRange: req.headers['if-range'], url: req.url });
   const bad = b - a > 4096 && a > 0;
+  if (mode === 'transient-segments' && bad) {
+    const key = `${a}-${b}`, failures = transientFailures.get(key) || 0;
+    transientFailures.set(key, failures + 1);
+    if (failures < 2) { res.writeHead(502, { 'Content-Length': 0 }); res.end(); return; }
+  }
   const actual = mode === 'wrong-range' && bad ? 0 : a;
   const headers = { 'Content-Range': `bytes ${actual}-${actual + b - a}/${bytes.length}`, 'Content-Length': b - a + 1, 'Accept-Ranges': 'bytes', ETag: mode === 'changed' && bad ? '"generation-2"' : etag };
   if (mode === 'encoding' && bad) headers['Content-Encoding'] = 'gzip';
@@ -49,7 +55,10 @@ const guards = new Set();
 async function open(options) { const guard = await createBioTransferGuard(options); guards.add(guard); return guard; }
 async function close(guard) { await guard.close(); guards.delete(guard); }
 (async () => {
-  assert.equal(bioSource('http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR123/SRR123456/SRR123456_1.fastq.gz'), 'https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR123/SRR123456/SRR123456_1.fastq.gz');
+  for (const scheme of ['http', 'https', 'ftp']) assert.equal(bioSource(`${scheme}://ftp.sra.ebi.ac.uk/vol1/fastq/SRR123/SRR123456/SRR123456_1.fastq.gz`), 'http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR123/SRR123456/SRR123456_1.fastq.gz');
+  assert.equal(bioSource('http://ftp.ncbi.nlm.nih.gov/file.gz'), 'https://ftp.ncbi.nlm.nih.gov/file.gz');
+  assert.equal(bioSource('https://ftp.sra.ebi.ac.uk/vol1/fastq/a.gz?signature=x'), null);
+  assert.equal(bioSource('https://user:pass@ftp.sra.ebi.ac.uk/vol1/fastq/a.gz'), null);
   assert.equal(bioSource('https://ftp.sra.ebi.ac.uk.evil.test/vol1/fastq/a.gz'), null);
   assert.equal(bioSource('https://ftp.ncbi.nlm.nih.gov/a?signature=x'), null, 'signed/browser links retain their native flow');
   assert.throws(() => parseAxelState(Buffer.alloc(28), bytes.length));
@@ -84,6 +93,14 @@ async function close(guard) { await guard.close(); guards.delete(guard); }
   assert.equal(recovered.recoveredResponses, 1);
   assert.deepEqual(fs.readFileSync(retryFile), bytes, 'a short response must resume without duplicated or missing bytes');
   await close(retry);
+  mode = 'transient-segments';
+  const transientFile = path.join(temp, 'transient.gz'); let transientProc;
+  const transient = await open({ url: base + '/file', filename: transientFile, expectedSize: bytes.length, onFatal: () => transientProc?.kill() });
+  assert.equal(await runAxel(transient.url, transientFile, p => { transientProc = p; }), 0);
+  const transientResult = await transient.verify();
+  assert.ok(transientResult.recoveredResponses > 3, 'separate segments must have independent retry budgets');
+  assert.deepEqual(fs.readFileSync(transientFile), bytes);
+  await close(transient); mode = 'good';
   const filename = path.join(temp, 'good.gz');
   const guard = await open({ url: base + '/file', filename, expectedSize: bytes.length });
   await assert.rejects(open({ url: base + '/file', filename, expectedSize: bytes.length }), /已有下载任务/);

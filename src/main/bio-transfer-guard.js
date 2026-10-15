@@ -13,12 +13,16 @@ const activeFiles = new Set();
 function bioSource(value) {
   try {
     const u = new URL(value);
-    if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password || u.port || u.search) return null;
+    if (!['http:', 'https:', 'ftp:'].includes(u.protocol) || u.username || u.password || u.port || u.search) return null;
     const host = u.hostname;
     const ebi = host === 'ftp.sra.ebi.ac.uk' && /^\/vol1\/(fastq|srr|err|drr)\//.test(u.pathname);
     const ncbi = ['ftp.ncbi.nlm.nih.gov', 'sra-download.ncbi.nlm.nih.gov', 'sra-pub-run-odp.s3.amazonaws.com'].includes(host);
-    if (!ebi && !ncbi) return null;
-    u.protocol = 'https:'; // Public static archives support TLS; never downgrade it.
+    if (!ebi && (!ncbi || u.protocol === 'ftp:')) return null;
+    // ENA documents this exact public archive over HTTP. Forcing TLS can fail
+    // on ftp.sra.ebi.ac.uk before Axel can start. This is a
+    // host/path allowlist, not a generic HTTPS-to-HTTP error fallback.
+    // https://www.ebi.ac.uk/ena/browser/downloading-data
+    u.protocol = ebi ? 'http:' : 'https:';
     return u.href;
   } catch (_) { return null; }
 }
@@ -92,6 +96,8 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
   let closed = false, fatal = null, server = null, checkpointTimer = null, checkpointBusy = false;
   let saveChain = Promise.resolve(), sampledBytes = 0, networkSampleBytes = 0;
   let interruptedResponses = 0;
+  const segmentFailures = new Map();
+  const retryable = error => error.retryable || ['ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT', 'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE'].includes(error.code);
   let state = { version: 1, sourceKey, completed: false, samples: {} };
   let size, identity, windows, checkpointStamp = null;
   const receipts = new Map();
@@ -107,7 +113,7 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
     for (const controller of controllers) controller.abort();
     onFatal(fatal);
   };
-  async function request(start, end, stream = false, signal) {
+  async function requestOnce(start, end, stream = false, signal) {
     if (closed) throw new Error('Cancelled');
     const headers = { Range: `bytes=${start}-${end}`, 'Accept-Encoding': 'identity' };
     if (identity?.etag && !identity.etag.startsWith('W/')) headers['If-Range'] = identity.etag;
@@ -121,6 +127,18 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
       if (!stream && response.data.length !== end - start + 1) throw new Error('服务器提前结束分段响应');
       return { response, total };
     } catch (error) { if (stream) response.data.destroy(); throw error; }
+  }
+  async function request(start, end, stream = false, signal) {
+    for (let attempt = 0; ; attempt++) {
+      await checkControl();
+      if (closed || signal?.aborted) throw new Error('Cancelled');
+      try { return await requestOnce(start, end, stream, signal); }
+      catch (error) {
+        if (attempt >= 2 || !retryable(error) || closed || signal?.aborted) throw error;
+        interruptedResponses++;
+        await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 250));
+      }
+    }
   }
   async function sampleRemote(window) {
     const { response } = await request(window.offset, window.offset + window.length - 1);
@@ -177,7 +195,11 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
     if (exists && fs.existsSync(sidecar)) {
       if ((await fs.promises.stat(sidecar)).size > 1024 * 1024) throw fail('下载记录过大或已损坏');
       state = JSON.parse(await fs.promises.readFile(sidecar, 'utf8'));
-      if (state.version !== 1 || state.sourceKey !== sourceKey) throw fail('同名文件属于不同的下载链接，不能跳过或混合续传');
+      // 2.0.44 forced the same ENA archive path to HTTPS.
+      // Still validate size, generation and completed-range samples below.
+      const oldEnaKey = url.startsWith('http://ftp.sra.ebi.ac.uk/') && sha(url.replace(/^http:/, 'https:'));
+      if (state.version !== 1 || (state.sourceKey !== sourceKey && state.sourceKey !== oldEnaKey)) throw fail('同名文件属于不同的下载链接，不能跳过或混合续传');
+      state.sourceKey = sourceKey;
       state.samples = {};
     }
     const probe = await request(0, 0);
@@ -241,15 +263,19 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
           });
         }
         if (offset !== end + 1) { const error = new Error('服务器提前结束分段响应'); error.retryable = true; throw error; }
+        segmentFailures.delete(end);
         res.end();
       } catch (error) {
         // Suspending Axel can exhaust socket idle timeouts. Close that connection;
         // Axel reconnects at its exact byte offset when the user resumes.
         if (!clientGone && !closed && !isPaused()) {
-          const retryable = error.retryable || ['ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT', 'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE'].includes(error.code);
           // Let Axel reconnect at the bytes it actually wrote. Never fabricate
-          // a completed response, and bound repeated failures for this task.
-          if (!retryable || ++interruptedResponses >= 3) reportFatal(error);
+          // a completed response. Bound failures per segment: unrelated threads
+          // must not spend each other's retry budget on a load-balanced proxy.
+          interruptedResponses++;
+          const failures = (segmentFailures.get(end) || 0) + 1;
+          segmentFailures.set(end, failures);
+          if (!retryable(error) || failures >= 3) reportFatal(error);
         }
         res.destroy();
       } finally { controllers.delete(controller); }

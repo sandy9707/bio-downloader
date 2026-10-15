@@ -34,7 +34,7 @@ function parseEnaReport(rows) {
       if (!identity || (row.run_accession && row.run_accession !== identity.run)) return;
       files.push({
         name: url.slice(url.lastIndexOf('/') + 1),
-        url: `https://${identity.key}`, folder: identity.run,
+        url: `http://${identity.key}`, folder: identity.run,
         // Do not shift positions when a field is empty or a list is malformed.
         md5: hashes.length === urls.length ? validMd5(hashes[index]) : null,
         size: sizes.length === urls.length ? (knownSize(sizes[index]) || 0) : 0
