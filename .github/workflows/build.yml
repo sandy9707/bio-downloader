@@ -41,6 +41,7 @@ jobs:
         with:
           name: live-ebi-macos
           path: .evidence/live-ebi-*.json
+          include-hidden-files: true
 
       - name: 依据 Git Tag 同步 package.json 版本号
         run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
@@ -94,6 +95,7 @@ jobs:
         with:
           name: live-ebi-windows
           path: .evidence/live-ebi-*.json
+          include-hidden-files: true
 
       - name: 依据 Git Tag 同步 package.json 版本号
         run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"

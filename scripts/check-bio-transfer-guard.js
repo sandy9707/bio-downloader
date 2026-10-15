@@ -142,6 +142,24 @@ async function close(guard) { await guard.close(); guards.delete(guard); }
   await assert.rejects(open({ url: base + '/file', filename: path.join(temp, 'proxy.gz'), expectedSize: bytes.length, proxy: { protocol: 'http', host: '127.0.0.1', port: 1 }, timeout: 1000 }));
   assert.equal(received.length, 0);
 
+  // A briefly refused proxy connection is retryable on the SAME route, without
+  // confusing it with corrupt data or leaking a direct request to the origin.
+  const recoveringProxy = http.createServer(server.listeners('request')[0]);
+  await new Promise(resolve => recoveringProxy.listen(0, '127.0.0.1', resolve));
+  const proxyPort = recoveringProxy.address().port;
+  await new Promise(resolve => recoveringProxy.close(resolve));
+  const proxyReady = new Promise(resolve => setTimeout(() => recoveringProxy.listen(proxyPort, '127.0.0.1', resolve), 100));
+  let recoveredProxy;
+  try {
+    recoveredProxy = await open({ url: base + '/proxy-only', filename: path.join(temp, 'recover-proxy.gz'), expectedSize: bytes.length, proxy: { protocol: 'http', host: '127.0.0.1', port: proxyPort } });
+    assert.ok(received.length > 0);
+    assert.ok(received.every(r => r.url.startsWith('http://')), 'every request must use the proxy absolute URL');
+  } finally {
+    if (recoveredProxy) await close(recoveredProxy);
+    await proxyReady; recoveringProxy.closeAllConnections();
+    await new Promise(resolve => recoveringProxy.close(resolve));
+  }
+
   // Real main IPC: completion, dedup, failed response, no consumption for skipped/bad files.
   const axios = require('axios'), charges = [], events = [];
   axios.post = async (_url, body) => { charges.push(body.bytes); return { data: { success: true } }; };
