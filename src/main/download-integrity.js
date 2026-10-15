@@ -63,10 +63,11 @@ function createEnaResolver(fetchRows) {
     if (cache.size > 256) cache.delete(cache.keys().next().value);
     return entry.promise;
   }
-  async function reference(file) {
+  async function reference(file, { deep = false } = {}) {
     const identity = enaIdentity(file.url);
-    const result = { expectedSize: knownSize(file.size), expectedMd5: validMd5(file.md5), required: Boolean(identity || validMd5(file.md5)) };
-    if (!identity || (result.expectedMd5 && result.expectedSize)) return result;
+    const result = { expectedSize: knownSize(file.size), expectedMd5: validMd5(file.md5), required: deep && Boolean(identity || validMd5(file.md5)), gzip: /\.gz(?:[?#]|$)/i.test(file.name || file.url || '') };
+    // Fast checks need no extra checksum request when the size is already known.
+    if (!identity || (result.expectedSize && (!deep || result.expectedMd5))) return result;
     try {
       const files = await list(identity.run);
       const match = files.find(item => enaIdentity(item.url).key === identity.key);
@@ -83,13 +84,14 @@ function createEnaResolver(fetchRows) {
   return { list, reference };
 }
 
-async function verifyFile(filename, reference, { checkControl = () => {}, onProgress = () => {} } = {}) {
+async function verifyFile(filename, reference, { deep = false, checkControl = () => {}, onProgress = () => {} } = {}) {
   await checkControl();
   const before = await fs.promises.stat(filename);
   await checkControl();
   const result = {
     status: 'unchecked', expectedSize: reference.expectedSize, actualSize: before.size,
-    expectedMd5: reference.expectedMd5, actualMd5: null, reason: reference.reason || null
+    expectedMd5: reference.expectedMd5, actualMd5: null, reason: reference.reason || null,
+    method: deep ? 'md5' : 'quick', sampledBytes: 0
   };
   function fail(message) {
     result.status = 'failed';
@@ -98,10 +100,30 @@ async function verifyFile(filename, reference, { checkControl = () => {}, onProg
     throw error;
   }
   if (!before.isFile()) fail('目标不是普通文件');
+  if (fs.existsSync(filename + '.st')) fail('下载断点状态仍存在，暂不能确认文件已完成');
   if (reference.expectedSize && before.size !== reference.expectedSize) {
     fail(`文件大小不符：应为 ${reference.expectedSize} 字节，实际 ${before.size} 字节`);
   }
-  if (reference.expectedMd5) {
+  if (reference.gzip) {
+    if (before.size < 18) fail('gzip 文件过短，缺少必要的头部或尾部');
+    const handle = await fs.promises.open(filename, 'r');
+    try {
+      const header = Buffer.alloc(10), trailer = Buffer.alloc(8);
+      const headRead = await handle.read(header, 0, 10, 0);
+      const tailRead = await handle.read(trailer, 0, 8, before.size - 8);
+      result.sampledBytes = headRead.bytesRead + tailRead.bytesRead;
+      if (headRead.bytesRead !== 10 || tailRead.bytesRead !== 8) fail('读取 gzip 头尾不完整');
+      if (header[0] !== 0x1f || header[1] !== 0x8b || header[2] !== 8 || (header[3] & 0xe0)) fail('文件头不是有效的 gzip 格式，可能下载到了错误页面或其他内容');
+      result.gzipHeader = true;
+      // These fields describe only the last gzip member. Merely reading them does
+      // NOT validate CRC, decompression, or the middle of a multi-member file.
+      result.gzipTrailer = { crc32: trailer.readUInt32LE(0).toString(16).padStart(8, '0'), isizeModulo32: trailer.readUInt32LE(4) };
+    } finally { await handle.close(); }
+    await checkControl();
+    const after = await fs.promises.stat(filename);
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) fail('检查期间文件被修改，请重新检查');
+  }
+  if (deep && reference.expectedMd5) {
     const hash = crypto.createHash('md5');
     let bytes = 0;
     onProgress(0, before.size);
@@ -120,10 +142,10 @@ async function verifyFile(filename, reference, { checkControl = () => {}, onProg
     await checkControl();
     result.actualMd5 = hash.digest('hex');
     if (bytes !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) fail('校验期间文件被修改，请重新校验');
-    if (result.actualMd5 !== reference.expectedMd5) fail(`MD5 不匹配：应为 ${reference.expectedMd5}，实际 ${result.actualMd5}`);
-    result.status = 'verified';
+    result.status = result.actualMd5 === reference.expectedMd5 ? 'verified' : 'mismatch';
+    if (result.status === 'mismatch') result.reason = 'MD5 与参考值不一致；文件和参考信息都可能有问题，请人工核对。原文件已保留';
   } else {
-    result.status = reference.required ? 'unavailable' : (reference.expectedSize ? 'size-only' : 'unchecked');
+    result.status = deep && reference.required ? 'unavailable' : (reference.expectedSize ? 'quick-checked' : 'unchecked');
   }
   return result;
 }

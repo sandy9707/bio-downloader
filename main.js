@@ -2478,6 +2478,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
   const actualConcurrentCount = Math.max(1, Math.min(maxConcurrentCount, files.length));
   const lowPowerMode = Boolean(getSettings().lowPowerMode);
   const stableMode = Boolean(getSettings().stableMode);
+  const deepIntegrityCheck = Boolean(getSettings().deepIntegrityCheck);
 
   let activeCount = 0;
   let fileIndexInQueue = 0;
@@ -2513,7 +2514,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     }
 
     // Fetch metadata alongside the transfer, including old saved tasks/direct ENA links.
-    const referencePromise = enaIntegrity.reference(file);
+    const referencePromise = enaIntegrity.reference(file, { deep: deepIntegrityCheck });
     let verification = null;
     let diagnosticLogPath = null;
     const checkControl = async () => {
@@ -2531,13 +2532,13 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       let lastProgressAt = 0;
       try {
         await checkControl();
-        mainWindow.webContents.send('download-status', { index: fileIndex, status: 'downloading', phase: 'verifying', speed: '正在获取文件校验信息…', savePath });
+        mainWindow.webContents.send('download-status', { index: fileIndex, status: 'downloading', phase: 'verifying', speed: deepIntegrityCheck ? '正在获取文件校验信息…' : '正在快速检查文件…', savePath });
         const reference = await referencePromise;
         await checkControl();
         if (reference.expectedMd5) file.md5 = reference.expectedMd5;
         if (reference.expectedSize) file.size = reference.expectedSize;
         verification = await verifyFile(savePath, reference, {
-          checkControl,
+          deep: deepIntegrityCheck, checkControl,
           onProgress: (bytes, total) => {
             const now = Date.now();
             if (now - lastProgressAt < 500 && bytes !== total) return;
@@ -2574,7 +2575,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
           await checkIntegrity();
           mainWindow.webContents.send('download-status', {
             index: fileIndex, fileName: file.name, status: 'completed', percentage: 100, savePath,
-            speed: verification.status === 'verified' ? 'MD5 校验通过(跳过)' : verification.status === 'unavailable' ? '已存在（MD5 未核验，跳过）' : '已存在且大小匹配(跳过)',
+            speed: verification.status === 'verified' ? 'MD5 与参考值一致(跳过)' : verification.status === 'mismatch' ? '已保留（MD5 与参考值不一致，跳过）' : verification.status === 'unavailable' ? '已存在（MD5 未核验，跳过）' : '快速检查通过(跳过)',
             ...integrityFields()
           });
         } catch (error) {
@@ -3241,7 +3242,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         fileName: file.name,
         status: 'completed',
         percentage: 100,
-        speed: file.isUpdate ? '已下载(更新包)' : verification.status === 'verified' ? '已保存（MD5 校验通过）' : verification.status === 'unavailable' ? '已保存（MD5 未核验）' : '已保存',
+        speed: file.isUpdate ? '已下载(更新包)' : verification.status === 'verified' ? '已保存（MD5 与参考值一致）' : verification.status === 'mismatch' ? '已保存（MD5 与参考值不一致，需核对）' : verification.status === 'unavailable' ? '已保存（MD5 未核验）' : verification.status === 'quick-checked' ? '已保存（快速检查通过）' : '已保存',
         savePath, ...integrityFields()
       });
     } else {

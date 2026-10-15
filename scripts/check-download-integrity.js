@@ -5,7 +5,9 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'biodl-integrity-test-'));
 process.env.BIODL_DATA_DIR = path.join(temp, 'profile');
 process.env.BIODL_TEST_PRIVATE_VALUE = 'must-not-appear-in-diagnostics';
 const md5 = bytes => crypto.createHash('md5').update(bytes).digest('hex');
-const good = Buffer.alloc(32768, 65), bad = Buffer.alloc(32768, 66);
+const good = require('zlib').gzipSync(crypto.randomBytes(32768)), bad = Buffer.from(good);
+bad[50] ^= 0xff; // Same size, valid header/trailer; quick checks cannot prove middle content.
+const badHeader = Buffer.from(good); badHeader[0] = 0;
 const enaUrl = (run, mate = 1) => `https://ftp.sra.ebi.ac.uk/vol1/fastq/${run.slice(0, 6)}/${run}/${run}_${mate}.fastq.gz`;
 const row = (run = 'SRR123456') => ({ run_accession: run, fastq_ftp: [enaUrl(run), enaUrl(run, 2)].join(';'), fastq_md5: `${md5(good)};${md5(bad)}`, fastq_bytes: `${good.length};${bad.length}` });
 const axios = require('axios');
@@ -32,7 +34,7 @@ fs.mkdirSync(dest);
 const requests = [];
 const server = http.createServer((req, res) => {
   requests.push(req.url);
-  const bytes = req.url.includes('bad') ? bad : good;
+  const bytes = req.url.includes('bad-header') ? badHeader : req.url.includes('bad') ? bad : good;
   let start = 0, end = bytes.length - 1;
   const range = /bytes=(\d+)-(\d*)/.exec(req.headers.range || '');
   if (range) {
@@ -66,7 +68,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   assert.equal(enaIdentity(enaUrl('SRR123456').replace(/_1.fastq.gz$/, '/SRR987654_1.fastq.gz')), null);
   let calls = 0;
   const resolver = createEnaResolver(async () => { calls++; await delay(5); return [row()]; });
-  const refs = await Promise.all([1, 2].map(mate => resolver.reference({ url: enaUrl('SRR123456', mate).replace('https:', 'http:') })));
+  const refs = await Promise.all([1, 2].map(mate => resolver.reference({ url: enaUrl('SRR123456', mate).replace('https:', 'http:') }, { deep: true })));
   assert.equal(calls, 1, 'paired files must share one metadata request');
   assert.equal(refs[1].expectedMd5, md5(bad));
   assert.equal(refs[0].expectedSize, good.length);
@@ -75,12 +77,14 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   const changed = path.join(dest, 'changed.bin');
   fs.writeFileSync(changed, good);
   await assert.rejects(verifyFile(changed, { expectedSize: good.length, expectedMd5: md5(good) }, {
+    deep: true,
     onProgress: bytes => { if (!bytes) fs.appendFileSync(changed, 'changed'); }
   }), /校验期间文件被修改/);
   fs.unlinkSync(changed);
 
   engine.ensureBinaries();
-  await engine.callIpcHandler('save-settings', { loggingEnabled: true });
+  assert.equal(Boolean((await engine.callIpcHandler('get-settings')).deepIntegrityCheck), false, 'full MD5 must be opt-in');
+  await engine.callIpcHandler('save-settings', { loggingEnabled: true, deepIntegrityCheck: true });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   async function check(name, { size = good.length, expected = md5(good), existing, url = `${base}/${name}`, status = 'failed', verification, charged = 0 } = {}) {
@@ -99,18 +103,20 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     }
     return result;
   }
-  await check('existing-bad.fastq.gz', { existing: bad, verification: 'failed' });
-  const badResult = await check('new-bad.fastq.gz', { verification: 'failed' });
+  await check('existing-bad.fastq.gz', { existing: bad, status: 'completed', verification: 'mismatch' });
+  const badResult = await check('new-bad.fastq.gz', { status: 'completed', verification: 'mismatch', charged: 1 });
   assert.equal(badResult.verification.actualMd5, md5(bad));
   assert.deepEqual(fs.readFileSync(path.join(dest, 'new-bad.fastq.gz')), bad, 'mismatch must preserve downloaded bytes');
+  const wrongReference = await check('wrong-reference.fastq.gz', { expected: md5(bad), status: 'completed', verification: 'mismatch', charged: 1 });
+  assert.match(wrongReference.verification.reason, /参考信息都可能有问题/);
   await check('short.fastq.gz', { size: good.length * 2, verification: 'failed' });
   await check('valid.fastq.gz', { status: 'completed', verification: 'verified', charged: 1 });
   await check('valid-existing.fastq.gz', { existing: good, status: 'completed', verification: 'verified' });
-  await check('ordinary.bin', { expected: null, status: 'completed', verification: 'size-only', charged: 1 });
+  await check('ordinary.bin', { expected: null, status: 'completed', verification: 'quick-checked', charged: 1 });
   await check('unknown-size.bin', { expected: null, size: 0, status: 'completed', verification: 'unchecked', charged: 1 });
 
   // Old histories/direct links without MD5 obtain the correct ENA mate reference.
-  await check('SRR123456_1.fastq.gz', { url: enaUrl('SRR123456'), expected: null, existing: bad, verification: 'failed' });
+  await check('SRR123456_1.fastq.gz', { url: enaUrl('SRR123456'), expected: null, existing: bad, status: 'completed', verification: 'mismatch' });
   const metaBefore = metadataCalls;
   const secondMate = await check('SRR123456_2.fastq.gz', { url: enaUrl('SRR123456', 2), expected: null, existing: bad, status: 'completed', verification: 'verified' });
   assert.equal(metadataCalls, metaBefore, 'metadata must be cached across paired tasks');
@@ -158,6 +164,36 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.deepEqual(fs.readFileSync(path.join(dest, file.name)), good);
   }
 
+  // Default fast mode must not read/hash the full file or wait on MD5 metadata.
+  await engine.callIpcHandler('save-settings', { deepIntegrityCheck: false });
+  const originalStream = fs.createReadStream;
+  let fullReads = 0;
+  fs.createReadStream = (...args) => { fullReads++; return originalStream(...args); };
+  try {
+    const quick = await check('quick-good.fastq.gz', { status: 'completed', verification: 'quick-checked', charged: 1 });
+    assert.equal(quick.verification.actualMd5, null);
+    assert.equal(quick.verification.sampledBytes, 18);
+    await check('quick-bad-middle.fastq.gz', { status: 'completed', verification: 'quick-checked', charged: 1 });
+    await check('quick-bad-header.fastq.gz', { verification: 'failed' });
+    await check('quick-short.fastq.gz', { size: good.length * 2, verification: 'failed' });
+    const callsBeforeQuick = metadataCalls;
+    await check('SRR888888_1.fastq.gz', { url: enaUrl('SRR888888'), expected: null, existing: good, status: 'completed', verification: 'quick-checked' });
+    assert.equal(metadataCalls, callsBeforeQuick, 'known-size fast checks need no extra MD5 API call');
+    assert.equal(fullReads, 0, 'fast mode must never open a full-file read stream');
+  } finally { fs.createReadStream = originalStream; }
+
+  // Gzip tail fields can legitimately be zero or describe only the last member.
+  for (const bytes of [require('zlib').gzipSync(Buffer.alloc(0)), Buffer.concat([good, require('zlib').gzipSync(Buffer.alloc(0))])]) {
+    const p = path.join(dest, 'members.gz'); fs.writeFileSync(p, bytes);
+    const quick = await verifyFile(p, { expectedSize: bytes.length, gzip: true });
+    assert.equal(quick.status, 'quick-checked');
+    assert.equal(quick.gzipTrailer.isizeModulo32, 0);
+  }
+  const withState = path.join(dest, 'state-remains.gz');
+  fs.writeFileSync(withState, good); fs.writeFileSync(withState + '.st', 'unfinished');
+  await assert.rejects(verifyFile(withState, { expectedSize: good.length, gzip: true }), /断点状态仍存在/);
+  assert.deepEqual(fs.readFileSync(withState), good);
+
   // A full-size file + .st must enter the resume path, never the size-only skip.
   const partial = { name: 'preallocated.bin', url: `${base}/preallocated.bin`, size: good.length };
   fs.writeFileSync(path.join(dest, partial.name), good);
@@ -185,7 +221,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   assert.ok(!logs.includes(process.env.BIODL_TEST_PRIVATE_VALUE), 'unrelated environment secrets must not be logged');
   assert.ok(charges.every(bytes => bytes === good.length), 'consumption must use real file size');
   assert.equal(engine.eventBus.listenerCount('cancel-all-downloads-signal'), 0, 'finished batches must release cancellation handlers');
-  console.log('完整性回归通过：真实 Axel 下载、错 MD5/短文件拦截、同名校验、断点保护、元数据失败提示、校验暂停/恢复/取消、计费与诊断脱敏');
+  console.log('完整性回归通过：默认快速检查仅读18字节、不做全文MD5、不额外查询MD5；短文件/错误gzip头拦截；可选MD5差异提示、同名检查、断点保护、暂停恢复取消、计费与诊断脱敏');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   server.closeAllConnections();
   await new Promise(resolve => server.close(resolve));

@@ -1799,6 +1799,18 @@
           <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">切换设置后，仅对下一批新开始的下载任务生效，正在下载的任务不受影响。</div>
         </div>
 
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">下载文件检查</label>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; margin-top:0.5rem; padding:0.75rem; background:var(--bg-input); border-radius:6px; border:1px solid var(--border-color);">
+            <div style="font-size:0.9rem; color:var(--text-muted);"><strong>EBI/ENA 深度 MD5 校验（可选）：</strong>默认关闭，使用文件大小、断点状态与 gzip 文件头快速检查。开启后会完整读取文件，需要额外时间；与参考 MD5 不一致时提示核对并保留文件，不自动重下。</div>
+            <label class="switch">
+              <input type="checkbox" id="settingsDeepIntegrityToggle" onchange="toggleDeepIntegrityCheck(this.checked)">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">对下一批任务生效。快速检查不能排除文件中间的内容损坏；官方 MD5 也作为参考信息使用。</div>
+        </div>
+
         <!-- 下载诊断日志 -->
         <div class="form-group" style="margin-top:1.5rem;">
           <label style="font-weight:600;">📋 下载故障排查与诊断日志</label>

@@ -95,7 +95,7 @@ function harness(historyStore, cache = new Map()) {
   // Persisted verification warnings must remain visible in the completed list.
   const cards = [];
   const ui = vm.createContext({
-    completedDownloads: [{ name: 'unverified.fastq.gz', verification: { status: 'unavailable' } }, { name: 'old.bin', skip: true }],
+    completedDownloads: [{ name: 'unverified.fastq.gz', verification: { status: 'unavailable' } }, { name: 'old.bin', skip: true }, { name: 'mismatch.gz', verification: { status: 'mismatch' } }, { name: 'quick.gz', verification: { status: 'quick-checked' } }],
     document: {
       getElementById: id => id === 'transferCompletedList' ? { querySelectorAll: () => [], appendChild: card => cards.push(card) } : null,
       createElement: () => ({ dataset: {} })
@@ -107,6 +107,8 @@ function harness(historyStore, cache = new Map()) {
   assert.match(cards[0].innerHTML, /MD5 未核验/);
   assert.match(cards[1].innerHTML, /大小匹配/);
   assert.ok(!cards[1].innerHTML.includes('已校验'), 'old size-only skips must not claim checksum verification');
+  assert.match(cards[2].innerHTML, /与参考值不一致，需核对/);
+  assert.match(cards[3].innerHTML, /快速检查通过（未做 MD5）/);
 
   // Existing empty histories are not repopulated from stale browser cache.
   store.save({ completed: [], failed: [], active: [], extraction: [] });

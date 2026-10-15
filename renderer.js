@@ -1255,9 +1255,10 @@ async function startDownload() {
     const addedFailed = Math.max(0, failedDownloads.length - beforeFailed);
     const skippedCount = completedDownloads.slice(0, addedCompleted).filter((c) => c.skip).length;
     const unverifiedCount = completedDownloads.slice(0, addedCompleted).filter(c => c.verification && c.verification.status === 'unavailable').length;
+    const mismatchCount = completedDownloads.slice(0, addedCompleted).filter(c => c.verification && c.verification.status === 'mismatch').length;
     const successCount = addedCompleted - skippedCount;
     const pausedLeft = activeDownloads.filter((d) => d.status === 'paused').length;
-    showToast(`本批下载结束:保存 ${successCount} · 跳过 ${skippedCount} · 失败 ${addedFailed}${unverifiedCount ? ' · MD5 未核验 ' + unverifiedCount : ''}${pausedLeft > 0 ? ' · 暂停 ' + pausedLeft : ''}`, addedFailed > 0 || unverifiedCount > 0 ? 'warning' : 'success');
+    showToast(`本批下载结束:保存 ${successCount} · 跳过 ${skippedCount} · 失败 ${addedFailed}${unverifiedCount ? ' · MD5 未核验 ' + unverifiedCount : ''}${mismatchCount ? ' · MD5 待核对 ' + mismatchCount : ''}${pausedLeft > 0 ? ' · 暂停 ' + pausedLeft : ''}`, addedFailed > 0 || unverifiedCount > 0 || mismatchCount > 0 ? 'warning' : 'success');
 
     isDownloading = false;
     // 清空下载中的残留(已暂停的任务保留卡片与断点,可随时恢复)
@@ -2739,7 +2740,7 @@ function renderCompletedList() {
         </div>
         <div class="transfer-item-meta">
           <span class="transfer-item-size">${formatBytes(item.size || 0)}</span>
-          <span class="transfer-item-status completed"${item.verification && item.verification.status === 'unavailable' ? ' style="color: #d97706;"' : ''}>${item.verification && item.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : item.verification && item.verification.status === 'verified' ? 'MD5 校验通过' : item.skip ? '大小匹配 (跳过)' : '下载完成'}</span>
+          <span class="transfer-item-status completed"${item.verification && ['unavailable', 'mismatch'].includes(item.verification.status) ? ' style="color: #d97706;"' : ''} title="${escapeHtml(item.verification && item.verification.reason || '')}">${item.verification && item.verification.status === 'mismatch' ? '已保存 · MD5 与参考值不一致，需核对' : item.verification && item.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : item.verification && item.verification.status === 'verified' ? 'MD5 与参考值一致' : item.verification && item.verification.status === 'quick-checked' ? '快速检查通过（未做 MD5）' : item.skip ? '大小匹配 (跳过)' : '下载完成'}</span>
           <span class="transfer-item-time">${item.completedAt}</span>
         </div>
       </div>
@@ -3312,6 +3313,8 @@ async function initTransfersAndSettings(settings) {
   stableModeSetting = Boolean(settings && settings.stableMode);
   const stableModeToggle = document.getElementById('settingsStableModeToggle');
   if (stableModeToggle) stableModeToggle.checked = stableModeSetting;
+  const deepIntegrityToggle = document.getElementById('settingsDeepIntegrityToggle');
+  if (deepIntegrityToggle) deepIntegrityToggle.checked = Boolean(settings && settings.deepIntegrityCheck);
 
   // 3. 载入诊断日志开关设置
   const toggle = document.getElementById('settingsLoggingToggle');
@@ -3347,7 +3350,7 @@ window.api.onDownloadStatus((data) => {
       }
     } else if (status === 'completed') {
       txt.className = 'item-status status-completed';
-      txt.innerText = data.verification && data.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : '下载完成';
+      txt.innerText = data.verification && data.verification.status === 'mismatch' ? '已保存 · MD5 待核对' : data.verification && data.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : '下载完成';
       if (fill) fill.style.width = '100%';
       if (pct) pct.innerText = '100%';
       const speedEl = document.getElementById(`speed-text-${index}`);
@@ -3598,6 +3601,17 @@ async function toggleStableMode(checked) {
     if (currentQueue.length) renderQueue();
   } catch (err) {
     console.error('Failed to toggle stable mode:', err);
+  }
+}
+
+async function toggleDeepIntegrityCheck(checked) {
+  try {
+    await window.api.saveSettings({ deepIntegrityCheck: Boolean(checked) });
+    showToast(checked ? '下一批任务将进行完整 MD5 校验，需要额外读盘时间' : '下一批任务使用快速检查，不读取整个文件计算 MD5');
+  } catch (error) {
+    const toggle = document.getElementById('settingsDeepIntegrityToggle');
+    if (toggle) toggle.checked = !checked;
+    showToast('保存检查设置失败：' + error.message, 'error');
   }
 }
 
