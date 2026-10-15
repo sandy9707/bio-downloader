@@ -11,7 +11,7 @@ const engine = require('../main');
 engine.ensureBinaries();
 const binary = path.join(process.env.BIODL_DATA_DIR, 'bin', process.platform === 'win32' ? 'axel.exe' : 'axel');
 const bytes = require('zlib').gzipSync(crypto.randomBytes(2 * 1024 * 1024));
-let etag = '"generation-1"', mode = 'good', received = [], slow = false;
+let etag = '"generation-1"', mode = 'good', received = [], slow = false, holdBody = false;
 const server = http.createServer((req, res) => {
   const m = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || '');
   const a = m ? +m[1] : 0, b = m && m[2] ? Math.min(+m[2], bytes.length - 1) : bytes.length - 1;
@@ -25,7 +25,7 @@ const server = http.createServer((req, res) => {
   else if (slow && b - a > 4096) {
     let offset = actual, timer;
     const end = actual + b - a + 1;
-    const send = () => { if (res.destroyed) return; const next = Math.min(end, offset + 8192); res.write(bytes.subarray(offset, next)); offset = next; if (offset === end) res.end(); else timer = setTimeout(send, 70); };
+    const send = () => { if (res.destroyed) return; if (holdBody && offset > actual) { timer = setTimeout(send, 20); return; } const next = Math.min(end, offset + 8192); res.write(bytes.subarray(offset, next)); offset = next; if (offset === end) res.end(); else timer = setTimeout(send, 70); };
     res.on('close', () => clearTimeout(timer)); send();
   } else res.end(bytes.subarray(actual, actual + b - a + 1));
 });
@@ -149,8 +149,13 @@ async function close(guard) { await guard.close(); guards.delete(guard); }
       await sleep(20);
     }
   }
+  // Windows' first PowerShell/Add-Type startup can outlast a small fixture.
+  // Keep the body open until native suspension is confirmed, then send while
+  // suspended so the unchanged-file assertion still tests actual OS control.
+  holdBody = true;
   const paused = ipc('paused.gz', 4); await waitForBody('paused.gz');
   assert.equal((await engine.callIpcHandler('pause-download', 4)).suspended, true);
+  holdBody = false;
   const snapshot = fs.readFileSync(path.join(targetDir, 'paused.gz'));
   await sleep(150);
   assert.deepEqual(fs.readFileSync(path.join(targetDir, 'paused.gz')), snapshot, 'paused native Axel must not write');
