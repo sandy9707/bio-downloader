@@ -3009,6 +3009,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           const logFilePath = path.join(LOG_DIR, logFileName);
           diagnosticLogPath = logFilePath;
           logStream = fs.createWriteStream(logFilePath, { flags: 'a', encoding: 'utf8' });
+          logStream.on('error', error => console.warn('下载日志写入失败:', error.message));
           logStream.write(`=== 下载任务诊断日志 ===\n`);
           logStream.write(`时间: ${new Date().toISOString()}\n`);
           logStream.write(`版本: ${app.getVersion()}\n`);
@@ -3190,6 +3191,13 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         if (bioGuard?.error) { preservePartialFile = true; break; }
         if (lastErrorMsg === 'Cancelled' || lastErrorMsg === 'Paused' || cancelledFiles.has(fileIndex)) {
           break; // 被取消/暂停时立即中断重试循环(暂停须保留断点,重试会破坏语义)
+        }
+      } finally {
+        // end() only schedules flushing. Wait for the Windows file handle to
+        // close before this attempt is reported finished or another one starts.
+        if (logStream) {
+          if (!logStream.writableEnded) logStream.end();
+          await require('stream/promises').finished(logStream).catch(() => {});
         }
       }
     }
