@@ -25,7 +25,7 @@ function harness(historyStore, cache = new Map()) {
   const events = {}, listeners = {}, messages = [];
   const context = vm.createContext({
     console: { error() {}, warn() {} }, Date, JSON, Object, Array,
-    completedDownloads: [], failedDownloads: [], activeDownloads: [], extractionJobs: {}, defaultDir: 'C:\\new-default',
+    currentQueue: [], completedDownloads: [], failedDownloads: [], activeDownloads: [], extractionJobs: {}, defaultDir: 'C:\\new-default',
     localStorage: { getItem: key => cache.get(key) || null, setItem: (key, value) => cache.set(key, value) },
     setTimeout: fn => { events.timer = fn; return 1; }, clearTimeout: () => { delete events.timer; },
     document: { getElementById: () => null },
@@ -46,7 +46,7 @@ function harness(historyStore, cache = new Map()) {
   const end = renderer.indexOf('// 载入历史与并发数', start);
   vm.runInContext(renderer.slice(start, end), context);
   context.updateTransferCounts = () => context.syncTransfersToStorage();
-  vm.runInContext(renderer.slice(renderer.indexOf('window.api.onDownloadStatus('), renderer.indexOf('// 绑定到 window 暴露给 HTML 属性')), context);
+  vm.runInContext(renderer.slice(renderer.indexOf('function handleDownloadStatus('), renderer.indexOf('// 绑定到 window 暴露给 HTML 属性')), context);
   vm.runInContext(renderer.slice(renderer.indexOf('function handleExtractionDownload('), renderer.indexOf('function renderExtractionTransferCards(')), context);
   return { context, events, listeners, cache, messages };
 }

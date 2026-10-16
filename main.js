@@ -17,12 +17,16 @@ const { createEnaResolver, verifyFile } = require('./src/main/download-integrity
 const { bioSource, createBioTransferGuard } = require('./src/main/bio-transfer-guard');
 const enaIntegrity = createEnaResolver(async (accession) => {
   const url = `https://www.ebi.ac.uk/ena/portal/api/filereport?accession=${encodeURIComponent(accession)}&result=read_run&fields=run_accession,fastq_ftp,fastq_md5,fastq_bytes&format=json`;
-  if (clashProcess !== null) {
-    try {
-      return (await axios.get(url, { timeout: 6000, proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 } })).data;
-    } catch (_) { /* Metadata only: retain the existing direct-query fallback. */ }
+  // ENA regularly needs more than six seconds. Retry transient failures on
+  // the same configured route; a failed metadata request must not disable MD5 forever.
+  const proxy = clashProcess !== null ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { return (await axios.get(url, { timeout: 20000, proxy })).data; }
+    catch (error) {
+      const status = error.response?.status;
+      if (attempt || (status && ![408,429,500,502,503,504].includes(status))) throw error;
+    }
   }
-  return (await axios.get(url, { timeout: 6000, proxy: false })).data;
 });
 
 const eventBus = new EventEmitter();
@@ -2450,32 +2454,36 @@ ipcMain.handle('query-biosample', async (event, { biosample }) => {
   return { biosample: acc, runs: [...new Set(runs)], count: new Set(runs).size };
 });
 ipcMain.handle('start-download', async (event, { files, targetDir, token, maxConcurrent }) => {
-  if (!fs.existsSync(targetDir)) {
-    fs.mkdirSync(targetDir, { recursive: true });
-  }
+  if (!Array.isArray(files) || !files.length) throw new Error('下载队列为空，请先检验链接生成任务');
+  if (typeof targetDir !== 'string' || !targetDir) throw new Error('请先选择下载保存目录');
+  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
-  // 1. 验证目标磁盘可用空间
+  // Existing allocated data does not need to be reserved a second time.
+  const { additionalSpace } = require('./src/main/download-space');
+  const totalRequiredSpace = await additionalSpace(files, file => path.join(
+    file.isUpdate ? app.getPath('downloads') : targetDir,
+    file.isUpdate ? '' : (sanitizePathSegment(file.folder) || ''),
+    sanitizePathSegment(file.name) || 'download'
+  ));
+  let freeSpace = null;
   try {
-    const totalRequiredSpace = files.reduce((acc, f) => acc + (f.size || 0), 0);
     const stats = await fs.promises.statfs(targetDir);
-    const freeSpace = stats.bavail * stats.bsize;
-    if (freeSpace < totalRequiredSpace) {
-      throw new Error(`磁盘可用空间不足！所需空间: ${(totalRequiredSpace / (1024 * 1024 * 1024)).toFixed(2)} GB, 可用空间: ${(freeSpace / (1024 * 1024 * 1024)).toFixed(2)} GB`);
-    }
-  } catch (err) {
-    console.error('Disk space verification message:', err.message);
-    if (err.message.includes('磁盘可用空间不足')) {
-      throw err;
-    } else {
-      console.warn('statfs not fully supported on this volume, bypassing disk space limit check.');
-    }
+    freeSpace = Number(stats.bavail) * Number(stats.bsize);
+  } catch (error) { console.warn('无法读取磁盘剩余空间:', error.message); }
+  if (freeSpace !== null && freeSpace < totalRequiredSpace) {
+    throw new Error(`磁盘可用空间不足！还需新增 ${(totalRequiredSpace / 1073741824).toFixed(2)} GB，可用 ${(freeSpace / 1073741824).toFixed(2)} GB。任务已保留，请释放空间或更换保存目录后重试`);
   }
 
   const axelBin = getAxelBinaryPath();
   ensureExecutable(axelBin);
 
+  const outcomes = new Map();
+  function sendStatus(data) {
+    if (['completed', 'failed', 'cancelled', 'paused'].includes(data.status)) outcomes.set(data.index, data);
+    event.sender.send('download-status', data);
+  }
   const MAX_RETRIES = 3;
-  const maxConcurrentCount = parseInt(maxConcurrent, 10) || 3;
+  const maxConcurrentCount = Math.max(1, Math.min(16, parseInt(maxConcurrent, 10) || 3));
   const actualConcurrentCount = Math.max(1, Math.min(maxConcurrentCount, files.length));
   const lowPowerMode = Boolean(getSettings().lowPowerMode);
   const stableMode = Boolean(getSettings().stableMode);
@@ -2510,7 +2518,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     if (cancelledFiles.has(fileIndex)) {
       // 任务在排队期间已被用户取消:直接回传取消状态,不再起下载进程
       cancelledFiles.delete(fileIndex);
-      mainWindow.webContents.send('download-status', { index: fileIndex, fileName: file.name, status: 'cancelled', percentage: 0, speed: '已取消', savePath });
+      sendStatus({ index: fileIndex, fileName: file.name, status: 'cancelled', percentage: 0, speed: '已取消', savePath });
       return;
     }
 
@@ -2535,7 +2543,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       let lastProgressAt = 0;
       try {
         await checkControl();
-        mainWindow.webContents.send('download-status', { index: fileIndex, status: 'downloading', phase: 'verifying', speed: deepIntegrityCheck ? '正在获取文件校验信息…' : '正在快速检查文件…', savePath });
+        sendStatus({ index: fileIndex, status: 'downloading', phase: 'verifying', speed: deepIntegrityCheck ? '正在获取文件校验信息…' : '正在快速检查文件…', savePath });
         const reference = await referencePromise;
         await checkControl();
         if (bioGuard && !reference.expectedSize) reference.expectedSize = bioGuard.size;
@@ -2551,7 +2559,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
             const now = Date.now();
             if (now - lastProgressAt < 500 && bytes !== total) return;
             lastProgressAt = now;
-            mainWindow.webContents.send('download-status', {
+            sendStatus({
               index: fileIndex, status: 'downloading', phase: 'verifying', savePath,
               speed: `正在校验 MD5：${total ? Math.floor(bytes * 100 / total) : 100}%`, md5: file.md5, size: file.size
             });
@@ -2585,7 +2593,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     if (guardedUrl && !file.isUpdate) {
       activeIntegrityChecks.set(fileIndex, { wake: () => {} });
       try {
-        mainWindow.webContents.send('download-status', { index: fileIndex, fileName: file.name, status: 'downloading', phase: 'verifying', speed: '正在核对源文件与断点…', savePath });
+        sendStatus({ index: fileIndex, fileName: file.name, status: 'downloading', phase: 'verifying', speed: '正在核对源文件与断点…', savePath });
         bioGuard = await createBioTransferGuard({
           url: guardedUrl, filename: savePath, expectedSize: file.size,
           proxy: clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false,
@@ -2604,14 +2612,14 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       if (localStats.isFile() && file.size > 0 && localStats.size === Number(file.size)) {
         try {
           await checkIntegrity(true);
-          mainWindow.webContents.send('download-status', {
+          sendStatus({
             index: fileIndex, fileName: file.name, status: 'completed', percentage: 100, savePath,
             speed: verification.status === 'verified' ? 'MD5 与参考值一致(跳过)' : verification.status === 'mismatch' ? '已保留（MD5 与参考值不一致，跳过）' : verification.status === 'unavailable' ? '已存在（MD5 未核验，跳过）' : '快速检查通过(跳过)',
             ...integrityFields()
           });
         } catch (error) {
           const status = error.message === 'Paused' ? 'paused' : error.message === 'Cancelled' ? 'cancelled' : 'failed';
-          mainWindow.webContents.send('download-status', { index: fileIndex, fileName: file.name, status, percentage: null, speed: status === 'paused' ? '已暂停' : status === 'cancelled' ? '已取消' : error.message, savePath, ...integrityFields() });
+          sendStatus({ index: fileIndex, fileName: file.name, status, percentage: null, speed: status === 'paused' ? '已暂停' : status === 'cancelled' ? '已取消' : error.message, savePath, ...integrityFields() });
         } finally {
           pausedAxelFiles.delete(fileIndex);
           cancelledFiles.delete(fileIndex);
@@ -2932,7 +2940,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       if (attempt > 1) {
         const backoffTime = Math.pow(2, attempt) * 1000;
         console.log(`Retrying download for ${file.name} in ${backoffTime}ms (Attempt ${attempt}/${MAX_RETRIES})`);
-        mainWindow.webContents.send('download-status', {
+        sendStatus({
           index: fileIndex,
           fileName: file.name,
           status: 'downloading',
@@ -2965,7 +2973,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         break;
       }
 
-      mainWindow.webContents.send('download-status', {
+      sendStatus({
         index: fileIndex,
         fileName: file.name,
         status: 'downloading',
@@ -3255,7 +3263,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         }
       }
 
-      mainWindow.webContents.send('download-status', {
+      sendStatus({
         index: fileIndex,
         fileName: file.name,
         status: 'completed',
@@ -3271,7 +3279,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
 
       if (wasPaused) {
         // 暂停:保留断点与传输列表卡片,等待用户恢复
-        mainWindow.webContents.send('download-status', {
+        sendStatus({
           index: fileIndex,
           fileName: file.name,
           status: 'paused',
@@ -3298,7 +3306,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           failReason = lastErrorMsg;
         }
       }
-      mainWindow.webContents.send('download-status', {
+      sendStatus({
         index: fileIndex,
         fileName: file.name,
         status: wasCancelled ? 'cancelled' : 'failed',
@@ -3312,7 +3320,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       if (getSettings().loggingEnabled && !wasCancelled) {
         try { fs.appendFileSync(path.join(LOG_DIR, `download_guard_${safeName.replace(/[^a-zA-Z0-9._-]/g, '_')}_${Date.now()}.log`), `版本: ${app.getVersion()}\n时间: ${new Date().toISOString()}\n文件名: ${file.name}\n预期字节数: ${file.size || '未知'}\n分段/断点保护: ${error.message}\n`); } catch (_) {}
       }
-      mainWindow.webContents.send('download-status', { index: fileIndex, fileName: file.name, status: wasCancelled ? 'cancelled' : 'failed', speed: wasCancelled ? '已取消' : error.message, savePath, verification: { status: 'failed', reason: error.message }, size: file.size, md5: file.md5 || null });
+      sendStatus({ index: fileIndex, fileName: file.name, status: wasCancelled ? 'cancelled' : 'failed', speed: wasCancelled ? '已取消' : error.message, savePath, verification: { status: 'failed', reason: error.message }, size: file.size, md5: file.md5 || null });
     } finally {
       if (bioGuard) await bioGuard.close().catch(error => console.warn('关闭分段保护失败:', error.message));
       activeIntegrityChecks.delete(fileIndex);
@@ -3326,7 +3334,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
     let completedCount = 0;
     function finish(result) {
       event.sender.removeListener('cancel-all-downloads-signal', cancelAll);
-      resolve(result);
+      resolve({ ...result, outcomes: [...outcomes.values()] });
     }
 
     async function startNext() {
@@ -3439,6 +3447,12 @@ ipcMain.handle('resume-download', async (event, fileIndex) => {
   pausedAxelFiles.delete(fileIndex);
   return { success: true, resumed: false };
 });
+
+const manualMd5 = require('./src/main/manual-md5').createManualMd5(enaIntegrity.reference);
+ipcMain.handle('verify-transfer-md5', (event, payload) => manualMd5.verify(payload, data => {
+  if (!event.sender.isDestroyed?.()) event.sender.send('md5-verification-progress', data);
+}));
+ipcMain.handle('cancel-transfer-md5', (_event, id) => manualMd5.cancel(id));
 
 ipcMain.handle('open-downloads-folder', (event, folderPath) => {
   let target = folderPath;

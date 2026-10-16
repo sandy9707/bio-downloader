@@ -1184,96 +1184,81 @@ function renderQueue() {
 // 【加速下载调度逻辑】
 // ==========================================
 async function startDownload() {
+  if (isDownloading) return;
   if (!currentUser) {
     showToast('请登录账户后开始下载，未登录无法连接代理加速', 'error');
     switchTab('profile-tab');
     return;
   }
+  if (!defaultDir) return showToast('请先选择下载的保存目标路径', 'error');
+  if (!currentQueue.length) return showToast('请先检验链接，生成下载队列', 'warning');
 
-  if (!defaultDir) {
-    showToast('请先选择下载的保存目标路径', 'error');
-    return;
-  }
-
-  const isClashRunning = await window.api.getClashStatus();
-  if (!isClashRunning) {
-    try {
-      showToast('正在自动建立高速下载加速通道...');
-      await window.api.startClash(currentUser.token);
-      updateClashUIState();
-    } catch (e) {
-      showToast(e.message, 'error');
-      return;
-    }
-  }
-
-  // 校验当前流量剩余额度是否充足
-  const totalBytes = currentQueue.reduce((acc, f) => acc + (f.size || 0), 0);
+  // Capture before any asynchronous connection work or navigation. Keep unique
+  // transfer IDs so old pause/cancel flags cannot affect a new batch.
+  const dir = defaultDir, token = currentUser.token;
+  const queue = currentQueue.filter(file => !activeDownloads.some(task =>
+    task.url === file.url && task.name === file.name && task.targetDir === dir));
+  if (!queue.length) return showToast('这些文件已在传输列表，请在那里继续或恢复下载', 'info');
+  const totalBytes = queue.reduce((sum, file) => sum + (Number(file.size) || 0), 0);
   const remaining = currentUser.trafficLimit - currentUser.trafficConsumed;
-  
   if (remaining < totalBytes) {
     showToast(`您的额度不足！剩余流量: ${formatBytes(remaining)}，所需流量: ${formatBytes(totalBytes)}，请充值后下载`, 'error');
     switchTab('store-tab');
     return;
   }
 
-  // 初始化传输任务属性与正在下载队列
-  currentQueue.forEach((file, index) => {
-    file.originalIndex = index;
-    file.targetDir = defaultDir;
-    file.percentage = 0;
-    file.status = 'waiting';
-    file.speed = '排队中...';
-  });
-
-  // 保留之前批次遗留的"已暂停"任务卡片(断点仍在,可单独恢复);与新队列同下标的旧暂停项由新任务接替续传
-  const keptPaused = activeDownloads.filter((d) => d.status === 'paused' && !currentQueue.some((f) => f.originalIndex === d.originalIndex));
-  activeDownloads = [...keptPaused, ...currentQueue];
-  renderDownloadingList();
-  updateTransferCounts();
-
-  // 锁定控制按钮状态
   isDownloading = true;
-  document.getElementById('checkSizeBtn').disabled = true;
-  document.getElementById('downloadBtn').style.display = 'none';
-  document.getElementById('cancelBtn').style.display = 'block';
-
-  // 自动切换至传输列表 tab
-  switchTab('transfers-tab');
-  switchTransferSubTab('downloading');
-
-  const beforeCompleted = completedDownloads.length;
-  const beforeFailed = failedDownloads.length;
+  const batch = [];
+  let startupError = null, batchCancelled = false;
+  const errorBox = document.getElementById('transferBatchError');
+  if (errorBox) { errorBox.hidden = true; errorBox.textContent = ''; }
   try {
-    showToast('已加入传输中心，开始并行下载生信数据包...', 'info');
-    await window.api.startDownload(currentQueue, defaultDir, currentUser.token, maxConcurrentDownloadsSetting);
-  } catch (e) {
-    showToast(e.message, 'error');
+    document.getElementById('checkSizeBtn').disabled = true;
+    document.getElementById('downloadBtn').disabled = true;
+    if (!(await ensureTransferConnection())) return;
+    for (const file of queue) {
+      file.originalIndex = allocateTransferId();
+      const task = { ...file, targetDir: dir, percentage: 0, status: 'waiting', speed: '排队中...' };
+      batch.push(task);
+    }
+    activeDownloads.push(...batch);
+    renderDownloadingList(); updateTransferCounts();
+    document.getElementById('downloadBtn').style.display = 'none';
+    document.getElementById('cancelBtn').style.display = 'block';
+    switchTab('transfers-tab'); switchTransferSubTab('downloading');
+    showToast(`已加入 ${batch.length} 个任务，正在启动下载...`, 'info');
+    const result = await window.api.startDownload(batch, dir, token, maxConcurrentDownloadsSetting);
+    batchCancelled = Boolean(result?.cancelled);
+    // Electron's invoke reply can arrive before queued status notifications.
+    // Reconcile authoritative outcomes first; the handler is idempotent.
+    for (const outcome of result?.outcomes || []) handleDownloadStatus(outcome);
+    if (result && result.success === false) throw new Error(result.error || '批量任务未能启动');
+    const ids = new Set(batch.map(file => file.originalIndex));
+    const completed = completedDownloads.filter(item => ids.has(item.fileObj?.originalIndex));
+    const failed = failedDownloads.filter(item => ids.has(item.originalIndex));
+    const warnings = completed.filter(item => ['unavailable', 'mismatch'].includes(item.verification?.status)).length;
+    if (!result?.cancelled) showToast(`本批下载结束：完成 ${completed.length} · 失败 ${failed.length}${warnings ? ' · MD5 待核对 ' + warnings : ''}`, failed.length || warnings ? 'warning' : 'info');
+  } catch (error) {
+    startupError = error;
+    const message = '批量下载未能启动，任务已保留，可点击恢复重试：' + error.message;
+    if (errorBox) { errorBox.textContent = message; errorBox.hidden = false; }
+    showToast(message, 'error');
   } finally {
-    // 本批结果汇总(成功/跳过/失败)
-    const addedCompleted = Math.max(0, completedDownloads.length - beforeCompleted);
-    const addedFailed = Math.max(0, failedDownloads.length - beforeFailed);
-    const skippedCount = completedDownloads.slice(0, addedCompleted).filter((c) => c.skip).length;
-    const unverifiedCount = completedDownloads.slice(0, addedCompleted).filter(c => c.verification && c.verification.status === 'unavailable').length;
-    const mismatchCount = completedDownloads.slice(0, addedCompleted).filter(c => c.verification && c.verification.status === 'mismatch').length;
-    const successCount = addedCompleted - skippedCount;
-    const pausedLeft = activeDownloads.filter((d) => d.status === 'paused').length;
-    showToast(`本批下载结束:保存 ${successCount} · 跳过 ${skippedCount} · 失败 ${addedFailed}${unverifiedCount ? ' · MD5 未核验 ' + unverifiedCount : ''}${mismatchCount ? ' · MD5 待核对 ' + mismatchCount : ''}${pausedLeft > 0 ? ' · 暂停 ' + pausedLeft : ''}`, addedFailed > 0 || unverifiedCount > 0 || mismatchCount > 0 ? 'warning' : 'success');
-
+    // Do not discard waiting tasks or overwrite a startup error with success.
+    for (const task of batch) {
+      if (activeDownloads.includes(task) && task.status === 'waiting') {
+        if (batchCancelled) { activeDownloads = activeDownloads.filter(item => item !== task); continue; }
+        task.status = 'paused'; task.speed = '';
+        if (startupError) task.startupError = startupError.message;
+      }
+    }
     isDownloading = false;
-    // 清空下载中的残留(已暂停的任务保留卡片与断点,可随时恢复)
-    activeDownloads = activeDownloads.filter((d) => d.status === 'paused');
-    renderDownloadingList();
-    updateTransferCounts();
-
-    // 恢复按钮状态
+    renderDownloadingList(); updateTransferCounts();
     document.getElementById('checkSizeBtn').disabled = false;
     document.getElementById('downloadBtn').style.display = 'block';
     document.getElementById('cancelBtn').style.display = 'none';
-    document.getElementById('downloadBtn').disabled = true; // 需重新进行下一轮校验大小才能再次下载
-    
-    // 同步刷新最新的流量限额信息
-    await refreshUserInfo();
+    document.getElementById('downloadBtn').disabled = !currentQueue.length;
+    try { await refreshUserInfo(); } catch (_) {}
   }
 }
 
@@ -2409,14 +2394,15 @@ async function downloadSingle(index) {
   }
 
   // 初始化属性
-  file.originalIndex = index;
+  file.originalIndex = allocateTransferId();
+  const fileId = file.originalIndex;
   file.targetDir = defaultDir;
   file.percentage = 0;
   file.status = 'waiting';
   file.speed = '排队中...';
 
   // 加入正在下载列表
-  if (!activeDownloads.find(d => d.originalIndex === index)) {
+  if (!activeDownloads.find(d => d.originalIndex === fileId)) {
     activeDownloads.push(file);
     renderDownloadingList();
     updateTransferCounts();
@@ -2430,19 +2416,21 @@ async function downloadSingle(index) {
 
   try {
     showToast(`文件 ${file.name} 独立多线程加速下载已启动，请在「传输列表」查看进度...`);
-    await window.api.startDownload([file], defaultDir, currentUser.token, maxConcurrentDownloadsSetting);
+    const result = await window.api.startDownload([file], defaultDir, currentUser.token, maxConcurrentDownloadsSetting);
+    for (const outcome of result?.outcomes || []) handleDownloadStatus(outcome);
     showToast(`文件 ${file.name} 下载任务运行完毕！`, 'info');
   } catch (e) {
-    showToast(e.message, 'error');
+    file.status = 'paused'; file.startupError = e.message;
+    showToast('启动失败，任务已保留：' + e.message, 'error');
   } finally {
     if (singleBtn) singleBtn.disabled = false;
     document.getElementById('checkSizeBtn').disabled = false;
     document.getElementById('downloadBtn').disabled = false;
     
     // 刷新(已暂停的任务须保留卡片与断点,等待用户恢复,不能移除)
-    const still = activeDownloads.find(d => d.originalIndex === index);
+    const still = activeDownloads.find(d => d.originalIndex === fileId);
     if (!still || still.status !== 'paused') {
-      activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
+      activeDownloads = activeDownloads.filter(d => d.originalIndex !== fileId);
     }
     renderDownloadingList();
     updateTransferCounts();
@@ -2506,6 +2494,7 @@ function getTransferPausedCount() {
 
 function switchTransferSubTab(subTab) {
   currentTransferSubTab = subTab;
+  updateMd5Toolbar();
   const btnDownloading = document.getElementById('tabBtnDownloading');
   const btnCompleted = document.getElementById('tabBtnCompleted');
   const btnFailed = document.getElementById('tabBtnFailed');
@@ -2670,7 +2659,7 @@ function renderDownloadingList() {
     const receivedSize = totalSize > 0 ? (totalSize * percentage) / 100 : 0;
     const speedText = paused ? '—' : (file.speed || (file.status === 'waiting' ? '排队中...' : ''));
     const eta = paused ? '' : computeEta(totalSize > 0 ? totalSize - receivedSize : 0, file.speed);
-    const statusText = paused ? '已暂停 · 可续传' : (file.status === 'waiting' ? '排队中...' : file.phase === 'verifying' ? '正在校验文件' : '正在高速下载');
+    const statusText = paused ? (file.startupError ? '未启动：' + escapeHtml(file.startupError) : '已暂停 · 可续传') : (file.status === 'waiting' ? '排队中...' : file.phase === 'verifying' ? '正在校验文件' : '正在高速下载');
 
     const itemEl = document.createElement('div');
     itemEl.className = 'transfer-item tl-card' + (paused ? ' tl-paused' : '');
@@ -2709,6 +2698,71 @@ function renderDownloadingList() {
   });
 }
 
+// Manual MD5 checks operate on a stable snapshot even if download history changes.
+let manualMd5Run = null;
+async function verifyCompletedMd5(index) {
+  const item = completedDownloads[index];
+  if (item) await runCompletedMd5([item]);
+}
+async function verifyAllCompletedMd5() {
+  await runCompletedMd5(completedDownloads.filter(item => item.savePath && item.verification?.status !== 'verified'));
+}
+async function stopCompletedMd5() {
+  if (!manualMd5Run) return;
+  manualMd5Run.cancelled = true;
+  if (manualMd5Run.id) await window.api.cancelTransferMd5(manualMd5Run.id);
+}
+function updateMd5Toolbar() {
+  const start = document.getElementById('btnVerifyCompleted');
+  const stop = document.getElementById('btnStopMd5');
+  if (start) { start.style.display = currentTransferSubTab === 'completed' ? '' : 'none'; start.disabled = Boolean(manualMd5Run); }
+  if (stop) stop.style.display = manualMd5Run ? '' : 'none';
+}
+async function runCompletedMd5(items) {
+  if (manualMd5Run) return showToast('已有 MD5 校验正在进行，可等待完成或点击停止校验', 'info');
+  if (!items.length) return showToast('没有待校验的已完成文件', 'info');
+  const run = { cancelled: false, id: null, item: null };
+  manualMd5Run = run;
+  let verified = 0, warning = 0;
+  updateMd5Toolbar();
+  try {
+    // Metadata can use the accelerator when logged in. Local hashing still works
+    // offline; without an official checksum it is never labelled verified.
+    if (currentUser?.token && !(await window.api.getClashStatus())) {
+      try { await window.api.startClash(currentUser.token); } catch (_) {}
+    }
+    for (const item of items) {
+      if (run.cancelled) break;
+      if (!completedDownloads.includes(item)) continue;
+      run.id = 'md5-' + allocateTransferId(); run.item = item;
+      item.md5Progress = '正在获取参考 MD5…';
+      renderCompletedList();
+      try {
+        const result = await window.api.verifyTransferMd5({
+          id: run.id, savePath: item.savePath,
+          file: { ...item.fileObj, name: item.name, url: item.url || item.fileObj?.url,
+            size: item.size, md5: item.md5 || item.fileObj?.md5 || item.verification?.expectedMd5 }
+        });
+        if (result.cancelled) { run.cancelled = true; break; }
+        item.verification = result.verification;
+        if (item.verification.status === 'verified') verified++; else warning++;
+      } catch (error) {
+        item.verification = { status: 'failed', reason: error.message }; warning++;
+      } finally {
+        delete item.md5Progress;
+        syncTransfersToStorage(); renderCompletedList();
+      }
+    }
+    showToast(`${run.cancelled ? '已停止校验' : 'MD5 校验结束'}：一致 ${verified} · 待核对 ${warning}`, warning ? 'warning' : 'info');
+  } finally { manualMd5Run = null; updateMd5Toolbar(); }
+}
+if (window.api.onMd5VerificationProgress) window.api.onMd5VerificationProgress(data => {
+  if (!manualMd5Run || manualMd5Run.id !== data.id) return;
+  manualMd5Run.item.md5Progress = data.phase === 'hashing'
+    ? `正在校验 MD5：${data.total ? Math.floor(data.bytes * 100 / data.total) : 100}%` : '正在获取参考 MD5…';
+  renderCompletedList();
+});
+
 function renderCompletedList() {
   const container = document.getElementById('transferCompletedList');
   if (!container) return;
@@ -2740,11 +2794,14 @@ function renderCompletedList() {
         </div>
         <div class="transfer-item-meta">
           <span class="transfer-item-size">${formatBytes(item.size || 0)}</span>
-          <span class="transfer-item-status completed"${item.verification && ['unavailable', 'mismatch'].includes(item.verification.status) ? ' style="color: #d97706;"' : ''} title="${escapeHtml(item.verification && item.verification.reason || '')}">${item.verification && item.verification.status === 'mismatch' ? '已保存 · MD5 与参考值不一致，需核对' : item.verification && item.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : item.verification && item.verification.status === 'verified' ? 'MD5 与参考值一致' : item.verification && item.verification.status === 'quick-checked' ? (item.verification.transport ? '源文件抽样通过（未做 MD5）' : '快速检查通过（未做 MD5）') : item.skip ? '大小匹配 (跳过)' : '下载完成'}</span>
+          <span class="transfer-item-status completed"${item.verification && ['unavailable', 'mismatch', 'computed', 'failed'].includes(item.verification.status) ? ' style="color: #d97706;"' : ''} title="${escapeHtml(item.verification && item.verification.reason || '')}">${item.md5Progress ? escapeHtml(item.md5Progress) : item.verification?.status === 'failed' ? '校验失败：' + escapeHtml(item.verification.reason || '请重试') : item.verification?.status === 'computed' ? '已计算 MD5，缺少参考值（未比对）' : item.verification && item.verification.status === 'mismatch' ? '已保存 · MD5 与参考值不一致，需核对' : item.verification && item.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : item.verification && item.verification.status === 'verified' ? 'MD5 与参考值一致' : item.verification && item.verification.status === 'quick-checked' ? (item.verification.transport ? '源文件抽样通过（未做 MD5）' : '快速检查通过（未做 MD5）') : item.skip ? '大小匹配 (跳过)' : '下载完成'}</span>
+          ${item.verification?.actualMd5 ? `<span style="word-break:break-all;user-select:text;">本地 MD5：${escapeHtml(item.verification.actualMd5)}</span>` : ''}
+          ${item.verification?.status === 'unavailable' || item.verification?.status === 'computed' ? `<span>${escapeHtml(item.verification.reason || '缺少参考 MD5，可点击校验重试')}</span>` : ''}
           <span class="transfer-item-time">${item.completedAt}</span>
         </div>
       </div>
       <div class="tl-actions">
+        <button class="tl-btn primary" style="width:auto;padding:0 8px;" title="读取已有文件并立即校验 MD5，不重复下载" onclick="verifyCompletedMd5(${index})" ${item.md5Progress ? 'disabled' : ''}>校验 MD5</button>
         <button class="tl-btn primary" title="在文件夹中定位" onclick="openCompletedRecord(${index})">📂</button>
         <button class="tl-btn danger" title="删除记录" onclick="deleteCompletedRecord(${index})">🗑</button>
       </div>
@@ -3128,6 +3185,7 @@ async function resumeTransferFile(fileId) {
   }
   if (!(await ensureTransferConnection())) return;
   file.status = 'waiting';
+  delete file.startupError;
   file.speed = '准备恢复...';
   renderDownloadingList();
   updateTransferCounts();
@@ -3222,7 +3280,7 @@ let transferSaveErrorShown = false;
 function transferSnapshot() {
   return {
     version: 2,
-    completed: completedDownloads,
+    completed: completedDownloads.map(({ md5Progress, ...item }) => item),
     failed: failedDownloads,
     active: activeDownloads.filter(t => !t.isUpdate).map(t => ({ ...t, targetDir: t.targetDir || defaultDir })),
     extraction: Object.values(extractionJobs).map(t => ({ ...t, saveDir: t.saveDir || defaultDir }))
@@ -3280,7 +3338,7 @@ async function loadTransferHistory(settings = {}) {
     } catch (e) { console.error('读取备用传输记录失败:', e.message); }
   }
   const entries = key => Array.isArray(history && history[key]) ? history[key].filter(t => t && typeof t === 'object') : [];
-  completedDownloads = entries('completed');
+  completedDownloads = entries('completed').map(({ md5Progress, ...item }) => item);
   failedDownloads = entries('failed');
   // Old process handles no longer exist. Restore unfinished work as paused without charging or starting it.
   const firstId = Date.now();
@@ -3332,20 +3390,21 @@ async function initTransfersAndSettings(settings) {
 // ==========================================
 // 【全局 IPC 进度监听事件绑定】
 // ==========================================
-window.api.onDownloadStatus((data) => {
+function handleDownloadStatus(data) {
   const { index, status, fileName, savePath } = data;
   
+  const queueIndex = currentQueue.findIndex(file => file.originalIndex === index);
   // 1. 更新下载中心的队列 UI
-  const fill = document.getElementById(`progress-fill-${index}`);
-  const pct = document.getElementById(`progress-pct-${index}`);
-  const txt = document.getElementById(`status-text-${index}`);
+  const fill = document.getElementById(`progress-fill-${queueIndex}`);
+  const pct = document.getElementById(`progress-pct-${queueIndex}`);
+  const txt = document.getElementById(`status-text-${queueIndex}`);
   
   if (txt) {
     if (status === 'downloading') {
       txt.className = 'item-status status-downloading';
       txt.innerText = data.phase === 'verifying' ? '正在校验文件' : '正在高速下载';
       if (data.speed) {
-        const speedEl = document.getElementById(`speed-text-${index}`);
+        const speedEl = document.getElementById(`speed-text-${queueIndex}`);
         if (speedEl) speedEl.innerText = data.speed;
       }
     } else if (status === 'completed') {
@@ -3353,17 +3412,17 @@ window.api.onDownloadStatus((data) => {
       txt.innerText = data.verification && data.verification.status === 'mismatch' ? '已保存 · MD5 待核对' : data.verification && data.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : '下载完成';
       if (fill) fill.style.width = '100%';
       if (pct) pct.innerText = '100%';
-      const speedEl = document.getElementById(`speed-text-${index}`);
+      const speedEl = document.getElementById(`speed-text-${queueIndex}`);
       if (speedEl) speedEl.innerText = data.speed || '已保存';
     } else if (status === 'failed') {
       txt.className = 'item-status status-failed';
       txt.innerText = '下载失败';
-      const speedEl = document.getElementById(`speed-text-${index}`);
+      const speedEl = document.getElementById(`speed-text-${queueIndex}`);
       if (speedEl) speedEl.innerText = data.speed || '下载失败';
     } else if (status === 'cancelled') {
       txt.className = 'item-status status-failed';
       txt.innerText = '已取消';
-      const speedEl = document.getElementById(`speed-text-${index}`);
+      const speedEl = document.getElementById(`speed-text-${queueIndex}`);
       if (speedEl) speedEl.innerText = '已取消';
     }
   }
@@ -3436,20 +3495,22 @@ window.api.onDownloadStatus((data) => {
     }
     updateTransferCounts();
   }
-});
+}
+window.api.onDownloadStatus(handleDownloadStatus);
 
 window.api.onDownloadProgress((data) => {
   const { index, percentage, speed, receivedBytes, totalBytes } = data;
+  const queueIndex = currentQueue.findIndex(file => file.originalIndex === index);
 
   // 1. 更新下载中心的队列 UI
   if (percentage !== null) {
-    const fill = document.getElementById(`progress-fill-${index}`);
-    const pct = document.getElementById(`progress-pct-${index}`);
+    const fill = document.getElementById(`progress-fill-${queueIndex}`);
+    const pct = document.getElementById(`progress-pct-${queueIndex}`);
     if (fill) fill.style.width = percentage + '%';
     if (pct) pct.innerText = percentage + '%';
   }
   if (speed !== null) {
-    const speedEl = document.getElementById(`speed-text-${index}`);
+    const speedEl = document.getElementById(`speed-text-${queueIndex}`);
     if (speedEl) speedEl.innerText = '当前速度: ' + speed;
   }
 
@@ -3607,7 +3668,7 @@ async function toggleStableMode(checked) {
 async function toggleDeepIntegrityCheck(checked) {
   try {
     await window.api.saveSettings({ deepIntegrityCheck: Boolean(checked) });
-    showToast(checked ? '下一批任务将进行完整 MD5 校验，需要额外读盘时间' : '下一批任务使用快速检查，不读取整个文件计算 MD5');
+    showToast(checked ? '下一批任务将进行完整 MD5 校验；已有文件请到传输列表 → 已完成 → 校验 MD5' : '下一批任务使用快速检查，不读取整个文件计算 MD5');
   } catch (error) {
     const toggle = document.getElementById('settingsDeepIntegrityToggle');
     if (toggle) toggle.checked = !checked;

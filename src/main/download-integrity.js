@@ -46,9 +46,9 @@ function parseEnaReport(rows) {
 
 function createEnaResolver(fetchRows) {
   const cache = new Map();
-  function list(run) {
+  function list(run, { refresh = false } = {}) {
     const cached = cache.get(run);
-    if (cached && cached.expires > Date.now()) return cached.promise;
+    if (cached && (cached.expires === Infinity || (!refresh && cached.expires > Date.now()))) return cached.promise;
     const entry = { expires: Infinity };
     entry.promise = Promise.resolve().then(() => fetchRows(run)).then(rows => {
       const files = parseEnaReport(rows);
@@ -63,13 +63,13 @@ function createEnaResolver(fetchRows) {
     if (cache.size > 256) cache.delete(cache.keys().next().value);
     return entry.promise;
   }
-  async function reference(file, { deep = false } = {}) {
+  async function reference(file, { deep = false, refresh = false } = {}) {
     const identity = enaIdentity(file.url);
     const result = { expectedSize: knownSize(file.size), expectedMd5: validMd5(file.md5), required: deep && Boolean(identity || validMd5(file.md5)), gzip: /\.gz(?:[?#]|$)/i.test(file.name || file.url || '') };
     // Fast checks need no extra checksum request when the size is already known.
-    if (!identity || (result.expectedSize && (!deep || result.expectedMd5))) return result;
+    if (!identity || (!refresh && result.expectedSize && (!deep || result.expectedMd5))) return result;
     try {
-      const files = await list(identity.run);
+      const files = await list(identity.run, { refresh });
       const match = files.find(item => enaIdentity(item.url).key === identity.key);
       if (match) {
         result.expectedSize = knownSize(match.size) || result.expectedSize;
@@ -84,7 +84,7 @@ function createEnaResolver(fetchRows) {
   return { list, reference };
 }
 
-async function verifyFile(filename, reference, { deep = false, checkControl = () => {}, onProgress = () => {} } = {}) {
+async function verifyFile(filename, reference, { deep = false, computeWithoutReference = false, checkControl = () => {}, onProgress = () => {} } = {}) {
   await checkControl();
   const before = await fs.promises.stat(filename);
   await checkControl();
@@ -123,7 +123,7 @@ async function verifyFile(filename, reference, { deep = false, checkControl = ()
     const after = await fs.promises.stat(filename);
     if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) fail('检查期间文件被修改，请重新检查');
   }
-  if (deep && reference.expectedMd5) {
+  if (deep && (reference.expectedMd5 || computeWithoutReference)) {
     const hash = crypto.createHash('md5');
     let bytes = 0;
     onProgress(0, before.size);
@@ -142,7 +142,8 @@ async function verifyFile(filename, reference, { deep = false, checkControl = ()
     await checkControl();
     result.actualMd5 = hash.digest('hex');
     if (bytes !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) fail('校验期间文件被修改，请重新校验');
-    result.status = result.actualMd5 === reference.expectedMd5 ? 'verified' : 'mismatch';
+    result.status = !reference.expectedMd5 ? 'computed' : result.actualMd5 === reference.expectedMd5 ? 'verified' : 'mismatch';
+    if (result.status === 'computed') result.reason = (reference.reason || '没有可用的参考 MD5') + '；已计算本地 MD5，尚未完成比对';
     if (result.status === 'mismatch') result.reason = 'MD5 与参考值不一致；文件和参考信息都可能有问题，请人工核对。原文件已保留';
   } else {
     result.status = deep && reference.required ? 'unavailable' : (reference.expectedSize ? 'quick-checked' : 'unchecked');

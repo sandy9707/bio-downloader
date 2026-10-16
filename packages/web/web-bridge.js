@@ -4,6 +4,7 @@
 
   const listeners = {
     downloadStatus: [],
+    md5Progress: [],
     downloadProgress: [],
     updateProgress: [],
     updateStatus: [],
@@ -21,6 +22,9 @@
     const sid = localStorage.getItem('biodl_session');
     const sseUrl = sid ? `/api/events?sid=${encodeURIComponent(sid)}` : '/api/events';
     sse = new EventSource(sseUrl);
+    sse.addEventListener('md5-verification-progress', (e) => {
+      try { listeners.md5Progress.forEach(fn => fn(JSON.parse(e.data))); } catch (_) {}
+    });
     sse.addEventListener('download-status', (e) => {
       try {
         const data = JSON.parse(e.data);
@@ -79,6 +83,8 @@
     checkSize: (type, inputVal) => ({ channel: 'check-download-size', payload: { type, inputVal } }),
     queryBioProject: (project) => ({ channel: 'query-bioproject', payload: { project } }),
     queryBioSample: (biosample) => ({ channel: 'query-biosample', payload: { biosample } }),
+    verifyTransferMd5: (payload) => ({ channel: 'verify-transfer-md5', payload }),
+    cancelTransferMd5: (payload) => ({ channel: 'cancel-transfer-md5', payload }),
     startDownload: (files, targetDir, token, maxConcurrent) => ({ channel: 'start-download', payload: { files, targetDir, token, maxConcurrent } }),
     cancelDownload: (idx) => ({ channel: 'cancel-download', payload: idx }),
     pauseDownload: (idx) => ({ channel: 'pause-download', payload: idx }),
@@ -156,6 +162,7 @@
   window.api = new Proxy({}, {
     get(target, prop) {
       // 监听器
+      if (prop === 'onMd5VerificationProgress') return (cb) => listeners.md5Progress.push(cb);
       if (prop === 'onDownloadStatus') return (cb) => listeners.downloadStatus.push(cb);
       if (prop === 'onDownloadProgress') return (cb) => listeners.downloadProgress.push(cb);
       if (prop === 'onUpdateProgress') return (cb) => listeners.updateProgress.push(cb);

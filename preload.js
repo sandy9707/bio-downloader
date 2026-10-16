@@ -42,6 +42,12 @@ contextBridge.exposeInMainWorld('api', {
   queryBioProject: (project) => ipcRenderer.invoke('query-bioproject', { project }),
   queryBioSample: (biosample) => ipcRenderer.invoke('query-biosample', { biosample }),
   startDownload: (files, targetDir, token, maxConcurrent) => ipcRenderer.invoke('start-download', { files, targetDir, token, maxConcurrent }),
+  verifyTransferMd5: (request) => ipcRenderer.invoke('verify-transfer-md5', request),
+  cancelTransferMd5: (id) => ipcRenderer.invoke('cancel-transfer-md5', id),
+  onMd5VerificationProgress: (callback) => {
+    ipcRenderer.removeAllListeners('md5-verification-progress');
+    ipcRenderer.on('md5-verification-progress', (_event, data) => callback(data));
+  },
   cancelDownload: (fileIndex) => ipcRenderer.invoke('cancel-download', fileIndex),
   pauseDownload: (fileIndex) => ipcRenderer.invoke('pause-download', fileIndex),
   resumeDownload: (fileIndex) => ipcRenderer.invoke('resume-download', fileIndex),

@@ -33,6 +33,9 @@ jobs:
       - name: 传输记录、恢复和操作系统暂停回归
         run: npm test
 
+      - name: 实际桌面批量按钮与手动 MD5 校验
+        run: npm run test:desktop
+
       - name: 完整下载真实 EBI 文件并独立校验 MD5
         run: node scripts/check-live-ebi-download.js
 
@@ -86,6 +89,9 @@ jobs:
 
       - name: 传输记录、恢复和操作系统暂停回归
         run: npm test
+
+      - name: 实际桌面批量按钮与手动 MD5 校验
+        run: npm run test:desktop
 
       - name: 完整下载真实 EBI 文件并独立校验 MD5
         run: node scripts/check-live-ebi-download.js

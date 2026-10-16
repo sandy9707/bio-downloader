@@ -31,6 +31,7 @@ class BiodlServer {
     // 绑定 main.js 的事件总线，通过 SSE 实时推送到浏览器
     const forwardEvents = [
       'download-status',
+      'md5-verification-progress',
       'download-progress',
       'curl-download-progress',
       'toast-message',

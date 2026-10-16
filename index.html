@@ -1406,11 +1406,14 @@
             <button class="btn btn-secondary" id="btnCancelAll" onclick="cancelAllDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">✕ 全部取消</button>
             <button class="btn btn-secondary" onclick="openDownloadsDirectory()" style="font-size: 0.85rem; padding: 0.45rem 1rem;">📂 打开下载目录</button>
             <button class="btn btn-primary" id="btnRetryAllFailed" onclick="retryAllFailedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🔄 一键重试全部</button>
+            <button class="btn btn-secondary" id="btnVerifyCompleted" onclick="verifyAllCompletedMd5()" style="display:none;">校验未核验文件 MD5</button>
+            <button class="btn btn-secondary" id="btnStopMd5" onclick="stopCompletedMd5()" style="display:none;">停止校验</button>
             <button class="btn btn-danger" id="btnClearCompleted" onclick="clearCompletedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空已完成</button>
             <button class="btn btn-danger" id="btnClearFailed" onclick="clearFailedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空失败记录</button>
           </div>
         </div>
 
+        <div id="transferBatchError" role="alert" hidden style="color:#ef4444;padding:12px;white-space:pre-wrap;"></div>
         <!-- 正在下载列表 -->
         <div class="transfer-stats-line" id="transferStatsLine"></div>
         <div class="transfer-list-container" id="transferDownloadingList">
@@ -1808,7 +1811,7 @@
               <span class="switch-slider"></span>
             </label>
           </div>
-          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">对下一批任务生效。抽样不等于全文校验，不能排除未抽中位置的损坏；MD5 也作为参考信息使用。已有异常文件不会作为成功跳过，不会自动删除重下。</div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">对下一批任务生效。已有文件请到「传输列表 → 已完成」，点击文件旁的「校验 MD5」或「校验未核验文件 MD5」。本地校验不重复下载、不扣下载流量。抽样不等于全文校验，不能排除未抽中位置的损坏；MD5 也作为参考信息使用。已有异常文件不会作为成功跳过，不会自动删除重下。</div>
         </div>
 
         <!-- 下载诊断日志 -->
