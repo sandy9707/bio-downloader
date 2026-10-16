@@ -274,7 +274,7 @@ class BiodlServer {
   }
 
   serveStatic(reqPath, res) {
-    let safePath = path.normalize(reqPath).replace(/^(\.\.[\/\\])+/, '');
+    let safePath = path.posix.normalize(reqPath.replace(/\\/g, "/")).replace(/^(\.\.[\/\\])+/, '');
     if (safePath === '/' || safePath === '') safePath = '/index.html';
     
     let filePath = path.join(this.webDir, safePath);
