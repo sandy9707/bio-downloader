@@ -35,6 +35,8 @@ class BiodlServer {
       'download-progress',
       'curl-download-progress',
       'toast-message',
+      'update-progress',
+      'update-status',
       'speedtest-progress'
     ];
     for (const ev of forwardEvents) {

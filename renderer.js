@@ -565,11 +565,11 @@ async function triggerCheckForUpdates() {
         if (btnHot) {
           if (res.platform === 'linux' || (!window.api.isElectron && res.linuxUrl)) {
             btnHot.style.display = 'inline-block';
-            btnHot.innerText = '⚡ 一键升级并平滑重载服务';
+            btnHot.innerText = '⚡ 升级 Linux 服务端';
             btnHot.onclick = startLinuxSelfUpdate;
           } else if (res.patchUrl) {
             btnHot.style.display = 'inline-block';
-            btnHot.innerText = res.hasUpdate ? '⚡ 极速平滑热更新 (仅 3MB)' : '⚡ 回滚到正式版 (热更新)';
+            btnHot.innerText = res.hasUpdate ? '⚡ 下载并应用更新补丁' : '⚡ 回滚到正式版 (热更新)';
             btnHot.onclick = startHotPatchUpdate;
           } else {
             btnHot.style.display = 'none';
@@ -641,10 +641,10 @@ async function startHotPatchUpdate() {
   const btn = document.getElementById('btnHotPatchUpdate');
   if (btn) {
     btn.disabled = true;
-    btn.innerText = '⏳ 正在下载应用代码补丁 (3MB)...';
+    btn.innerText = '⏳ 正在下载应用代码补丁...';
   }
   isUpdating = true;
-  showToast('正在高速下载应用代码补丁包 (3MB)...', 'info');
+  showToast('正在高速下载应用代码补丁包...', 'info');
 
   try {
     const res = await window.api.applyHotPatch(updateInfoGlobal.patchUrl);
@@ -655,7 +655,7 @@ async function startHotPatchUpdate() {
     showToast('热更新应用失败: ' + err.message, 'error');
     if (btn) {
       btn.disabled = false;
-      btn.innerText = '⚡ 极速平滑热更新 (仅 3MB)';
+      btn.innerText = '⚡ 下载并应用更新补丁';
     }
     isUpdating = false;
   }
@@ -683,15 +683,14 @@ async function startLinuxSelfUpdate() {
       url: updateInfoGlobal.linuxUrl,
       sha256: updateInfoGlobal.sha256
     });
-    showToast((res && res.message) || '更新成功！服务正在平滑重载，页面即将刷新...', 'success');
-    setTimeout(() => {
-      window.location.reload();
-    }, 2500);
+    if (!res?.success) throw new Error(res?.message || '更新未完成');
+    showToast('升级完成。请在服务器重新运行 ./biodl start（或重启进程管理器），再刷新本页。', 'success');
+    if (btn) btn.innerText = '升级完成，请重启服务后刷新';
   } catch (err) {
     showToast('Linux 自更新失败: ' + err.message, 'error');
     if (btn) {
       btn.disabled = false;
-      btn.innerText = '⚡ 一键升级并平滑重载服务';
+      btn.innerText = '⚡ 升级 Linux 服务端';
     }
     isUpdating = false;
   }
@@ -870,6 +869,7 @@ async function downloadUpdate(platform) {
     return;
   }
   if (!updateInfoGlobal) return;
+  isUpdating = true;
 
   const backendUrl = platform === 'win' ? updateInfoGlobal.winUrl : updateInfoGlobal.macUrl;
   let fileName = 'BioDownloader-update';
@@ -907,16 +907,29 @@ async function downloadUpdate(platform) {
     console.log('使用默认发布站下载源:', backendUrl);
   }
 
+  let installerSize = 0;
+  try {
+    const metadata = await window.api.checkSize('links', backendUrl);
+    installerSize = Number(metadata?.[0]?.size) || 0;
+  } catch (err) { console.warn('更新包大小暂不可用:', err.message); }
+
   const updateFile = {
     name: fileName,
     url: targetUrl,
-    size: 150 * 1024 * 1024, // 150MB placeholder
+    size: installerSize, // Unknown stays unknown; never use a guessed integrity target.
     originalIndex: 9999, // Special index for update
     percentage: 0,
     status: 'waiting',
     speed: '排队中...',
     isUpdate: true
   };
+
+  async function runInstallerDownload() {
+    const result = await window.api.startDownload([updateFile], defaultDir, currentUser ? currentUser.token : '', maxConcurrentDownloadsSetting);
+    for (const outcome of result?.outcomes || []) handleDownloadStatus(outcome);
+    const failure = result?.outcomes?.find(item => item.status !== 'completed');
+    if (failure) throw new Error(failure.speed || '安装包未完成下载');
+  }
 
   // 写入正在下载队列
   if (!activeDownloads.find(d => d.originalIndex === 9999)) {
@@ -939,7 +952,7 @@ async function downloadUpdate(platform) {
     }
     
     // 执行第一次下载尝试
-    await window.api.startDownload([updateFile], defaultDir, currentUser ? currentUser.token : '', maxConcurrentDownloadsSetting);
+    await runInstallerDownload();
     
     if (btn) {
       btn.innerText = '下载完成！已在文件夹中高亮';
@@ -951,7 +964,7 @@ async function downloadUpdate(platform) {
       showToast('加速通道连接超时，已自动为您切换到发布站下载源重新下载...', 'warning');
       updateFile.url = backendUrl;
       try {
-        await window.api.startDownload([updateFile], defaultDir, currentUser ? currentUser.token : '', maxConcurrentDownloadsSetting);
+        await runInstallerDownload();
         if (btn) {
           btn.innerText = '下载完成！已在文件夹中高亮';
         }

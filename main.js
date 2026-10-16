@@ -1638,7 +1638,7 @@ async function performLinuxSelfUpdate(tarballUrl, expectedSha256) {
     const newSourceDir = rootName ? path.join(extractDir, rootName) : extractDir;
 
     // 核心代码与静态资源增量安全替换（排除用户私有数据和 runtime）
-    const safeOverwrite = ['main.js', 'renderer.js', 'preload.js', 'package.json', 'package-lock.json', 'THIRD_PARTY_NOTICES.md'];
+    const safeOverwrite = ['main.js', 'renderer.js', 'preload.js', 'package.json', 'package-lock.json', 'THIRD_PARTY_NOTICES.md', 'speedtest.html', 'biodl'];
     for (const file of safeOverwrite) {
       const src = path.join(newSourceDir, file);
       const dest = path.join(appRoot, file);
@@ -1647,12 +1647,13 @@ async function performLinuxSelfUpdate(tarballUrl, expectedSha256) {
       }
     }
 
-    const safeDirs = ['packages', 'shared', 'img', 'icons', 'bin'];
+    const safeDirs = ['packages', 'shared', 'img', 'icons', 'bin', 'src', 'node_modules'];
     for (const dir of safeDirs) {
       const src = path.join(newSourceDir, dir);
       const dest = path.join(appRoot, dir);
       if (fs.existsSync(src)) {
-        spawnSync('cp', ['-a', `${src}/.`, dest]);
+        fs.mkdirSync(dest, { recursive: true });
+        fs.cpSync(src, dest, { recursive: true });
       }
     }
 
@@ -1845,234 +1846,15 @@ ipcMain.handle('open-speedtest-page', async () => {
   return { success: true };
 });
 
-ipcMain.handle('speedtest-network', async (event, { url, timeoutMs = 10000 }) => {
-  console.log('[Speedtest] 开始网络基准测速:', { url, timeoutMs });
-  return new Promise((resolve) => {
-    const https = require('https');
-    const http = require('http');
-    const client = url.startsWith('https') ? https : http;
-    const sender = event.sender || mainWindow;
-
-    const startTime = Date.now();
-    let receivedBytes = 0;
-
-    const req = client.get(url, { timeout: timeoutMs }, (res) => {
-      const contentLength = parseInt(res.headers['content-length'] || '0', 10);
-      const totalBytes = contentLength > 0 ? contentLength : 10 * 1024 * 1024;
-
-      res.on('data', (chunk) => {
-        receivedBytes += chunk.length;
-        const elapsed = (Date.now() - startTime) / 1000;
-        if (elapsed > 0 && sender && !sender.isDestroyed()) {
-          sender.send('speedtest-progress', {
-            bytesPerSecond: receivedBytes / elapsed,
-            bytesReceived: receivedBytes,
-            elapsedSeconds: elapsed,
-            totalBytes: totalBytes
-          });
-        }
-      });
-
-      res.on('end', () => {
-        const elapsed = (Date.now() - startTime) / 1000;
-        if (receivedBytes > 0 && elapsed > 0) {
-          resolve({
-            success: true,
-            bytesPerSecond: receivedBytes / elapsed,
-            elapsedSeconds: elapsed,
-            bytesReceived: receivedBytes
-          });
-        } else {
-          resolve({ success: false, error: '未收到数据' });
-        }
-      });
-    });
-
-    req.on('error', (err) => {
-      resolve({ success: false, error: '下载失败: ' + err.message });
-    });
-
-    req.on('timeout', () => {
-      req.destroy();
-      const elapsed = (Date.now() - startTime) / 1000;
-      if (receivedBytes > 0 && elapsed > 0) {
-        resolve({
-          success: true,
-          bytesPerSecond: receivedBytes / elapsed,
-          elapsedSeconds: elapsed,
-          bytesReceived: receivedBytes
-        });
-      } else {
-        resolve({ success: false, error: '测速超时' });
-      }
-    });
-  });
-});
-
-ipcMain.handle('speedtest-downloader', async (event, { url, expectedSizeMB = 50, timeoutMs = 10000 }) => {
-  console.log('[Speedtest] 开始下载器测速:', { url, expectedSizeMB, timeoutMs });
-  return new Promise((resolve) => {
-    const axelBin = getAxelBinaryPath();
-    const tmpDir = path.join(app.getPath('temp'), 'biodl-speedtest');
-    const timestamp = Date.now();
-    const savePath = path.join(tmpDir, 'speedtest_' + timestamp + '.bin');
-
-    try {
-      if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-    } catch (e) {
-      return resolve({ success: false, error: '无法创建临时目录: ' + e.message });
-    }
-
-    // 与正式下载一致:境外目标走 clash 代理,境内目标直连
-    const env = { ...process.env };
-    if (clashProcess && shouldUseProxy(url)) {
-      env.http_proxy = 'http://127.0.0.1:43289';
-      env.https_proxy = 'http://127.0.0.1:43289';
-      env.all_proxy = 'http://127.0.0.1:43289';
-    } else {
-      delete env.http_proxy; delete env.https_proxy; delete env.all_proxy;
-      delete env.HTTP_PROXY; delete env.HTTPS_PROXY; delete env.ALL_PROXY;
-    }
-
-    const args = ['-n', '16', '-k', '-o', savePath, url];
-    const proc = spawn(axelBin, args, { env });
-    let lastBytesReceived = 0;
-    let startTime = Date.now();
-    const maxBytes = expectedSizeMB * 1024 * 1024;
-    let resolved = false;
-    let stderrText = '';
-    proc.stderr.on('data', (d) => { try { stderrText += d.toString(); } catch (e) {} });
-
-    const timer = setTimeout(() => {
-      killProcess(proc);
-      const elapsed = (Date.now() - startTime) / 1000;
-      if (!resolved) {
-        resolved = true;
-        if (lastBytesReceived > 0 && elapsed > 0) {
-          resolve({ success: true, bytesPerSecond: lastBytesReceived / elapsed, elapsedSeconds: elapsed, bytesReceived: lastBytesReceived });
-        } else {
-          resolve({ success: false, error: '测速超时，未收到数据' });
-        }
-      }
-      cleanup();
-    }, timeoutMs);
-
-    // 基于文件实际大小的定时采样: 不依赖 axel stdout 正则(其输出常被拆成不含百分比的小块, 正则匹配不到)
-    let lastSampleTime = startTime;
-    let lastSampleBytes = 0;
-    const sampleTimer = setInterval(() => {
-      try {
-        if (!fs.existsSync(savePath)) return;
-        const st = fs.statSync(savePath);
-        if (st.size > 0) lastBytesReceived = st.size;
-        const now = Date.now();
-        const dt = (now - lastSampleTime) / 1000;
-        const db = st.size - lastSampleBytes;
-        if (dt > 0) {
-          lastSampleTime = now;
-          lastSampleBytes = st.size;
-          const instBps = db / dt;
-          const sender = event.sender || mainWindow;
-          if (sender && !sender.isDestroyed()) {
-            sender.send('speedtest-progress', {
-              bytesPerSecond: instBps,
-              bytesReceived: st.size,
-              elapsedSeconds: (now - startTime) / 1000,
-              totalBytes: maxBytes
-            });
-          }
-          if (st.size >= maxBytes) {
-            clearTimeout(timer);
-            clearInterval(sampleTimer);
-            killProcess(proc);
-            const elapsed = (now - startTime) / 1000;
-            if (!resolved) {
-              resolved = true;
-              resolve({ success: true, bytesPerSecond: st.size / elapsed, elapsedSeconds: elapsed, bytesReceived: st.size });
-            }
-            cleanup();
-          }
-        }
-      } catch (e) {}
-    }, 500);
-
-    function cleanup() {
-      clearTimeout(timer);
-      clearInterval(sampleTimer);
-      try { if (fs.existsSync(savePath)) fs.unlinkSync(savePath); } catch (e) {}
-      try { if (fs.existsSync(tmpDir) && fs.readdirSync(tmpDir).length === 0) fs.rmdirSync(tmpDir); } catch (e) {}
-    }
-
-    proc.on('error', (err) => {
-      clearTimeout(timer);
-      cleanup();
-      resolve({ success: false, error: '进程启动失败: ' + err.message });
-    });
-
-    proc.stdout.on('data', (data) => {
-      const output = data.toString();
-      const speedMatch = output.match(/\[\s*\d+%\][\s]*([\d.]+)\s*(KB|MB|GB|TB|B)\/s/i);
-      if (speedMatch) {
-        const value = parseFloat(speedMatch[1]);
-        const unit = speedMatch[2].toUpperCase();
-        const multipliers = { B: 1, KB: 1024, MB: 1024 * 1024, GB: 1024 * 1024 * 1024, TB: 1024 * 1024 * 1024 * 1024 };
-        const speedBps = value * (multipliers[unit] || 1);
-        try {
-          if (fs.existsSync(savePath)) {
-            const stat = fs.statSync(savePath);
-            lastBytesReceived = stat.size;
-            const sender = event.sender || mainWindow;
-            if (sender && !sender.isDestroyed()) {
-              sender.send('speedtest-progress', {
-                bytesPerSecond: speedBps,
-                bytesReceived: lastBytesReceived,
-                elapsedSeconds: (Date.now() - startTime) / 1000,
-                totalBytes: maxBytes
-              });
-            }
-            if (lastBytesReceived >= maxBytes) {
-              clearTimeout(timer);
-              killProcess(proc);
-              const elapsed = (Date.now() - startTime) / 1000;
-              if (!resolved) {
-                resolved = true;
-                resolve({ success: true, bytesPerSecond: lastBytesReceived / elapsed, elapsedSeconds: elapsed, bytesReceived: lastBytesReceived });
-              }
-              cleanup();
-            }
-          }
-        } catch (e) {}
-      }
-    });
-
-    proc.on('close', (code) => {
-      const elapsed = (Date.now() - startTime) / 1000;
-      // 若 close 时 lastBytesReceived 仍为 0(文件下载过快,stdout 事件尚未触发),直接从磁盘读取实际大小
-      let actualBytes = lastBytesReceived;
-      if (actualBytes <= 0) {
-        try {
-          if (fs.existsSync(savePath)) {
-            const st = fs.statSync(savePath);
-            if (st.size > 0) actualBytes = st.size;
-          }
-        } catch (e) {}
-      }
-      if (!resolved) {
-        resolved = true;
-        if (actualBytes > 0 && elapsed > 0) {
-          resolve({ success: true, bytesPerSecond: actualBytes / elapsed, elapsedSeconds: elapsed, bytesReceived: actualBytes });
-        } else {
-          // 提取 axel 的真实报错(如 ERROR 502/403/连接失败),并提示加速器可能未开启或节点不可用
-          let detail = stderrText.trim().split('\n').slice(0, 2).join(' ');
-          const proxyHint = '（请确认加速器已开启且节点可用）';
-          if (!detail) detail = '未知错误';
-          resolve({ success: false, error: '下载失败: ' + detail + proxyHint });
-        }
-      }
-      cleanup();
-    });
-  });
-});
+const { measureNetwork, measureDownloader } = require('./src/main/speedtest');
+ipcMain.handle('speedtest-network', (event, options = {}) => measureNetwork({ ...options,
+  onProgress: data => { if (!event.sender.isDestroyed?.()) event.sender.send('speedtest-progress', data); }
+}));
+ipcMain.handle('speedtest-downloader', (event, options = {}) => measureDownloader({ ...options,
+  axelBin: getAxelBinaryPath(),
+  proxy: clashProcess && shouldUseProxy(options.url) ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false,
+  onProgress: data => { if (!event.sender.isDestroyed?.()) event.sender.send('speedtest-progress', data); }
+}));
 
 ipcMain.handle('download-app-update', async (event, { url, fileName }) => {
   const downloadsDir = app.getPath('downloads');
@@ -4364,6 +4146,7 @@ module.exports = {
     const fn = headlessHandlers[channel];
     if (!fn) throw new Error(`Handler not found for channel: ${channel}`);
     const sender = {
+      isDestroyed: () => false,
       send: (ch, data) => eventBus.emit(ch, data),
       on: (ch, listener) => eventBus.on(ch, listener),
       once: (ch, listener) => eventBus.once(ch, listener),

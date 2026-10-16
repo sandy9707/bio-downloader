@@ -1227,9 +1227,9 @@
     <div class="brand" style="display: flex; flex-direction: column; align-items: center; gap: 0.25rem; justify-content: center; margin-bottom: 2rem;">
       <div style="display: flex; align-items: center; gap: 0.5rem;">
         <img src="logo.png" alt="Logo" style="height: 28px; width: 28px; border-radius: 6px; box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);">
-        <span class="logo" style="font-size: 1.25rem; font-weight: 800; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 0.5px;">BioDownloader</span>
+        <span style="font-size: 1.25rem; font-weight: 800; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 0.5px;">BioDownloader</span>
       </div>
-      <span id="sidebarVersion" style="font-size: 0.75rem; font-weight: 600; color: #818cf8; letter-spacing: 0.5px;">v2.0.42-preview.1</span>
+      <span id="sidebarVersion" style="font-size: 0.7rem; color: var(--text-muted); letter-spacing: 0.5px;">v-.-.-</span>
     </div>
     <div class="nav-menu">
       <div class="nav-item active" onclick="switchTab('download-hub')">下载中心</div>
@@ -1406,11 +1406,14 @@
             <button class="btn btn-secondary" id="btnCancelAll" onclick="cancelAllDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">✕ 全部取消</button>
             <button class="btn btn-secondary" onclick="openDownloadsDirectory()" style="font-size: 0.85rem; padding: 0.45rem 1rem;">📂 打开下载目录</button>
             <button class="btn btn-primary" id="btnRetryAllFailed" onclick="retryAllFailedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🔄 一键重试全部</button>
+            <button class="btn btn-secondary" id="btnVerifyCompleted" onclick="verifyAllCompletedMd5()" style="display:none;">校验未核验文件 MD5</button>
+            <button class="btn btn-secondary" id="btnStopMd5" onclick="stopCompletedMd5()" style="display:none;">停止校验</button>
             <button class="btn btn-danger" id="btnClearCompleted" onclick="clearCompletedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空已完成</button>
             <button class="btn btn-danger" id="btnClearFailed" onclick="clearFailedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空失败记录</button>
           </div>
         </div>
 
+        <div id="transferBatchError" role="alert" hidden style="color:#ef4444;padding:12px;white-space:pre-wrap;"></div>
         <!-- 正在下载列表 -->
         <div class="transfer-stats-line" id="transferStatsLine"></div>
         <div class="transfer-list-container" id="transferDownloadingList">
@@ -1476,7 +1479,7 @@
       </div>
     </div>
 
-    <!-- VIEW: 云下载（浏览器使用 iframe，Token 通过 URL fragment 传递，不进入服务端日志） -->
+    <!-- VIEW: 云下载（复用线上同一套模块，避免桌面端/网页端双份维护） -->
     <div class="tab-view" id="cloud-tab">
       <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
         <span id="cloudWorkspaceStatus" role="status" style="flex:1;">正在加载云下载…</span>
@@ -1716,7 +1719,7 @@
               <pre id="updateReleaseNotes" style="font-family:inherit; white-space:pre-wrap; margin-top:0.25rem; background:var(--code-bg); padding:0.5rem; border-radius:4px; font-size:0.8rem; line-height:1.4; color:var(--code-text);"></pre>
             </div>
             <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-              <button id="btnHotPatchUpdate" class="btn btn-primary" style="font-size:0.8rem; padding:0.4rem 0.85rem; background: linear-gradient(135deg, #10b981, #059669); border:none; display:none;" onclick="startHotPatchUpdate()">⚡ 极速平滑热更新 (仅 3MB)</button>
+              <button id="btnHotPatchUpdate" class="btn btn-primary" style="font-size:0.8rem; padding:0.4rem 0.85rem; background: linear-gradient(135deg, #10b981, #059669); border:none; display:none;" onclick="startHotPatchUpdate()">⚡ 极速平滑热更新</button>
               <button id="downloadWinUpdateBtn" class="btn btn-success" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="downloadUpdate('win')">下载 Windows 全量包</button>
               <button id="downloadMacUpdateBtn" class="btn btn-primary" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="downloadUpdate('mac')">下载 Mac 全量包</button>
               <button class="btn btn-secondary" style="font-size:0.8rem; padding:0.4rem 0.85rem;" onclick="openReleasePage()">发布页</button>
@@ -1797,6 +1800,18 @@
             </div>
           </div>
           <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">切换设置后，仅对下一批新开始的下载任务生效，正在下载的任务不受影响。</div>
+        </div>
+
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label style="font-weight:600;">下载文件检查</label>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem; margin-top:0.5rem; padding:0.75rem; background:var(--bg-input); border-radius:6px; border:1px solid var(--border-color);">
+            <div style="font-size:0.9rem; color:var(--text-muted);"><strong>EBI/ENA 深度 MD5 校验（可选）：</strong>默认关闭。EBI 和支持的 NCBI 静态链接自动检查下载分段、源文件变化及最多 32 处小块，并保护断点；其他下载保留大小与格式检查。开启 MD5 后会完整读取文件，需要额外时间；不一致时保留文件并提示核对。</div>
+            <label class="switch">
+              <input type="checkbox" id="settingsDeepIntegrityToggle" onchange="toggleDeepIntegrityCheck(this.checked)">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">对下一批任务生效。已有文件请到「传输列表 → 已完成」，点击文件旁的「校验 MD5」或「校验未核验文件 MD5」。本地校验不重复下载、不扣下载流量。抽样不等于全文校验，不能排除未抽中位置的损坏；MD5 也作为参考信息使用。已有异常文件不会作为成功跳过，不会自动删除重下。</div>
         </div>
 
         <!-- 下载诊断日志 -->

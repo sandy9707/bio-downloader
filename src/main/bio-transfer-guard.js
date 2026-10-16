@@ -86,7 +86,7 @@ function validateResponse(response, start, end, size, identity) {
   return +m[3];
 }
 
-async function createBioTransferGuard({ url, filename, expectedSize, proxy = false, onFatal = () => {}, isPaused = () => false, checkControl = async () => {}, timeout = 20000 }) {
+async function createBioTransferGuard({ url, filename, expectedSize, proxy = false, onFatal = () => {}, isPaused = () => false, checkControl = async () => {}, timeout = 20000, onBytes = () => {} }) {
   let lockKey = path.resolve(filename);
   if (process.platform === 'win32') lockKey = lockKey.toLowerCase();
   if (activeFiles.has(lockKey)) throw new Error('同一目标文件已有下载任务，请等待或暂停原任务');
@@ -255,6 +255,7 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
             }
           }
           offset += bytes.length;
+          onBytes(bytes.length);
           if (!res.write(bytes)) await new Promise((resolve, reject) => {
             const cleanup = () => { res.off('drain', drained); res.off('close', gone); };
             const drained = () => { cleanup(); resolve(); };

@@ -12,6 +12,7 @@ BioDownloader invokes the following standalone programs through process, standar
 ## Axel
 
 - macOS arm64 build: Axel 2.17.14 with static OpenSSL 3.6.4. Source links, hashes, build commands, and license texts: `src/bin/darwin/`.
+- Linux x64 release build: Axel 2.17.14 with static musl and OpenSSL 3.6.4. Exact source hashes and build commands: `scripts/build-linux-axel.sh`; license texts: `bin/linux/`.
 - Windows build: Axel 2.17.14 from https://github.com/uklee/axel-for-windows/releases/tag/v2.17.14
 
 - Project: https://github.com/axel-download-accelerator/axel

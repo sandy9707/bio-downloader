@@ -22,6 +22,9 @@
     const sid = localStorage.getItem('biodl_session');
     const sseUrl = sid ? `/api/events?sid=${encodeURIComponent(sid)}` : '/api/events';
     sse = new EventSource(sseUrl);
+    sse.addEventListener('speedtest-progress', (e) => {
+      try { listeners.speedtestProgress.forEach(fn => fn(JSON.parse(e.data))); } catch (_) {}
+    });
     sse.addEventListener('md5-verification-progress', (e) => {
       try { listeners.md5Progress.forEach(fn => fn(JSON.parse(e.data))); } catch (_) {}
     });
@@ -168,7 +171,7 @@
       if (prop === 'onUpdateProgress') return (cb) => listeners.updateProgress.push(cb);
       if (prop === 'onUpdateStatus') return (cb) => listeners.updateStatus.push(cb);
       if (prop === 'onCurlProgress') return (cb) => listeners.curlProgress.push(cb);
-      if (prop === 'onSpeedtestProgress') return (cb) => listeners.speedtestProgress.push(cb);
+      if (prop === 'onSpeedtestProgress') return (cb) => { listeners.speedtestProgress = [cb]; };
       if (prop === 'onExtractionEvent') return (cb) => listeners.extractionEvent.push(cb);
       if (prop === 'onMenuAddLink') return (cb) => listeners.menuAddLink.push(cb);
       if (prop === 'onExtractionNav') return (cb) => listeners.extractionNav.push(cb);
@@ -177,6 +180,9 @@
       };
 
       // 特殊浏览器处理
+      if (prop === 'openSpeedtestPage') {
+        return () => { window.open('/speedtest.html', '_blank', 'noopener'); return Promise.resolve({ success: true }); };
+      }
       if (prop === 'selectDirectory') {
         return async () => {
           const p = prompt('请输入保存目录路径 (例如 /home/user/downloads):');

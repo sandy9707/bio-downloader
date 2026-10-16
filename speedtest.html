@@ -172,7 +172,7 @@
       <!-- 网络基准速度 -->
       <div class="card">
         <h2>🌐 网络基准速度</h2>
-        <p>直连国内 CDN 文件，测试您的宽带真实下载速度。</p>
+        <p>直连官方国内下载站文件，测试您的宽带真实下载速度。</p>
         <div class="test-file-info">
           <span id="networkFileName" class="test-file-name">-</span>
           <span id="networkFileUrl" class="test-file-url"></span>
@@ -208,7 +208,7 @@
   </div>
 
   <script>
-    const NETWORK_TEST_URL = 'https://cdn.npmmirror.com/binaries/node/v20.11.0/node-v20.11.0-darwin-arm64.tar.gz';
+    const NETWORK_TEST_URL = 'https://biodown.ye.aimeals.cn/downloads/latest/linux';
     const DOWNLOADER_TEST_URL = 'https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR390728/SRR390728';
     const NETWORK_TEST_TIMEOUT_MS = 10000;
     const DOWNLOADER_TEST_TIMEOUT_MS = 10000;
@@ -245,7 +245,8 @@
         return;
       }
 
-      btn.disabled = true;
+      document.getElementById('btnNetworkTest').disabled = true;
+      document.getElementById('btnDownloaderTest').disabled = true;
       btn.innerText = '测试中...';
       statusEl.className = 'status info';
       statusEl.innerText = '正在连接测速节点...';
@@ -286,7 +287,8 @@
         statusEl.className = 'status error';
         statusEl.innerText = '测试失败：' + err.message;
       } finally {
-        btn.disabled = false;
+        document.getElementById('btnNetworkTest').disabled = false;
+        document.getElementById('btnDownloaderTest').disabled = false;
         btn.innerText = '重新测试';
       }
     }
@@ -303,7 +305,8 @@
         return;
       }
 
-      btn.disabled = true;
+      document.getElementById('btnNetworkTest').disabled = true;
+      document.getElementById('btnDownloaderTest').disabled = true;
       btn.innerText = '测试中...';
       statusEl.className = 'status info';
       statusEl.innerText = '正在启动 16 线程下载...';
@@ -345,7 +348,8 @@
         statusEl.className = 'status error';
         statusEl.innerText = '测试失败：' + err.message;
       } finally {
-        btn.disabled = false;
+        document.getElementById('btnNetworkTest').disabled = false;
+        document.getElementById('btnDownloaderTest').disabled = false;
         btn.innerText = '重新测试';
       }
     }

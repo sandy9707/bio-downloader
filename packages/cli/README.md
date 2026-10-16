@@ -3,6 +3,9 @@
 ## Recommended: Web UI
 
 ```bash
+wget -O BioDownloader-Linux-x64.tar.gz https://biodown.ye.aimeals.cn/downloads/latest/linux
+tar -xzf BioDownloader-Linux-x64.tar.gz
+cd BioDownloader-Linux-x64
 ./biodl start
 ```
 
@@ -38,7 +41,7 @@ biodl update
 ## Updates
 
 - **CLI Update**: Run `./biodl update` to check, download, verify SHA-256, and safely upgrade in place without losing downloads or settings.
-- **Web UI Update**: Check for updates in the Web UI Settings view and click to trigger an in-place hot reload.
+- **Web UI Update**: Check for updates in the Web UI Settings view and click to update in place, then restart `./biodl start` (or restart your process manager).
 
 ## Data And Permissions
 
@@ -50,3 +53,9 @@ biodl update
 ## Security
 
 Binding to `0.0.0.0` exposes the Web UI to reachable networks. Before public release, enable the management authentication controls documented in `AGENT_HANDOFF.md`.
+
+## Speed test and integrity
+
+The Download Center speed-test button opens a browser tab. Both measurements run on the Linux server, not the browser computer. The Axel test counts received network bytes through the same range-checked engine as downloads.
+
+Completed files support individual and queued MD5 checks. Deep automatic MD5 is optional; the default keeps fast size, format and range checks.

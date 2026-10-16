@@ -130,11 +130,50 @@ jobs:
             dist/BioDownloader-Setup-*.exe
             dist/BioDownloader-Setup-*.exe.blockmap
 
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - name: 构建独立于系统 OpenSSL 的 Axel
+        run: bash scripts/build-linux-axel.sh
+      - name: Linux 核心、测速与 Web 桥接回归
+        run: npm test
+      - name: 完整 EBI 下载及独立 MD5
+        run: node scripts/check-live-ebi-download.js
+      - name: 保存 Linux 真实下载结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-ebi-linux
+          path: .evidence/live-ebi-*.json
+          include-hidden-files: true
+      - name: 保持旧服务器 glibc 2.17 运行时兼容
+        run: |
+          curl -fL --retry 3 -o /tmp/linux-baseline.tar.gz https://biodown.ye.aimeals.cn/downloads/BioDownloader-Linux-x64-2.0.41.tar.gz
+          echo '4cad88e61148179a58701c017eedc8734e63ca878ddcdd8769c5dc99c63e4bd6  /tmp/linux-baseline.tar.gz' | sha256sum -c -
+          mkdir /tmp/biodl-baseline
+          tar xzf /tmp/linux-baseline.tar.gz -C /tmp/biodl-baseline
+      - name: 打包 Linux
+        run: npm run build:linux
+        env:
+          BIODL_NODE_RUNTIME: /tmp/biodl-baseline/BioDownloader-Linux-x64/runtime/node
+      - name: 验证新包和 2.0.41 原地升级
+        run: node scripts/check-linux-upgrade.js /tmp/biodl-baseline/BioDownloader-Linux-x64 "dist/BioDownloader-Linux-x64-$(node -p "require('./package.json').version").tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-dist
+          path: |
+            dist/BioDownloader-Linux-x64-*.tar.gz
+            dist/BioDownloader-Linux-x64-*.tar.gz.sha256
+
   # ============================================================
   # Job 3: 发布到 GitHub Releases (仅推 tag 时执行)
   # ============================================================
   release:
-    needs: [build-mac, build-windows]
+    needs: [build-mac, build-windows, build-linux]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
@@ -150,6 +189,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: windows-installer
+          path: ./release-files
+
+      - name: 下载 Linux 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-dist
           path: ./release-files
 
       - name: 查看产物
@@ -177,6 +222,7 @@ jobs:
             | 平台 | 文件 | 说明 |
             |------|------|------|
             | 🍎 macOS (Apple Silicon / arm64) | `BioDownloader-*-arm64.dmg` | 仅支持 Apple Silicon，暂未提供 Intel Mac 安装包；双击打开后拖动到应用程序文件夹 |
+            | 🐧 Linux x64 | `BioDownloader-Linux-x64-*.tar.gz` | Server + Web UI + CLI，支持 glibc 2.17 及以上 |
             | 🪟 Windows 64位 | `BioDownloader-Setup-*.exe` | 按用户安装版，支持自选目录并创建桌面快捷方式 |
 
             ## 安装与运行步骤
