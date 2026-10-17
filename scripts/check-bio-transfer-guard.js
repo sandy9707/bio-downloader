@@ -45,7 +45,7 @@ async function runAxel(url, filename, onProc = () => {}) {
     const proc = spawn(binary, ['-n', '4', '-T', '3', '-o', filename, url], { env });
     let output = ''; for (const stream of [proc.stdout, proc.stderr]) stream.on('data', b => { output = (output + b).slice(-1600); });
     onProc(proc);
-    const timer = setTimeout(() => { proc.kill(); reject(new Error(`fixture Axel timed out: ${path.basename(filename)} ${output}`)); }, 30000);
+    const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error(`fixture Axel timed out: ${path.basename(filename)} ${output}`)); }, 30000);
     proc.on('error', reject); proc.on('close', code => { clearTimeout(timer); resolve(code); });
   });
 }
@@ -53,6 +53,8 @@ function stateBytes(start, end = bytes.length) {
   const state = Buffer.alloc(26); state.writeUInt16LE(1); state.writeBigInt64LE(BigInt(bytes.length - (end - start)), 2);
   state.writeBigInt64LE(BigInt(start), 10); state.writeBigInt64LE(BigInt(end), 18); return state;
 }
+// Match the application's fatal-error termination; Linux Axel may ignore SIGTERM.
+const deadline = setTimeout(() => { console.error('Guard regression timed out'); process.exit(2); }, 120000);
 const guards = new Set();
 async function open(options) { const guard = await createBioTransferGuard(options); guards.add(guard); return guard; }
 async function close(guard) { await guard.close(); guards.delete(guard); }
@@ -79,7 +81,7 @@ async function close(guard) { await guard.close(); guards.delete(guard); }
   for (const fault of ['wrong-range', 'ignored-range', 'changed', 'encoding', 'short']) {
     mode = fault;
     const filename = path.join(temp, fault + '.gz'); let proc;
-    const guard = await open({ url: base + '/file', filename, expectedSize: bytes.length, onFatal: () => proc?.kill() });
+    const guard = await open({ url: base + '/file', filename, expectedSize: bytes.length, onFatal: () => proc?.kill('SIGKILL') });
     await runAxel(guard.url, filename, p => { proc = p; });
     assert.ok(guard.error, `${fault} must be detected during transfer`);
     await assert.rejects(guard.verify());
@@ -88,7 +90,7 @@ async function close(guard) { await guard.close(); guards.delete(guard); }
   }
   mode = 'good';
   const retryFile = path.join(temp, 'retry.gz'); let retryProc;
-  const retry = await open({ url: base + '/file', filename: retryFile, expectedSize: bytes.length, onFatal: () => retryProc?.kill() });
+  const retry = await open({ url: base + '/file', filename: retryFile, expectedSize: bytes.length, onFatal: () => retryProc?.kill('SIGKILL') });
   mode = 'short-once';
   assert.equal(await runAxel(retry.url, retryFile, p => { retryProc = p; }), 0);
   const recovered = await retry.verify();
@@ -97,7 +99,7 @@ async function close(guard) { await guard.close(); guards.delete(guard); }
   await close(retry);
   mode = 'transient-segments';
   const transientFile = path.join(temp, 'transient.gz'); let transientProc;
-  const transient = await open({ url: base + '/file', filename: transientFile, expectedSize: bytes.length, onFatal: () => transientProc?.kill() });
+  const transient = await open({ url: base + '/file', filename: transientFile, expectedSize: bytes.length, onFatal: () => transientProc?.kill('SIGKILL') });
   assert.equal(await runAxel(transient.url, transientFile, p => { transientProc = p; }), 0);
   const transientResult = await transient.verify();
   assert.ok(transientResult.recoveredResponses > 3, 'separate segments must have independent retry budgets');
@@ -204,6 +206,7 @@ async function close(guard) { await guard.close(); guards.delete(guard); }
   assert.equal((await cancelled).status, 'cancelled'); assert.equal(charges.length, 2);
   console.log('Axel 分段保护通过: 实际错位分段复现/拦截、源变化、短响应、编码、抽样、断点恢复、代理边界与主流程计费');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
+  clearTimeout(deadline);
   await engine.callIpcHandler('cancel-download');
   for (const guard of guards) await guard.close();
   server.close(); for (const socket of sockets) socket.destroy();

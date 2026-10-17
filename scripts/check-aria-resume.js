@@ -35,7 +35,7 @@ let guard, proc;
   const env = { ...process.env, LD_LIBRARY_PATH: path.join(path.dirname(aria.path), 'lib') };
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${server.address().port}/file`, filename = path.join(temp, 'resume.bin');
-  const open = file => createBioTransferGuard({ url, filename: file, expectedSize: size, engine: 'aria2', onFatal: () => proc?.kill() });
+  const open = file => createBioTransferGuard({ url, filename: file, expectedSize: size, engine: 'aria2', onFatal: () => proc?.kill('SIGKILL') });
   const run = file => runAria({ binary: aria.path, url: guard.url, filename: file, threads: 4, env, onProcess: p => proc = p });
   for (const [url, engine] of [['https://example.org/a','aria2'],['ftp://example.org/a','aria2'],['sftp://example.org/a','aria2'],['ftps://example.org/a','curl']]) assert.equal(selectEngine({url}), engine);
   assert.equal(selectEngine({url}, {downloadEngines:{http:'axel'}}), 'axel');
@@ -47,7 +47,7 @@ let guard, proc;
     try { original = fs.readFileSync(filename + '.aria2'); parsed = parseAriaState(original, size); if (parsed.done > 0) break; } catch (_) {}
   }
   assert(parsed?.done > 0 && parsed.done < size, 'real aria2 must save complete-piece checkpoints');
-  proc.kill(); await interrupted;
+  proc.kill('SIGKILL'); await interrupted;
   await guard.checkpoint(); await guard.close(); guard = null;
   const state = JSON.parse(fs.readFileSync(filename + '.biodl.json'));
   assert.equal(state.engine, 'aria2'); assert(state.resume);
@@ -79,4 +79,4 @@ let guard, proc;
   const release = files.claimFile(filename); assert.throws(()=>files.claimFile(filename),/已有下载或校验/); release();
   const backup = await files.preserveForRedownload(filename); assert.deepEqual(fs.readFileSync(backup),data); assert(!fs.existsSync(filename));
   console.log('ARIA_RESUME_OK', JSON.stringify({platform:process.platform,version:aria.version,resumedBytes:size-bodyBytes,checks:['real crash checkpoint','restoration','sparse ranges','source changes','short responses','legacy isolation','mismatch backup','disk budget','file lock']}));
-})().catch(e=>{console.error(e);process.exitCode=1}).finally(async()=>{proc?.kill();if(guard)await guard.close();server.closeAllConnections();server.close();fs.rmSync(temp,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(async()=>{proc?.kill('SIGKILL');if(guard)await guard.close();server.closeAllConnections();server.close();fs.rmSync(temp,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
