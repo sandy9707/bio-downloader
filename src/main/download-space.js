@@ -1,4 +1,5 @@
 const fs = require('fs');
+const { priorMismatch, hasResume } = require('./download-files');
 
 // Logical size can include sparse holes. Credit only allocated bytes when the
 // filesystem exposes them; on Windows an unfinished Axel file stays conservative.
@@ -14,9 +15,9 @@ async function additionalSpace(files, destination) {
     let allocated = 0;
     try {
       const stat = await fs.promises.stat(filename);
-      if (stat.isFile()) {
+      if (stat.isFile() && !file.redownloadMismatch && !(await priorMismatch(filename, file.url))) {
         allocated = Number.isFinite(stat.blocks) ? Math.min(stat.size, stat.blocks * 512)
-          : fs.existsSync(filename + '.st') ? 0 : stat.size;
+          : hasResume(filename) ? 0 : stat.size;
       }
     } catch (_) { /* Reserve the full size; report per-file path errors in its task. */ }
     bytes += Math.max(0, size - allocated);

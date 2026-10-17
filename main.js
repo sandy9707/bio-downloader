@@ -15,6 +15,8 @@ const crypto = require('crypto');
 const EventEmitter = require('events');
 const { createEnaResolver, verifyFile } = require('./src/main/download-integrity');
 const { bioSource, createBioTransferGuard } = require('./src/main/bio-transfer-guard');
+const downloadFiles = require('./src/main/download-files');
+const { selectEngine, runAria } = require('./src/main/download-engines');
 const enaIntegrity = createEnaResolver(async (accession) => {
   const url = `https://www.ebi.ac.uk/ena/portal/api/filereport?accession=${encodeURIComponent(accession)}&result=read_run&fields=run_accession,fastq_ftp,fastq_md5,fastq_bytes&format=json`;
   // ENA regularly needs more than six seconds. Retry transient failures on
@@ -346,6 +348,9 @@ function ensureBinaries() {
     );
   }
 
+  if (platform === 'darwin' && arch === 'arm64' || platform === 'win32') {
+    filesToCopy.push({ src: path.join(__dirname, 'src', 'bin', platform, platform === 'win32' ? 'aria2c.exe' : 'aria2c'), dest: platform === 'win32' ? 'aria2c.exe' : 'aria2c', fromAsar: true });
+  }
   for (const item of filesToCopy) {
     const destPath = path.join(USER_BIN_DIR, item.dest);
     if (fs.existsSync(item.src)) {
@@ -398,24 +403,16 @@ function systemBinaryPath(binName) {
 }
 
 function toolCandidates(toolId) {
-  const platform = os.platform();
-  const settings = getSettings();
-  if (toolId === 'axel') {
-    const binName = platform === 'win32' ? 'axel.exe' : 'axel';
-    return [
-      { path: path.join(USER_BIN_DIR, binName), source: 'bundled' },
-      { path: systemBinaryPath(binName), source: 'system' },
-      { path: settings.axelPath || '', source: 'custom' }
-    ];
-  }
-  const binName = platform === 'win32' ? 'aria2c.exe' : 'aria2c';
-  const bundled = platform === 'linux'
-    ? path.join(BIN_DIR, 'linux', 'aria2', 'aria2c')
-    : path.join(PLUGIN_DIR, 'aria2', binName);
+  const platform = os.platform(), settings = getSettings();
+  const name = toolId === 'aria2' ? 'aria2c' : toolId;
+  const binName = name + (platform === 'win32' ? '.exe' : '');
+  const bundled = toolId === 'aria2'
+    ? platform === 'linux' ? path.join(BIN_DIR, 'linux', 'aria2', 'aria2c') : path.join(USER_BIN_DIR, binName)
+    : path.join(USER_BIN_DIR, binName);
   return [
+    { path: settings[toolId + 'Path'] || '', source: 'custom' },
     { path: bundled, source: 'bundled' },
-    { path: systemBinaryPath(binName), source: 'system' },
-    { path: settings.aria2Path || '', source: 'custom' }
+    { path: systemBinaryPath(binName), source: 'system' }
   ];
 }
 
@@ -427,7 +424,7 @@ function toolCandidateWorks(toolId, candidate) {
   }
   const result = spawnSync(candidate.path, ['--version'], { encoding: 'utf8', timeout: 3000, env, windowsHide: true });
   const output = `${result.stdout || ''}\n${result.stderr || ''}`;
-  return result.status === 0 && (toolId === 'axel' ? /Axel\s+[\d.]+/i : /aria2\s+version\s+[\d.]+/i).test(output);
+  return result.status === 0 && (toolId === 'axel' ? /Axel\s+[\d.]+/i : toolId === 'curl' ? /curl\s+[\d.]+/i : /aria2\s+version\s+[\d.]+/i).test(output);
 }
 
 function resolveToolBinary(toolId) {
@@ -461,71 +458,10 @@ function getAria2BinaryPath() {
 }
 
 async function ensureAria2Plugin() {
+  ensureBinaries();
   const existing = getAria2BinaryPath();
   if (existing) return existing;
-
-  const platform = os.platform();
-  if (platform === 'linux') {
-    ensureBinaries();
-    const resolved = resolveToolBinary('aria2');
-    if (resolved.path) return resolved.path;
-    throw new Error('未找到可用 aria2c。请通过 Conda/系统包管理器安装，或在插件中心填写绝对路径。');
-  }
-  const isWin = platform === 'win32';
-  const binName = isWin ? 'aria2c.exe' : 'aria2c';
-  const aria2Dir = path.join(PLUGIN_DIR, 'aria2');
-  if (!fs.existsSync(aria2Dir)) {
-    fs.mkdirSync(aria2Dir, { recursive: true });
-  }
-  const destBin = path.join(aria2Dir, binName);
-
-  let remoteArchive = '';
-  if (platform === 'darwin') {
-    remoteArchive = 'aria2c-darwin-arm64.gz';
-  } else if (platform === 'win32') {
-    remoteArchive = 'aria2c-win-x64.exe.gz';
-  } else {
-    throw new Error('当前系统平台不支持该插件: ' + platform);
-  }
-
-  const downloadUrl = `${BACKEND_BASE_URL}/downloads/plugins/${remoteArchive}`;
-  console.log(`[Plugin] 正在按需拉取 FTP/SFTP 加速引擎插件: ${downloadUrl}`);
-  
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('toast-message', { message: '正在下载 FTP/SFTP 加速引擎插件...', type: 'info' });
-  }
-
-  const response = await axios({
-    method: 'GET',
-    url: downloadUrl,
-    responseType: 'stream',
-    timeout: 60000
-  });
-
-  const zlib = require('zlib');
-  const gunzip = zlib.createGunzip();
-  const outWriter = fs.createWriteStream(destBin);
-
-  await new Promise((resolve, reject) => {
-    response.data
-      .pipe(gunzip)
-      .pipe(outWriter)
-      .on('finish', resolve)
-      .on('error', reject);
-  });
-
-  if (platform === 'darwin') {
-    try {
-      exec(`xattr -rd com.apple.quarantine "${destBin}" 2>/dev/null`, () => {});
-    } catch (e) {}
-  }
-
-  ensureExecutable(destBin);
-  console.log(`[Plugin] 插件安装就绪: ${destBin}`);
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('toast-message', { message: 'FTP/SFTP 加速引擎插件已就绪！', type: 'success' });
-  }
-  return destBin;
+  throw new Error('内置 aria2c 无法启动，请在插件中心查看诊断或指定可用的 aria2c 路径');
 }
 
 // ==========================================
@@ -1334,7 +1270,7 @@ function inspectTool(toolId) {
   const output = `${result.stdout || ''}\n${result.stderr || ''}`.trim();
   const versionMatch = toolId === 'axel'
     ? output.match(/Axel\s+([\d.]+)/i)
-    : output.match(/aria2\s+version\s+([\d.]+)/i);
+    : output.match(toolId === 'curl' ? /curl\s+([\d.]+)/i : /aria2\s+version\s+([\d.]+)/i);
   return {
     installed: true,
     usable: result.status === 0 && !!versionMatch,
@@ -1350,28 +1286,31 @@ ipcMain.handle('plugin-get-status', async () => {
   const platform = `${os.platform()} ${os.arch()}`;
   const axel = inspectTool('axel');
   const aria2 = inspectTool('aria2');
+  const curl = inspectTool('curl');
   return {
     plugins: [
       {
         id: 'axel',
-        name: 'HTTP / HTTPS 多线程下载引擎 (Axel)',
-        description: 'SRA、EBI、GEO 与普通直链的默认下载引擎。依次检测软件内置、系统 PATH 和用户指定路径。',
+        name: 'Axel（可选引擎）',
+        description: '用于 HTTP/HTTPS 及旧 .st 断点续传。优先使用用户指定路径。',
         platform,
         ...axel
       },
       {
         id: 'aria2',
-        name: 'FTP / SFTP 高速下载插件 (aria2)',
-        description: '用于 FTP/SFTP 多连接与断点续传。依次检测软件内置、系统 PATH 和用户指定路径。',
+        name: 'aria2c（默认引擎）',
+        description: '用于 HTTP/HTTPS、EBI/NCBI、FTP/SFTP，支持多连接与断点续传。可在设置中按协议切换。',
         platform,
         ...aria2
-      }
+      },
+      { id: 'curl', name: 'curl（FTPS / 可选 FTP、SFTP）', description: '使用系统安装的 curl，或指定支持相应协议的版本。', platform, ...curl }
     ]
   };
 });
 
 // 手动触发插件安装/重装
 ipcMain.handle('plugin-install', async (event, { pluginId }) => {
+  if (pluginId === 'curl') { const resolved = inspectTool('curl'); if (!resolved.usable) throw new Error('请安装 curl 并指定绝对路径'); return { success: true, path: resolved.path }; }
   if (pluginId === 'axel') {
     ensureBinaries();
     const resolved = inspectTool('axel');
@@ -1388,12 +1327,12 @@ ipcMain.handle('plugin-install', async (event, { pluginId }) => {
 });
 
 ipcMain.handle('plugin-set-path', async (event, { pluginId, binaryPath }) => {
-  if (!['axel', 'aria2'].includes(pluginId)) throw new Error('未知的插件 ID: ' + pluginId);
+  if (!['axel', 'aria2', 'curl'].includes(pluginId)) throw new Error('未知的插件 ID: ' + pluginId);
   const normalized = path.resolve(String(binaryPath || '').trim());
   if (!binaryPath || !fs.existsSync(normalized) || !fs.statSync(normalized).isFile()) {
     throw new Error('请输入存在的可执行文件绝对路径');
   }
-  const key = pluginId === 'axel' ? 'axelPath' : 'aria2Path';
+  const key = pluginId + 'Path';
   if (!toolCandidateWorks(pluginId, { path: normalized, source: 'custom' })) {
     throw new Error(`该文件不是可用的 ${pluginId === 'axel' ? 'Axel' : 'aria2c'} 可执行程序`);
   }
@@ -1850,11 +1789,14 @@ const { measureNetwork, measureDownloader } = require('./src/main/speedtest');
 ipcMain.handle('speedtest-network', (event, options = {}) => measureNetwork({ ...options,
   onProgress: data => { if (!event.sender.isDestroyed?.()) event.sender.send('speedtest-progress', data); }
 }));
-ipcMain.handle('speedtest-downloader', (event, options = {}) => measureDownloader({ ...options,
-  axelBin: getAxelBinaryPath(),
-  proxy: clashProcess && shouldUseProxy(options.url) ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false,
-  onProgress: data => { if (!event.sender.isDestroyed?.()) event.sender.send('speedtest-progress', data); }
-}));
+ipcMain.handle('speedtest-downloader', async (event, options = {}) => {
+  const engine = selectEngine({ url: options.url }, getSettings());
+  return measureDownloader({ ...options, engine,
+    binary: engine === 'aria2' ? await ensureAria2Plugin() : getAxelBinaryPath(),
+    proxy: clashProcess && shouldUseProxy(options.url) ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false,
+    onProgress: data => { if (!event.sender.isDestroyed?.()) event.sender.send('speedtest-progress', data); }
+  });
+});
 
 ipcMain.handle('download-app-update', async (event, { url, fileName }) => {
   const downloadsDir = app.getPath('downloads');
@@ -2256,8 +2198,6 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     throw new Error(`磁盘可用空间不足！还需新增 ${(totalRequiredSpace / 1073741824).toFixed(2)} GB，可用 ${(freeSpace / 1073741824).toFixed(2)} GB。任务已保留，请释放空间或更换保存目录后重试`);
   }
 
-  const axelBin = getAxelBinaryPath();
-  ensureExecutable(axelBin);
 
   const outcomes = new Map();
   function sendStatus(data) {
@@ -2305,10 +2245,20 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     }
 
     let bioGuard = null;
-    let verification = null;
+    let verification = null, releaseFile = null, backupPath = file.backupPath || null;
+    let engineForFile, axelBin, deepForFile = deepIntegrityCheck;
     try {
+    releaseFile = downloadFiles.claimFile(savePath);
+    const knownMismatch = await downloadFiles.priorMismatch(savePath, file.url);
+    if (!downloadFiles.hasResume(savePath) && (file.redownloadMismatch || knownMismatch)) {
+      backupPath = await downloadFiles.preserveForRedownload(savePath);
+      deepForFile = true;
+    }
+    engineForFile = selectEngine(file, getSettings(), savePath);
+    if (engineForFile === 'axel') axelBin = getAxelBinaryPath();
+    sendStatus({ index: fileIndex, status: 'downloading', savePath, engine: engineForFile, backupPath, redownloadPrepared: Boolean(backupPath), speed: backupPath ? '原文件已保留，正在重新下载…' : '正在准备下载…' });
     // Fetch metadata alongside the transfer, including old saved tasks/direct ENA links.
-    const referencePromise = enaIntegrity.reference(file, { deep: deepIntegrityCheck });
+    const referencePromise = enaIntegrity.reference(file, { deep: deepForFile });
     let diagnosticLogPath = null;
     const checkControl = async () => {
       if (cancelled || cancelledFiles.has(fileIndex)) throw new Error('Cancelled');
@@ -2319,24 +2269,21 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
         if (cancelled || cancelledFiles.has(fileIndex)) throw new Error('Cancelled');
       }
     };
-    const integrityFields = () => ({ verification, md5: file.md5 || null, size: file.size });
+    const integrityFields = () => ({ verification, md5: file.md5 || null, size: file.size, engine: engineForFile, backupPath });
     async function checkIntegrity(existing = false) {
       activeIntegrityChecks.set(fileIndex, { wake: () => {} });
       let lastProgressAt = 0;
       try {
         await checkControl();
-        sendStatus({ index: fileIndex, status: 'downloading', phase: 'verifying', speed: deepIntegrityCheck ? '正在获取文件校验信息…' : '正在快速检查文件…', savePath });
+        sendStatus({ index: fileIndex, status: 'downloading', phase: 'verifying', speed: deepForFile ? '正在获取文件校验信息…' : '正在快速检查文件…', savePath });
         const reference = await referencePromise;
         await checkControl();
         if (bioGuard && !reference.expectedSize) reference.expectedSize = bioGuard.size;
         if (reference.expectedMd5) file.md5 = reference.expectedMd5;
         if (reference.expectedSize) file.size = reference.expectedSize;
-        if (existing && !deepIntegrityCheck && bioGuard?.previousVerification?.status === 'mismatch') {
-          throw new Error('该文件此前 MD5 与参考值不一致，不能仅凭大小跳过；请开启深度校验重新核对或选择其他目录下载');
-        }
         const transport = bioGuard ? await bioGuard.verify({ existing }) : null;
         verification = await verifyFile(savePath, reference, {
-          deep: deepIntegrityCheck, checkControl,
+          deep: deepForFile, checkControl,
           onProgress: (bytes, total) => {
             const now = Date.now();
             if (now - lastProgressAt < 500 && bytes !== total) return;
@@ -2349,6 +2296,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
         });
         if (transport) verification.transport = transport;
         if (bioGuard) await bioGuard.complete(verification);
+        await downloadFiles.persistVerification(savePath, file.url, verification);
         if (existing && verification.status === 'mismatch') {
           const error = new Error('已有文件 MD5 与参考值不一致，已保留文件但不作为成功跳过；请核对参考值或选择其他目录下载');
           error.verification = verification;
@@ -2372,12 +2320,13 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     }
 
     const guardedUrl = bioSource(file.url);
+    async function prepareGuard() {
     if (guardedUrl && !file.isUpdate) {
       activeIntegrityChecks.set(fileIndex, { wake: () => {} });
       try {
         sendStatus({ index: fileIndex, fileName: file.name, status: 'downloading', phase: 'verifying', speed: '正在核对源文件与断点…', savePath });
         bioGuard = await createBioTransferGuard({
-          url: guardedUrl, filename: savePath, expectedSize: file.size,
+          url: guardedUrl, filename: savePath, expectedSize: file.size, engine: engineForFile,
           proxy: clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false,
           checkControl,
           isPaused: () => pausedAxelFiles.has(fileIndex),
@@ -2387,9 +2336,12 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       } finally { activeIntegrityChecks.delete(fileIndex); }
     }
 
-    // A full-size file with an Axel .st sidecar can still contain unwritten blocks.
+    }
+    await prepareGuard();
+
+    // A full-size file with an engine sidecar can still contain unwritten blocks.
     // Only consider a file without resume metadata for deduplication; verify before skipping.
-    if (fs.existsSync(savePath) && !fs.existsSync(savePath + '.st')) {
+    if (fs.existsSync(savePath) && !downloadFiles.hasResume(savePath)) {
       const localStats = fs.statSync(savePath);
       if (localStats.isFile() && file.size > 0 && localStats.size === Number(file.size)) {
         try {
@@ -2399,14 +2351,22 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
             speed: verification.status === 'verified' ? 'MD5 与参考值一致(跳过)' : verification.status === 'mismatch' ? '已保留（MD5 与参考值不一致，跳过）' : verification.status === 'unavailable' ? '已存在（MD5 未核验，跳过）' : '快速检查通过(跳过)',
             ...integrityFields()
           });
+          return;
         } catch (error) {
-          const status = error.message === 'Paused' ? 'paused' : error.message === 'Cancelled' ? 'cancelled' : 'failed';
-          sendStatus({ index: fileIndex, fileName: file.name, status, percentage: null, speed: status === 'paused' ? '已暂停' : status === 'cancelled' ? '已取消' : error.message, savePath, ...integrityFields() });
-        } finally {
-          pausedAxelFiles.delete(fileIndex);
-          cancelledFiles.delete(fileIndex);
+          if (error.verification?.status === 'mismatch') {
+            await checkControl();
+            if (bioGuard) { await bioGuard.close(); bioGuard = null; }
+            backupPath = await downloadFiles.preserveForRedownload(savePath);
+            deepForFile = true;
+            verification = null;
+            await prepareGuard();
+            sendStatus({ index: fileIndex, status: 'downloading', savePath, backupPath, engine: engineForFile, redownloadPrepared: true, speed: 'MD5 不一致，已保留原文件并重新下载…' });
+          } else {
+            const status = error.message === 'Paused' ? 'paused' : error.message === 'Cancelled' ? 'cancelled' : 'failed';
+            sendStatus({ index: fileIndex, fileName: file.name, status, percentage: null, speed: error.message, savePath, ...integrityFields() });
+            return;
+          }
         }
-        return;
       }
     }
 
@@ -2509,156 +2469,26 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
 // 【插件化 FTP / SFTP 协议下载引擎】
 // 优先使用 aria2c 插件进行多连接加速下载，未就绪时自动拉取插件或使用 curl 兜底
 // ==========================================
-async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStream, fileDestFolder, safeName, threads }) {
-  let aria2Bin = null;
-  try {
-    aria2Bin = await ensureAria2Plugin();
-  } catch (err) {
-    console.warn('[Plugin] 获取 aria2 插件未成功，降级使用 curl 兜底:', err.message);
-  }
-
-  const isFtp = file.isFtp || String(file.url).startsWith('ftp://') || String(file.url).startsWith('ftps://');
-  const isSftp = file.isSftp || String(file.url).startsWith('sftp://');
-
-  // 构建净化环境(彻底清除可能导致 FTP 报 502 的环境代理变量)
+async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStream, fileDestFolder, safeName, threads, selectedEngine }) {
   const cleanEnv = { ...process.env };
-  delete cleanEnv.http_proxy;
-  delete cleanEnv.https_proxy;
-  delete cleanEnv.all_proxy;
-  delete cleanEnv.HTTP_PROXY;
-  delete cleanEnv.HTTPS_PROXY;
-  delete cleanEnv.ALL_PROXY;
-
-  // 1) 优先使用 aria2c 多连接下载
-  if (aria2Bin && fs.existsSync(aria2Bin)) {
-    const runAria2 = (useProxy) => new Promise((resolve, reject) => {
-      if (cancelled) return reject(new Error('Cancelled'));
-      const ariaArgs = [
-        '-x', String(Math.min(16, threads || 8)),
-        '-s', String(Math.min(16, threads || 8)),
-        '-k', '1M',
-        '--file-allocation=none',
-        '--summary-interval=1',
-        '--console-log-level=warn',
-        '--auto-file-renaming=false',
-        '--allow-overwrite=true',
-        '-d', fileDestFolder,
-        '-o', safeName
-      ];
-
-      if (useProxy) {
-        ariaArgs.push('--all-proxy=http://127.0.0.1:43289');
-      }
-
-      ariaArgs.push(file.url);
-
-      const protoName = isSftp ? 'SFTP' : 'FTP';
-      console.log(`[Plugin] Running aria2c (${protoName}, proxy=${useProxy}): ${aria2Bin} ${ariaArgs.join(' ')}`);
-      if (logStream) {
-        logStream.write(`=== 启动 aria2c 插件下载 (${protoName}, 代理=${useProxy ? 'http://127.0.0.1:43289' : '直连'}) ===\n命令: ${aria2Bin} ${ariaArgs.join(' ')}\n\n`);
-      }
-
-      const proc = spawn(aria2Bin, ariaArgs, { env: useProxy ? env : cleanEnv });
-      activeAxelProcesses.set(fileIndex, proc);
-
-      cancelTokens.set(fileIndex, () => {
-        try { killProcess(proc); } catch (e) {}
-        activeAxelProcesses.delete(fileIndex);
-        reject(new Error('Cancelled'));
-      });
-
-      proc.stdout.on('data', (data) => {
-        const output = data.toString();
-        const pctMatch = output.match(/\((\d+)%\)/);
-        const speedMatch = output.match(/DL:([\d.]+[KMGT]?i?B(?:\/s)?)/i);
-
-        let receivedBytes = null;
-        try { receivedBytes = fs.statSync(savePath).size; } catch (e) {}
-
-        const percentage = pctMatch ? parseInt(pctMatch[1], 10) : (file.size > 0 && receivedBytes ? Math.min(99, Math.floor((receivedBytes / file.size) * 100)) : null);
-        const speed = speedMatch ? (speedMatch[1].endsWith('/s') ? speedMatch[1] : speedMatch[1] + '/s') : null;
-
-        if (percentage !== null || speed !== null) {
-          mainWindow.webContents.send('download-progress', {
-            index: fileIndex,
-            percentage,
-            speed,
-            receivedBytes,
-            totalBytes: file.size || null
-          });
-        }
-      });
-
-      let errOutput = '';
-      proc.stderr.on('data', (data) => {
-        const str = data.toString();
-        errOutput += str;
-        if (logStream) logStream.write(`[aria2c stderr] ${str}`);
-      });
-
-      proc.on('close', (code) => {
-        activeAxelProcesses.delete(fileIndex);
-        if (code === 0) {
-          mainWindow.webContents.send('download-progress', {
-            index: fileIndex,
-            percentage: 100,
-            speed: '0 B/s',
-            receivedBytes: file.size || (fs.existsSync(savePath) ? fs.statSync(savePath).size : null),
-            totalBytes: file.size || null
-          });
-          if (logStream) {
-            logStream.write(`\n=== aria2c 插件下载成功 ===\n`);
-            logStream.end();
-          }
-          resolve();
-        } else {
-          const err = new Error(`aria2c 退出码 ${code}${errOutput ? ': ' + errOutput.slice(0, 150) : ''}`);
-          err.rawOutput = errOutput;
-          reject(err);
-        }
-      });
-
-      proc.on('error', (err) => {
-        activeAxelProcesses.delete(fileIndex);
-        reject(err);
-      });
-    });
-
-    try {
-      // 代理模式 (若为 SFTP 且开启了加速器优先走代理尝试)
-      const shouldTryProxy = isSftp && !!clashProcess;
-      return await runAria2(shouldTryProxy);
-    } catch (ariaErr) {
-      // 若走代理连接失败(例如 SSH handshake failure: Failed getting banner)，自动直连重试
-      if (isSftp && clashProcess && !cancelled && !pausedAxelFiles.has(fileIndex) && !cancelledFiles.has(fileIndex)) {
-        console.warn(`[Plugin] aria2c proxy mode failed, retrying directly: ${ariaErr.message}`);
-        if (logStream) {
-          logStream.write(`\n=== 代理握手异常，自动切换为直连多连接模式重试... ===\n\n`);
-        }
-        return await runAria2(false);
-      }
-      throw ariaErr;
-    }
-  }
-
+  for (const key of Object.keys(cleanEnv)) if (/^(http|https|ftp|all|no)_proxy$/i.test(key)) delete cleanEnv[key];
   // 2) 针对 aria2 未就绪时，降级使用 curl 兜底断点续传
   return new Promise((resolve, reject) => {
     if (cancelled) return reject(new Error('Cancelled'));
-    const curlArgs = ['-sL', '-C', '-', '--insecure', '--noproxy', '*'];
+    const curlArgs = ['--fail', '-sL', '-C', '-', '--noproxy', '*'];
 
     curlArgs.push('-o', savePath, file.url);
-    console.log(`[Plugin] Downloading via curl: curl ${curlArgs.join(' ')}`);
+    console.log('[Downloader] curl:', file.name);
     if (logStream) {
-      logStream.write(`=== 启动 curl 下载引擎 ===\n命令: curl ${curlArgs.join(' ')}\n\n`);
+      logStream.write('=== 启动 curl 下载引擎 ===\n');
     }
 
-    const proc = spawn('curl', curlArgs, { env: cleanEnv });
+    const proc = spawn(resolveToolBinary('curl').path || 'curl', curlArgs, { env: cleanEnv, windowsHide: true });
     activeAxelProcesses.set(fileIndex, proc);
 
     cancelTokens.set(fileIndex, () => {
       try { killProcess(proc); } catch (e) {}
-      activeAxelProcesses.delete(fileIndex);
-      reject(new Error('Cancelled'));
+
     });
 
     proc.stderr.on('data', (data) => {
@@ -2749,9 +2579,9 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         }
       }
 
-      if (attempt === 1 && fs.existsSync(savePath) && fs.statSync(savePath).size > 0 && !fs.existsSync(savePath + '.st')) {
+      if (attempt === 1 && engineForFile !== 'curl' && fs.existsSync(savePath) && fs.statSync(savePath).size > 0 && !downloadFiles.hasResume(savePath)) {
         preservePartialFile = true;
-        lastErrorMsg = '已有部分文件缺少 Axel 断点信息，已保留文件；请恢复 .st 文件或选择其他目录重新下载';
+        lastErrorMsg = '已有部分文件缺少下载器断点信息，已保留文件；请恢复 .st / .aria2 文件或选择其他目录重新下载';
         break;
       }
 
@@ -2789,7 +2619,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       threads = Math.max(1, Math.min(threads, perFileLimit, Math.floor(totalConnectionLimit / actualConcurrentCount)));
 
       const args = ['-n', threads.toString(), '-T', '20', '-U', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', '-k', '-o', savePath, bioGuard ? bioGuard.url : file.url];
-      console.log(`Running Axel (Attempt ${attempt}): ${axelBin} ${args.join(' ')}`);
+      console.log(`[Downloader] ${engineForFile}, attempt ${attempt}: ${file.name}`);
 
       let logStream = null;
       const settings = getSettings();
@@ -2805,12 +2635,12 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           logStream.write(`版本: ${app.getVersion()}\n`);
           logStream.write(`预期字节数: ${file.size || '未知'}\n预期 MD5: ${file.md5 || '待获取'}\n`);
           logStream.write(`文件名: ${file.name}\n`);
-          logStream.write(`URL: ${file.url}\n`);
+          logStream.write(`URL: ${String(file.url).replace(/(\w+:\/\/)[^/]*@/, '$1[redacted]@').split('?')[0]}\n`);
           logStream.write(`目标保存路径: ${savePath}\n`);
           logStream.write(`尝试次数: ${attempt}\n`);
           logStream.write(`线程数: ${threads}\n`);
           logStream.write(`代理环境: ${JSON.stringify(Object.fromEntries(['http_proxy', 'https_proxy', 'all_proxy'].filter(key => env[key]).map(key => [key, env[key]])))}\n`);
-          logStream.write(`Axel 命令: ${axelBin} ${args.join(' ')}\n\n`);
+          logStream.write(`引擎: ${engineForFile}\n\n`);
         } catch (logErr) {
           console.error('Failed to create download log stream:', logErr);
         }
@@ -2820,9 +2650,25 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         const isFtpProtocol = file.isFtp || String(file.url).startsWith('ftp://') || String(file.url).startsWith('ftps://');
         const isSftpProtocol = file.isSftp || String(file.url).startsWith('sftp://');
 
-        if (!bioGuard && (isFtpProtocol || isSftpProtocol)) {
-          // FTP / SFTP 协议走插件化加速引擎 (支持 aria2c 多连接加速与 curl 断点续传)
-          await downloadFileWithPlugin({ file, fileIndex, savePath, env, logStream, fileDestFolder, safeName, threads });
+        if (engineForFile === 'aria2') {
+          const binary = await ensureAria2Plugin();
+          const ariaEnv = { ...env };
+          if (process.platform === 'linux') ariaEnv.LD_LIBRARY_PATH = [path.join(path.dirname(binary), 'lib'), ariaEnv.LD_LIBRARY_PATH].filter(Boolean).join(':');
+          await runAria({ binary, url: bioGuard ? bioGuard.url : file.url, filename: savePath, threads, env: ariaEnv,
+            proxy: bioGuard || isFtpProtocol || isSftpProtocol ? '' : env.http_proxy || '',
+            log: line => { if (logStream && !logStream.writableEnded) logStream.write(line); },
+            onProcess: proc => {
+              activeAxelProcesses.set(fileIndex, proc);
+              cancelTokens.set(fileIndex, () => { killProcess(proc); });
+            },
+            onProgress: data => mainWindow.webContents.send('download-progress', { index: fileIndex, engine: 'aria2', ...data })
+          });
+          activeAxelProcesses.delete(fileIndex);
+          if (bioGuard?.error) throw bioGuard.error;
+          if (cancelled || cancelledFiles.has(fileIndex)) throw new Error('Cancelled');
+          if (looksLikeHtmlError(savePath)) throw new Error('服务器返回网页(错误页/需登录会话),非可下载文件');
+        } else if (engineForFile === 'curl') {
+          await downloadFileWithPlugin({ file, fileIndex, savePath, env, logStream, fileDestFolder, safeName, threads, selectedEngine: 'curl' });
         } else {
           await new Promise((resolve, reject) => {
           if (cancelled) {
@@ -2976,7 +2822,8 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
 
         downloadSuccess = true;
       } catch (err) {
-        lastErrorMsg = err.message;
+        lastErrorMsg = bioGuard?.error?.message || err.message;
+        activeAxelProcesses.delete(fileIndex);
         console.warn(`Attempt ${attempt} for ${file.name} failed: ${lastErrorMsg}`);
         if (bioGuard?.error) { preservePartialFile = true; break; }
         if (lastErrorMsg === 'Cancelled' || lastErrorMsg === 'Paused' || cancelledFiles.has(fileIndex)) {
@@ -2996,7 +2843,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
 
     // A sequential stream cannot resume Axel's sparse ranges. Keep any partial
     // data/checkpoint and retry with Axel; fallback is only safe for a fresh file.
-    if (!downloadSuccess && !bioGuard && !preservePartialFile && !cancelled && lastErrorMsg !== 'Paused' && !pausedAxelFiles.has(fileIndex) && !cancelledFiles.has(fileIndex)) {
+    if (!downloadSuccess && engineForFile === 'axel' && !bioGuard && !preservePartialFile && !cancelled && lastErrorMsg !== 'Paused' && !pausedAxelFiles.has(fileIndex) && !cancelledFiles.has(fileIndex)) {
       const hasPartial = fs.existsSync(savePath + '.st') || (fs.existsSync(savePath) && fs.statSync(savePath).size > 0);
       if (hasPartial) {
         lastErrorMsg += '；原文件和 Axel 断点已保留，请重试继续下载';
@@ -3106,8 +2953,11 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
     } finally {
       if (bioGuard) await bioGuard.close().catch(error => console.warn('关闭分段保护失败:', error.message));
       activeIntegrityChecks.delete(fileIndex);
+      activeAxelProcesses.delete(fileIndex);
+      cancelTokens.delete(fileIndex);
       pausedAxelFiles.delete(fileIndex);
       cancelledFiles.delete(fileIndex);
+      if (releaseFile) releaseFile();
     }
   }
 
@@ -3272,7 +3122,7 @@ ipcMain.handle('delete-transfer-file', (event, filePath) => {
       deletedCount++;
     }
     // 2. 彻底清理分片、断点与未完成缓存文件 (.st / .aria2 / .aria2c / .tmp / .part)
-    for (const suffix of ['.st', '.biodl.json', '.aria2', '.aria2c', '.tmp', '.part']) {
+    for (const suffix of ['.st', '.biodl.json', '.biodl-verification.json', '.aria2', '.aria2c', '.tmp', '.part']) {
       const partialPath = filePath + suffix;
       try {
         if (fs.existsSync(partialPath)) {

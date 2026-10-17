@@ -22,6 +22,7 @@ function run(code){return new Promise((resolve,reject)=>{const child=cp.spawn(no
   assert(fs.readFileSync(path.join(app,'packages/web/speedtest.html'),'utf8').includes('web-bridge.js'));
   assert(fs.existsSync(path.join(app,'packages/core/main/speedtest.js')));
   cp.execFileSync(path.join(app,'bin/linux/axel'),['--version']);
+  cp.execFileSync(path.join(app,'bin/linux/aria2/aria2c'),['--version']);
   console.log('LINUX_UPGRADE_OK',stage,require('../package.json').version);
  }
 })().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>{server.closeAllConnections();server.close();fs.rmSync(temp,{recursive:true,force:true});});

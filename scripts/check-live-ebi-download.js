@@ -1,5 +1,5 @@
 // Release gate: a whole public ENA file through the actual main IPC and bundled
-// Axel, with an independent full MD5 afterward. No login or real billing.
+// aria2, with an independent full MD5 afterward. No login or real billing.
 const assert = require('node:assert/strict');
 const fs = require('fs'), os = require('os'), path = require('path'), crypto = require('crypto');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'biodl-live-ebi-'));
@@ -22,6 +22,7 @@ const timer = setTimeout(() => { console.error('Live ENA download exceeded 6 min
   assert.ok(file.url.startsWith('http://ftp.sra.ebi.ac.uk/'));
   await engine.callIpcHandler('start-download', { files: [{ ...file, originalIndex: 1 }], targetDir: path.join(temp, 'files'), token: 'test-no-account', maxConcurrent: 1 });
   assert.equal(final?.status, 'completed', JSON.stringify(final));
+  assert.equal(final.engine, 'aria2');
   assert.equal(final.verification.method, 'quick', 'production default must not perform full MD5');
   assert.equal(final.verification.transport.status, 'sampled');
   const hash = crypto.createHash('md5');
@@ -29,7 +30,7 @@ const timer = setTimeout(() => { console.error('Live ENA download exceeded 6 min
   const actualMd5 = hash.digest('hex');
   assert.equal(actualMd5, file.md5);
   assert.deepEqual(charges, [file.size]);
-  const result = { platform: process.platform, file: file.name, size: file.size, actualMd5, expectedMd5: file.md5, seconds: (Date.now() - started) / 1000, verification: final.verification };
+  const result = { platform: process.platform, engine: final.engine, file: file.name, size: file.size, actualMd5, expectedMd5: file.md5, seconds: (Date.now() - started) / 1000, verification: final.verification };
   const evidence = path.resolve('.evidence'); fs.mkdirSync(evidence, { recursive: true });
   fs.writeFileSync(path.join(evidence, `live-ebi-${process.platform}.json`), JSON.stringify(result, null, 2));
   console.log('FULL_EBI_VERIFIED', JSON.stringify(result));

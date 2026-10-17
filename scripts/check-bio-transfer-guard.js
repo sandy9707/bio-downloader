@@ -139,8 +139,8 @@ async function close(guard) { await guard.close(); guards.delete(guard); }
 
   // A configured upstream proxy failure must never leak into a direct download.
   received = [];
-  await assert.rejects(open({ url: base + '/file', filename: path.join(temp, 'proxy.gz'), expectedSize: bytes.length, proxy: { protocol: 'http', host: '127.0.0.1', port: 1 }, timeout: 1000 }));
-  assert.equal(received.length, 0);
+  await assert.rejects(open({ url: base + '/must-not-request', filename: path.join(temp, 'proxy.gz'), expectedSize: bytes.length, proxy: { protocol: 'http', host: '127.0.0.1', port: 1 }, timeout: 1000 }));
+  assert.equal(received.filter(r => r.url.includes('must-not-request')).length, 0);
 
   // A briefly refused proxy connection is retryable on the SAME route, without
   // confusing it with corrupt data or leaking a direct request to the origin.

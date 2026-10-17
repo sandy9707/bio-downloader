@@ -57,6 +57,36 @@ function parseAxelState(bytes, size) {
   return { done, missing };
 }
 
+// aria2 1.x control file: network-endian header, complete-piece bitfield,
+// then in-flight piece bitfields. Only fully complete pieces are trusted here.
+function parseAriaState(bytes, size) {
+  let offset = 0;
+  const take = n => { if (n < 0 || offset + n > bytes.length) throw new Error('aria2 断点记录不完整'); const start = offset; offset += n; return start; };
+  const u32 = () => bytes.readUInt32BE(take(4));
+  if (bytes.readUInt16BE(take(2)) !== 1 || u32() !== 0 || u32() !== 0) throw new Error('不支持的 aria2 断点记录');
+  const piece = u32(), total = bytes.readBigUInt64BE(take(8)); take(8);
+  if (!piece || total !== BigInt(size)) throw new Error('aria2 断点文件大小不符');
+  const count = Math.ceil(size / piece), length = u32();
+  if (length !== Math.ceil(count / 8)) throw new Error('aria2 断点位图无效');
+  const bitfield = bytes.subarray(take(length), offset), missing = [];
+  let done = 0;
+  for (let i = 0; i < count; i++) {
+    const start = i * piece, end = Math.min(size, start + piece);
+    if (bitfield[i >> 3] & (0x80 >> (i & 7))) done += end - start;
+    else if (missing.length && missing[missing.length - 1].end === start) missing[missing.length - 1].end = end;
+    else missing.push({ start, end });
+  }
+  const inflight = u32(), seen = new Set();
+  if (inflight > count) throw new Error('aria2 断点分片数量无效');
+  for (let i = 0; i < inflight; i++) {
+    const index = u32(), n = u32(), bits = u32();
+    if (index >= count || seen.has(index) || n !== Math.min(piece, size - index * piece) || bits !== Math.ceil(Math.ceil(n / 16384) / 8)) throw new Error('aria2 断点分片无效');
+    seen.add(index); take(bits);
+  }
+  if (offset !== bytes.length) throw new Error('aria2 断点记录存在未知数据');
+  return { done, missing };
+}
+
 async function atomicWrite(filename, data) {
   const temporary = `${filename}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   let handle;
@@ -86,19 +116,20 @@ function validateResponse(response, start, end, size, identity) {
   return +m[3];
 }
 
-async function createBioTransferGuard({ url, filename, expectedSize, proxy = false, onFatal = () => {}, isPaused = () => false, checkControl = async () => {}, timeout = 20000, onBytes = () => {} }) {
+async function createBioTransferGuard({ url, filename, expectedSize, proxy = false, onFatal = () => {}, isPaused = () => false, checkControl = async () => {}, timeout = 20000, onBytes = () => {}, engine = 'axel' }) {
   let lockKey = path.resolve(filename);
   if (process.platform === 'win32') lockKey = lockKey.toLowerCase();
   if (activeFiles.has(lockKey)) throw new Error('同一目标文件已有下载任务，请等待或暂停原任务');
   activeFiles.add(lockKey);
-  const sidecar = filename + '.biodl.json', statePath = filename + '.st';
+  const sidecar = filename + '.biodl.json', statePath = filename + (engine === 'aria2' ? '.aria2' : '.st');
+  const parseState = engine === 'aria2' ? parseAriaState : parseAxelState;
   const sourceKey = sha(url), controllers = new Set(), sockets = new Set();
   let closed = false, fatal = null, server = null, checkpointTimer = null, checkpointBusy = false;
   let saveChain = Promise.resolve(), sampledBytes = 0, networkSampleBytes = 0;
   let interruptedResponses = 0;
   const segmentFailures = new Map();
   const retryable = error => error.retryable || ['ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE'].includes(error.code);
-  let state = { version: 1, sourceKey, completed: false, samples: {} };
+  let state = { version: 1, engine, sourceKey, completed: false, samples: {} };
   let size, identity, windows, checkpointStamp = null;
   const receipts = new Map();
   const fail = message => new Error(`${message}；原文件和断点已保留`);
@@ -169,7 +200,7 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
       const stat = await fs.promises.stat(statePath);
       if (stat.mtimeMs === checkpointStamp) return;
       const bytes = await fs.promises.readFile(statePath);
-      parseAxelState(bytes, size);
+      parseState(bytes, size);
       // Persist the data covered by this snapshot before publishing its backup.
       const data = await fs.promises.open(filename, 'r+');
       try { await data.sync(); } finally { await data.close(); }
@@ -199,6 +230,8 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
       // Still validate size, generation and completed-range samples below.
       const oldEnaKey = url.startsWith('http://ftp.sra.ebi.ac.uk/') && sha(url.replace(/^http:/, 'https:'));
       if (state.version !== 1 || (state.sourceKey !== sourceKey && state.sourceKey !== oldEnaKey)) throw fail('同名文件属于不同的下载链接，不能跳过或混合续传');
+      if (!state.completed && (state.engine || 'axel') !== engine) throw fail('原任务属于另一下载器，请使用原下载器继续断点');
+      state.engine = engine;
       state.sourceKey = sourceKey;
       state.samples = {};
     }
@@ -211,17 +244,17 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
     state.size = size; state.identity = identity;
     if (exists && (!state.completed || fs.existsSync(statePath))) {
       let resume;
-      try { resume = parseAxelState(await fs.promises.readFile(statePath), size); } catch (_) {
+      try { resume = parseState(await fs.promises.readFile(statePath), size); } catch (_) {
         if (state.resume) {
           const bytes = Buffer.from(state.resume.data, 'base64');
           if (sha(bytes) !== state.resume.sha256) throw fail('断点备份校验失败');
-          resume = parseAxelState(bytes, size);
+          resume = parseState(bytes, size);
           await atomicWrite(statePath, bytes);
         } else if (fs.existsSync(statePath)) throw fail('断点记录已损坏且无有效备份');
       }
       if (resume) {
         const candidates = [...windows];
-        for (const range of resume.missing) if (range.start >= SAMPLE_BYTES) candidates.push({ offset: range.start - SAMPLE_BYTES, length: SAMPLE_BYTES });
+        for (const range of resume.missing.slice(0, SAMPLE_COUNT)) if (range.start >= SAMPLE_BYTES) candidates.push({ offset: range.start - SAMPLE_BYTES, length: SAMPLE_BYTES });
         const completedSamples = candidates.filter(w => !resume.missing.some(r => w.offset < r.end && w.offset + w.length > r.start));
         await checkWindows(completedSamples, true);
       }
@@ -229,7 +262,8 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
     await save();
     const route = '/' + crypto.randomBytes(24).toString('hex') + '/data';
     server = http.createServer(async (req, res) => {
-      if (req.url !== route || req.method !== 'GET' || fatal || closed) { res.writeHead(404); res.end(); return; }
+      if (req.url !== route || !['GET', 'HEAD'].includes(req.method) || fatal || closed) { res.writeHead(404); res.end(); return; }
+      if (req.method === 'HEAD') { res.writeHead(200, { 'Content-Length': size, 'Accept-Ranges': 'bytes', 'Content-Type': 'application/octet-stream' }); res.end(); return; }
       const match = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || '');
       const start = match ? Number(match[1]) : 0, end = match && match[2] ? Number(match[2]) : size - 1;
       if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start > end || end >= size) { res.writeHead(416); res.end(); return; }
@@ -290,7 +324,7 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
       async verify({ existing = false } = {}) {
         if (fatal) throw fatal;
         await checkControl();
-        if (fs.existsSync(statePath)) throw fail('Axel 断点状态仍存在');
+        if (fs.existsSync(statePath)) throw fail('下载器断点状态仍存在');
         const before = await fs.promises.stat(filename);
         if (before.size !== size) throw fail('下载文件大小不符');
         await request(0, 0); // Check the source generation again after the transfer.
@@ -307,4 +341,4 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
   } catch (error) { await close().catch(() => {}); throw error; }
 }
 
-module.exports = { bioSource, createBioTransferGuard, parseAxelState, sampleWindows, validateResponse };
+module.exports = { bioSource, createBioTransferGuard, parseAxelState, parseAriaState, sampleWindows, validateResponse };

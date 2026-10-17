@@ -100,7 +100,7 @@ async function verifyFile(filename, reference, { deep = false, computeWithoutRef
     throw error;
   }
   if (!before.isFile()) fail('目标不是普通文件');
-  if (fs.existsSync(filename + '.st')) fail('下载断点状态仍存在，暂不能确认文件已完成');
+  if ((fs.existsSync(filename + '.st') || fs.existsSync(filename + '.aria2'))) fail('下载断点状态仍存在，暂不能确认文件已完成');
   if (reference.expectedSize && before.size !== reference.expectedSize) {
     fail(`文件大小不符：应为 ${reference.expectedSize} 字节，实际 ${before.size} 字节`);
   }

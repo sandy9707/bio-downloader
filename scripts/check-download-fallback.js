@@ -38,6 +38,7 @@ async function download(name) {
 }
 (async () => {
   engine.ensureBinaries();
+  await engine.callIpcHandler('save-settings', {downloadEngines: {http: 'axel'}});
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
   const result = await download('fresh.bin');

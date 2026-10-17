@@ -42,6 +42,7 @@ function harness(historyStore, cache = new Map()) {
       }
     }
   });
+  vm.runInContext(renderer.split('\n').find(line => line.startsWith('const transferPathKey =')), context);
   const start = renderer.indexOf('// Persist every transfer category');
   const end = renderer.indexOf('// 载入历史与并发数', start);
   vm.runInContext(renderer.slice(start, end), context);

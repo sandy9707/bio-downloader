@@ -1157,7 +1157,7 @@ function renderQueue() {
     if (lowPowerModeSetting) threads = Math.min(threads, 16);
     if (stableModeSetting) threads = 1;
 
-    const threadHint = stableModeSetting ? '<span style="color:#ef4444; font-weight:bold;">稳定模式 (1线程)</span>' : `Axel ${threads} 线程`;
+    const threadHint = stableModeSetting ? '<span style="color:#ef4444; font-weight:bold;">稳定模式 (1线程)</span>' : `${file.engine === 'axel' ? 'Axel' : file.engine === 'curl' ? 'curl' : 'aria2'} · 最多 ${file.engine === 'axel' ? threads : Math.min(16, threads)} 连接`;
 
     itemEl.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -2711,6 +2711,48 @@ function renderDownloadingList() {
   });
 }
 
+// Redownload only confirmed mismatches; preserve all old bytes in the backend.
+let mismatchQueueBusy = false;
+const transferPathKey = value => String(value || '').replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+async function redownloadMismatch(index) { const item = completedDownloads[index]; if (item) await queueMismatches([item]); }
+async function redownloadAllMismatched() { await queueMismatches(completedDownloads.filter(item => item.verification?.status === 'mismatch')); }
+async function queueMismatches(items) {
+  if (mismatchQueueBusy) return;
+  if (manualMd5Run) return showToast('请先等待 MD5 校验完成或停止校验，再重新下载', 'info');
+  if (!items.length) return showToast('没有 MD5 不一致的文件；未校验文件请先校验 MD5', 'info');
+  mismatchQueueBusy = true;
+  try {
+    if (!(await ensureTransferConnection())) return;
+    const groups = new Map(), seen = new Set(activeDownloads.map(item => transferPathKey(item.savePath || (item.targetDir + '/' + (item.folder ? item.folder + '/' : '') + item.name))));
+    let count = 0;
+    for (const item of items) {
+      if (item.verification?.status !== 'mismatch' || item.type === 'extraction') continue;
+      const savePath = item.savePath || '', sep = Math.max(savePath.lastIndexOf('/'), savePath.lastIndexOf('\\'));
+      const url = item.url || item.fileObj?.url, key = transferPathKey(savePath);
+      if (sep < 0 || !url || seen.has(key)) continue;
+      seen.add(key);
+      const dir = savePath.slice(0, sep + 1);
+      const file = { ...item.fileObj, name: savePath.slice(sep + 1), url, size: item.size,
+        md5: item.verification.expectedMd5 || item.md5 || item.fileObj?.md5,
+        folder: '', targetDir: dir, savePath, originalIndex: allocateTransferId(),
+        redownloadMismatch: true, status: 'waiting', speed: '等待重新下载…' };
+      if (!groups.has(dir)) groups.set(dir, []);
+      groups.get(dir).push(file); activeDownloads.push(file); count++;
+    }
+    if (!count) return showToast('文件已在队列中，或缺少原链接/保存路径', 'info');
+    renderDownloadingList(); updateTransferCounts(); syncTransfersToStorage(); switchTransferSubTab('downloading');
+    showToast(`已加入 ${count} 个重下任务；原文件保留在下载目录的 .biodl-replaced 文件夹`, 'info');
+    for (const [dir, files] of groups) {
+      try { await window.api.startDownload(files, dir, currentUser.token, maxConcurrentDownloadsSetting); }
+      catch (error) {
+        files.forEach(file => { if (activeDownloads.includes(file)) { file.status = 'paused'; file.speed = ''; } });
+        renderDownloadingList(); updateTransferCounts(); syncTransfersToStorage();
+        showToast('启动失败，任务已保留：' + error.message, 'error');
+      }
+    }
+  } finally { mismatchQueueBusy = false; }
+}
+
 // Manual MD5 checks operate on a stable snapshot even if download history changes.
 let manualMd5Run = null;
 async function verifyCompletedMd5(index) {
@@ -2728,6 +2770,8 @@ async function stopCompletedMd5() {
 function updateMd5Toolbar() {
   const start = document.getElementById('btnVerifyCompleted');
   const stop = document.getElementById('btnStopMd5');
+  const retry = document.getElementById('btnRedownloadMismatched');
+  if (retry) { retry.style.display = currentTransferSubTab === 'completed' ? '' : 'none'; retry.disabled = Boolean(manualMd5Run); }
   if (start) { start.style.display = currentTransferSubTab === 'completed' ? '' : 'none'; start.disabled = Boolean(manualMd5Run); }
   if (stop) stop.style.display = manualMd5Run ? '' : 'none';
 }
@@ -2810,10 +2854,12 @@ function renderCompletedList() {
           <span class="transfer-item-status completed"${item.verification && ['unavailable', 'mismatch', 'computed', 'failed'].includes(item.verification.status) ? ' style="color: #d97706;"' : ''} title="${escapeHtml(item.verification && item.verification.reason || '')}">${item.md5Progress ? escapeHtml(item.md5Progress) : item.verification?.status === 'failed' ? '校验失败：' + escapeHtml(item.verification.reason || '请重试') : item.verification?.status === 'computed' ? '已计算 MD5，缺少参考值（未比对）' : item.verification && item.verification.status === 'mismatch' ? '已保存 · MD5 与参考值不一致，需核对' : item.verification && item.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : item.verification && item.verification.status === 'verified' ? 'MD5 与参考值一致' : item.verification && item.verification.status === 'quick-checked' ? (item.verification.transport ? '源文件抽样通过（未做 MD5）' : '快速检查通过（未做 MD5）') : item.skip ? '大小匹配 (跳过)' : '下载完成'}</span>
           ${item.verification?.actualMd5 ? `<span style="word-break:break-all;user-select:text;">本地 MD5：${escapeHtml(item.verification.actualMd5)}</span>` : ''}
           ${item.verification?.status === 'unavailable' || item.verification?.status === 'computed' ? `<span>${escapeHtml(item.verification.reason || '缺少参考 MD5，可点击校验重试')}</span>` : ''}
+          ${item.backupPath ? `<span style="word-break:break-all;user-select:text;" title="${escapeHtml(item.backupPath)}">原文件已保留：${escapeHtml(item.backupPath)}</span>` : ''}
           <span class="transfer-item-time">${item.completedAt}</span>
         </div>
       </div>
       <div class="tl-actions">
+        ${item.verification?.status === 'mismatch' ? `<button class="tl-btn primary" style="width:auto;padding:0 8px;" onclick="redownloadMismatch(${index})" ${item.md5Progress ? 'disabled' : ''}>重新下载</button>` : ''}
         <button class="tl-btn primary" style="width:auto;padding:0 8px;" title="读取已有文件并立即校验 MD5，不重复下载" onclick="verifyCompletedMd5(${index})" ${item.md5Progress ? 'disabled' : ''}>校验 MD5</button>
         <button class="tl-btn primary" title="在文件夹中定位" onclick="openCompletedRecord(${index})">📂</button>
         <button class="tl-btn danger" title="删除记录" onclick="deleteCompletedRecord(${index})">🗑</button>
@@ -3204,7 +3250,7 @@ async function resumeTransferFile(fileId) {
   updateTransferCounts();
   showToast(`正在恢复 ${file.name},从断点继续下载...`, 'info');
   try {
-    await window.api.startDownload([{ name: file.name, url: file.url, size: file.size || 0, md5: file.md5, folder: file.folder, type: file.type, originalIndex: file.originalIndex }], dir, currentUser.token, maxConcurrentDownloadsSetting);
+    await window.api.startDownload([{ name: file.name, url: file.url, size: file.size || 0, md5: file.md5, folder: file.folder, type: file.type, originalIndex: file.originalIndex, redownloadMismatch: file.redownloadMismatch, backupPath: file.backupPath }], dir, currentUser.token, maxConcurrentDownloadsSetting);
   } catch (e) {
     file.status = 'paused'; file.speed = '';
     renderDownloadingList(); updateTransferCounts();
@@ -3386,6 +3432,9 @@ async function initTransfersAndSettings(settings) {
   if (stableModeToggle) stableModeToggle.checked = stableModeSetting;
   const deepIntegrityToggle = document.getElementById('settingsDeepIntegrityToggle');
   if (deepIntegrityToggle) deepIntegrityToggle.checked = Boolean(settings && settings.deepIntegrityCheck);
+  for (const [group, value] of Object.entries({ http: 'aria2', bio: 'inherit', ftp: 'aria2', sftp: 'aria2', ftps: 'curl', ...settings?.downloadEngines })) {
+    const select = document.getElementById('engine-' + group); if (select) select.value = value;
+  }
 
   // 3. 载入诊断日志开关设置
   const toggle = document.getElementById('settingsLoggingToggle');
@@ -3448,6 +3497,10 @@ function handleDownloadStatus(data) {
     if (data.md5) activeItem.md5 = data.md5;
     if (data.size > 0) activeItem.size = data.size;
     if (data.verification) activeItem.verification = data.verification;
+    if (savePath) activeItem.savePath = savePath;
+    if (data.engine) activeItem.engine = data.engine;
+    if (data.backupPath) activeItem.backupPath = data.backupPath;
+    if (data.redownloadPrepared) activeItem.redownloadMismatch = false;
     if (data.speed) activeItem.speed = data.speed;
     
     if (status === 'completed') {
@@ -3461,9 +3514,10 @@ function handleDownloadStatus(data) {
         skip: (data.speed && data.speed.includes('跳过')),
         folder: activeItem.folder,
         type: activeItem.type,
-        md5: activeItem.md5, verification: activeItem.verification,
-        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir }
+        md5: activeItem.md5, verification: activeItem.verification, engine: activeItem.engine, backupPath: activeItem.backupPath,
+        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir, redownloadMismatch: activeItem.redownloadMismatch, backupPath: activeItem.backupPath }
       };
+      completedDownloads = completedDownloads.filter(item => !savePath || transferPathKey(item.savePath) !== transferPathKey(savePath));
       completedDownloads.unshift(completedItem);
       activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
       renderCompletedList();
@@ -3478,8 +3532,8 @@ function handleDownloadStatus(data) {
         originalIndex: activeItem.originalIndex,
         folder: activeItem.folder,
         type: activeItem.type,
-        savePath: savePath || '', md5: activeItem.md5, verification: activeItem.verification,
-        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir }
+        savePath: savePath || '', md5: activeItem.md5, verification: activeItem.verification, engine: activeItem.engine, backupPath: activeItem.backupPath,
+        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir, redownloadMismatch: activeItem.redownloadMismatch, backupPath: activeItem.backupPath }
       };
       failedDownloads.unshift(failedItem);
       activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
@@ -3676,6 +3730,13 @@ async function toggleStableMode(checked) {
   } catch (err) {
     console.error('Failed to toggle stable mode:', err);
   }
+}
+
+async function saveDownloadEngines() {
+  const downloadEngines = {};
+  for (const group of ['http', 'bio', 'ftp', 'sftp', 'ftps']) downloadEngines[group] = document.getElementById('engine-' + group).value;
+  try { await window.api.saveSettings({ downloadEngines }); showToast('下载器设置已保存，新任务生效；已有断点继续使用原下载器'); }
+  catch (error) { showToast('保存失败：' + error.message, 'error'); }
 }
 
 async function toggleDeepIntegrityCheck(checked) {
@@ -4273,7 +4334,7 @@ async function refreshPluginsList() {
             </div>
             ${p.errorDetail ? `<div style="margin-top:0.4rem; padding:0.4rem 0.6rem; background:rgba(239, 68, 68, 0.1); border-radius:4px; font-size:0.75rem; color:#ef4444; font-family:monospace; word-break:break-all;">报错原因: ${escapeHtml(p.errorDetail)}</div>` : ''}
             <div style="display:flex; gap:0.5rem; margin-top:0.7rem; align-items:center; flex-wrap:wrap;">
-              <input id="pluginPath-${escapeHtml(p.id)}" type="text" placeholder="填写 ${escapeHtml(p.id === 'axel' ? 'axel' : 'aria2c')} 可执行文件绝对路径" style="flex:1; min-width:260px; padding:0.5rem 0.65rem; font-size:0.78rem;">
+              <input id="pluginPath-${escapeHtml(p.id)}" type="text" placeholder="填写 ${escapeHtml(p.id === 'axel' ? 'axel' : p.id === 'curl' ? 'curl' : 'aria2c')} 可执行文件绝对路径" style="flex:1; min-width:260px; padding:0.5rem 0.65rem; font-size:0.78rem;">
               <button class="btn btn-secondary" onclick="handleSetPluginPath('${escapeHtml(p.id)}', this)" style="font-size:0.78rem; padding:0.4rem 0.7rem;">使用此路径</button>
             </div>
           </div>

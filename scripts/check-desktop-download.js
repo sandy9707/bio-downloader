@@ -29,5 +29,30 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  let singleCount=0;
  for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,100));singleCount=await win.webContents.executeJavaScript(`completedDownloads.length`);if(singleCount===4)break;}
  assert.equal(singleCount,4,'single-file button must still complete');assert.equal(charges,4);
+ // Native Electron: both user-requested entry points must actually download.
+ for (const i of [0,1]) fs.writeFileSync(path.join(dir,'files',files[i].name),Buffer.alloc(bytes.length,99));
+ await win.webContents.executeJavaScript(`runCompletedMd5(completedDownloads.filter(f=>['test0.bin','test1.bin'].includes(f.name)))`);
+ assert.equal(await win.webContents.executeJavaScript(`completedDownloads.filter(f=>f.verification?.status==='mismatch').length`),2);
+ await win.webContents.executeJavaScript(`switchTransferSubTab('completed');document.getElementById('btnRedownloadMismatched').click();`);
+ for(let i=0;i<150;i++){await new Promise(r=>setTimeout(r,100));if(await win.webContents.executeJavaScript(`!mismatchQueueBusy`))break;}
+ assert.equal(charges,6,'one-click must redownload only two mismatches');
+ let records=await win.webContents.executeJavaScript(`completedDownloads`);
+ assert.equal(records.length,4,'replacement updates existing records');
+ for(const file of files.slice(0,2)){const record=records.find(r=>r.name===file.name);assert.equal(record.verification.status,'verified');assert(record.backupPath);assert.deepEqual(fs.readFileSync(record.backupPath),Buffer.alloc(bytes.length,99));assert.deepEqual(fs.readFileSync(record.savePath),bytes);}
+ fs.writeFileSync(path.join(dir,'files',files[0].name),Buffer.alloc(bytes.length,77));
+ await win.webContents.executeJavaScript(`verifyCompletedMd5(completedDownloads.findIndex(f=>f.name===${JSON.stringify(files[0].name)}))`);
+ await win.webContents.executeJavaScript(`currentQueue=${JSON.stringify(files)};renderQueue();document.getElementById('downloadBtn').disabled=false;document.getElementById('downloadBtn').click();`);
+ for(let i=0;i<150;i++){await new Promise(r=>setTimeout(r,100));if(await win.webContents.executeJavaScript(`!isDownloading`))break;}
+ assert.equal(charges,7,'repaste all links redownloads only confirmed mismatch');
+ records=await win.webContents.executeJavaScript(`completedDownloads`);assert.equal(records.length,4);
+ const replaced=records.find(r=>r.name===files[0].name);assert.equal(replaced.verification.status,'verified');assert.deepEqual(fs.readFileSync(replaced.backupPath),Buffer.alloc(bytes.length,77));
+ await win.webContents.executeJavaScript(`document.getElementById('engine-http').value='axel';saveDownloadEngines()`);
+ assert.equal(await win.webContents.executeJavaScript(`window.api.getSettings().then(s=>s.downloadEngines.http)`),'axel');
+ await win.webContents.executeJavaScript(`document.getElementById('engine-http').value='aria2';saveDownloadEngines()`);
+ assert.equal(await win.webContents.executeJavaScript(`window.api.getSettings().then(s=>s.downloadEngines.http)`),'aria2');
+ fs.mkdirSync(path.join(root,'.evidence'),{recursive:true});
+ await win.webContents.executeJavaScript(`switchTab('transfers-tab');switchTransferSubTab('completed');`);
+ await new Promise(r=>setTimeout(r,200));
+ fs.writeFileSync(path.join(root,'.evidence','desktop-'+process.platform+'.png'),(await win.webContents.capturePage()).toPNG());
  console.log('ELECTRON_SMOKE',JSON.stringify({mode,state,errors,charges}));
 })().catch(e=>{console.error('ELECTRON_SMOKE_ERROR',e.message);process.exitCode=1}).finally(()=>{clearTimeout(timeout);server.closeAllConnections();server.close();app.exit(process.exitCode||0)});

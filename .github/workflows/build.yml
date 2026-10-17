@@ -140,6 +140,8 @@ jobs:
       - run: npm ci
       - name: 构建独立于系统 OpenSSL 的 Axel
         run: bash scripts/build-linux-axel.sh
+      - name: 构建支持 SFTP 的独立 aria2 引擎
+        run: bash scripts/prepare-linux-aria.sh
       - name: Linux 核心、测速与 Web 桥接回归
         run: npm test
       - name: 完整 EBI 下载及独立 MD5

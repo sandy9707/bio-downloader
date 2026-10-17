@@ -1,5 +1,6 @@
 const fs = require('fs');
 const crypto = require('crypto');
+const downloadFiles = require('./download-files');
 const { bioSource } = require('./bio-transfer-guard');
 const { verifyFile } = require('./download-integrity');
 
@@ -19,11 +20,12 @@ function createManualMd5(reference) {
       const job = { id, cancelled: false };
       active = job;
       const checkControl = () => { if (job.cancelled) throw new Error('MD5 校验已停止'); };
-      let lastProgress = 0;
+      let lastProgress = 0, release;
       try {
+        release = downloadFiles.claimFile(savePath);
         // Detect moved/deleted files before spending time querying metadata.
         if (!(await fs.promises.stat(savePath)).isFile()) throw new Error('目标不是普通文件');
-        if (fs.existsSync(savePath + '.st')) throw new Error('文件仍有下载断点，请先恢复下载完成后再校验');
+        if (downloadFiles.hasResume(savePath)) throw new Error('文件仍有下载断点，请先恢复下载完成后再校验');
         notify({ id, phase: 'reference' });
         checkControl();
         const ref = await Promise.race([
@@ -52,20 +54,21 @@ function createManualMd5(reference) {
           if (before.size <= 1024 * 1024) {
             const state = JSON.parse(await fs.promises.readFile(sidecar, 'utf8'));
             const after = await fs.promises.stat(sidecar);
-            if (state.version === 1 && state.sourceKey === sourceKey && state.completed === true && state.size === verification.actualSize && before.mtimeMs === after.mtimeMs && !fs.existsSync(savePath + '.st')) {
+            if (state.version === 1 && state.sourceKey === sourceKey && state.completed === true && state.size === verification.actualSize && before.mtimeMs === after.mtimeMs && !downloadFiles.hasResume(savePath)) {
               const tmp = sidecar + '.md5.tmp';
               await fs.promises.writeFile(tmp, JSON.stringify({ ...state, verification }), { mode: 0o600 });
               await fs.promises.rename(tmp, sidecar);
             }
           }
         }
+        await downloadFiles.persistVerification(savePath, file.url, verification);
         return { verification };
       } catch (error) {
         if (job.cancelled) return { cancelled: true };
         if (error.verification) return { verification: error.verification };
         if (error.code === 'ENOENT') throw new Error('找不到本地文件，可能已移动或删除，请先定位文件');
         throw error;
-      } finally { active = null; }
+      } finally { release?.(); active = null; }
     }
   };
 }
