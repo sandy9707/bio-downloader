@@ -1,5 +1,5 @@
-// Axel remains responsible for scheduling, writing, and .st resume. This local
-// gateway validates upstream byte ranges BEFORE Axel can consume their bodies.
+// The selected engine schedules and writes data using its native checkpoint.
+// This gateway validates upstream byte ranges before the engine consumes them.
 const fs = require('fs');
 const http = require('http');
 const crypto = require('crypto');

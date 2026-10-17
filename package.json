@@ -5,7 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node scripts/check-shared-sources.js && node scripts/check-web-bridge-contract.js && node scripts/check-linux-cli-contract.js && node scripts/check-cloud-workspace.js && node scripts/check-transfer-persistence.js && node scripts/check-transfer-resume.js && node scripts/check-partial-file.js && node scripts/check-download-integrity.js && node scripts/check-bio-transfer-guard.js && node scripts/check-aria-resume.js && node scripts/check-download-fallback.js && node scripts/check-process-control.js && node scripts/check-batch-start.js && node scripts/check-manual-md5.js && node scripts/sync-linux-web.js --check && node scripts/check-speedtest.js && node scripts/check-linux-web-runtime.js && node scripts/check-installer-download.js",
+    "test": "node scripts/check-shared-sources.js && node scripts/check-web-bridge-contract.js && node scripts/check-linux-cli-contract.js && node scripts/check-cloud-workspace.js && node scripts/check-transfer-persistence.js && node scripts/check-transfer-resume.js && node scripts/check-partial-file.js && node scripts/check-download-integrity.js && node scripts/check-bio-transfer-guard.js && node scripts/check-aria-resume.js && node scripts/check-protocol-engines.js && node scripts/check-download-fallback.js && node scripts/check-process-control.js && node scripts/check-batch-start.js && node scripts/check-manual-md5.js && node scripts/sync-linux-web.js --check && node scripts/check-speedtest.js && node scripts/check-linux-web-runtime.js && node scripts/check-installer-download.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "test:desktop": "electron scripts/check-desktop-download.js",
@@ -22,7 +22,8 @@
   },
   "devDependencies": {
     "electron": "30.5.1",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "ssh2": "^1.17.0"
   },
   "build": {
     "appId": "com.biodl.downloader",

@@ -1,4 +1,5 @@
 const fs = require('fs');
+const redact = text => text.replace(/(\w+:\/\/)[^\s/]*@/g, '$1[redacted]@').replace(/([?&](?:token|password|key|signature)=)[^&\s]+/gi, '$1[redacted]');
 const { spawn } = require('child_process');
 const { bioSource } = require('./bio-transfer-guard');
 const defaults = { http: 'aria2', bio: 'inherit', ftp: 'aria2', sftp: 'aria2', ftps: 'curl' };
@@ -41,7 +42,7 @@ function runAria({ binary, url, filename, threads, env, proxy = '', onProcess = 
     let tail = '', fragment = '';
     onProcess(proc);
     const output = data => {
-      const text = data.toString(); tail = (tail + text).slice(-3000); fragment += text;
+      const text = redact(data.toString()); tail = (tail + text).slice(-3000); fragment += text;
       const lines = fragment.split(/[\r\n]/); fragment = lines.pop().slice(-2000);
       for (const line of lines) {
         // Completed bytes are aria2's piece count, never the sparse file length.

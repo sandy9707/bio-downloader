@@ -2713,7 +2713,7 @@ function renderDownloadingList() {
 
 // Redownload only confirmed mismatches; preserve all old bytes in the backend.
 let mismatchQueueBusy = false;
-const transferPathKey = value => String(value || '').replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+const transferPathKey = value => { const key = String(value || '').replace(/\\/g, '/').replace(/\/$/, ''); return /^[a-z]:\/|^\/\//i.test(key) ? key.toLowerCase() : key; };
 async function redownloadMismatch(index) { const item = completedDownloads[index]; if (item) await queueMismatches([item]); }
 async function redownloadAllMismatched() { await queueMismatches(completedDownloads.filter(item => item.verification?.status === 'mismatch')); }
 async function queueMismatches(items) {

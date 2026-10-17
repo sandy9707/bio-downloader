@@ -15,7 +15,7 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  await new Promise(r=>setTimeout(r,1000));
  const errors=[];win.webContents.on('console-message',(_,level,message)=>{if(level>=2)errors.push(message)});
  const files=Array.from({length:3},(_,i)=>({name:`test${i}.bin`,url:`http://127.0.0.1:${server.address().port}/${i}`,size:bytes.length,md5:crypto.createHash('md5').update(bytes).digest('hex')}));
- await win.webContents.executeJavaScript(`currentUser={token:'fixture',trafficLimit:1e12,trafficConsumed:0};defaultDir=${JSON.stringify(path.join(dir,'files'))};currentQueue=${JSON.stringify(files)};renderQueue();document.getElementById('downloadBtn').disabled=false;document.getElementById('downloadBtn').click();`);
+ await win.webContents.executeJavaScript(`currentUser={token:'fixture',trafficLimit:1e12,trafficConsumed:0};defaultDir=${JSON.stringify(path.join(dir,'下载 files'))};currentQueue=${JSON.stringify(files)};renderQueue();document.getElementById('downloadBtn').disabled=false;document.getElementById('downloadBtn').click();`);
  let state;
  for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,200));state=await win.webContents.executeJavaScript(`({downloading:isDownloading,active:activeDownloads.map(f=>({name:f.name,status:f.status})),completed:completedDownloads.length,failed:failedDownloads.length,toast:document.getElementById('notificationToast').innerText})`);if(state.completed===3||!state.downloading)break;}
  assert.equal(state.completed,3,JSON.stringify({state,errors}));assert.equal(charges,3);assert.match(state.toast,/完成 3/);
@@ -30,7 +30,7 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,100));singleCount=await win.webContents.executeJavaScript(`completedDownloads.length`);if(singleCount===4)break;}
  assert.equal(singleCount,4,'single-file button must still complete');assert.equal(charges,4);
  // Native Electron: both user-requested entry points must actually download.
- for (const i of [0,1]) fs.writeFileSync(path.join(dir,'files',files[i].name),Buffer.alloc(bytes.length,99));
+ for (const i of [0,1]) fs.writeFileSync(path.join(dir,'下载 files',files[i].name),Buffer.alloc(bytes.length,99));
  await win.webContents.executeJavaScript(`runCompletedMd5(completedDownloads.filter(f=>['test0.bin','test1.bin'].includes(f.name)))`);
  assert.equal(await win.webContents.executeJavaScript(`completedDownloads.filter(f=>f.verification?.status==='mismatch').length`),2);
  await win.webContents.executeJavaScript(`switchTransferSubTab('completed');document.getElementById('btnRedownloadMismatched').click();`);
@@ -39,7 +39,7 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  let records=await win.webContents.executeJavaScript(`completedDownloads`);
  assert.equal(records.length,4,'replacement updates existing records');
  for(const file of files.slice(0,2)){const record=records.find(r=>r.name===file.name);assert.equal(record.verification.status,'verified');assert(record.backupPath);assert.deepEqual(fs.readFileSync(record.backupPath),Buffer.alloc(bytes.length,99));assert.deepEqual(fs.readFileSync(record.savePath),bytes);}
- fs.writeFileSync(path.join(dir,'files',files[0].name),Buffer.alloc(bytes.length,77));
+ fs.writeFileSync(path.join(dir,'下载 files',files[0].name),Buffer.alloc(bytes.length,77));
  await win.webContents.executeJavaScript(`verifyCompletedMd5(completedDownloads.findIndex(f=>f.name===${JSON.stringify(files[0].name)}))`);
  await win.webContents.executeJavaScript(`currentQueue=${JSON.stringify(files)};renderQueue();document.getElementById('downloadBtn').disabled=false;document.getElementById('downloadBtn').click();`);
  for(let i=0;i<150;i++){await new Promise(r=>setTimeout(r,100));if(await win.webContents.executeJavaScript(`!isDownloading`))break;}

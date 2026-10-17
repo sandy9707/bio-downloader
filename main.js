@@ -2246,7 +2246,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
 
     let bioGuard = null;
     let verification = null, releaseFile = null, backupPath = file.backupPath || null;
-    let engineForFile, axelBin, deepForFile = deepIntegrityCheck;
+    let engineForFile, axelBin, deepForFile = deepIntegrityCheck || Boolean(file.redownloadMismatch || file.backupPath);
     try {
     releaseFile = downloadFiles.claimFile(savePath);
     const knownMismatch = await downloadFiles.priorMismatch(savePath, file.url);
@@ -2949,7 +2949,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       if (getSettings().loggingEnabled && !wasCancelled) {
         try { fs.appendFileSync(path.join(LOG_DIR, `download_guard_${safeName.replace(/[^a-zA-Z0-9._-]/g, '_')}_${Date.now()}.log`), `版本: ${app.getVersion()}\n时间: ${new Date().toISOString()}\n文件名: ${file.name}\n预期字节数: ${file.size || '未知'}\n分段/断点保护: ${error.message}\n`); } catch (_) {}
       }
-      sendStatus({ index: fileIndex, fileName: file.name, status: wasCancelled ? 'cancelled' : 'failed', speed: wasCancelled ? '已取消' : error.message, savePath, verification: { status: 'failed', reason: error.message }, size: file.size, md5: file.md5 || null });
+      sendStatus({ index: fileIndex, fileName: file.name, status: wasCancelled ? 'cancelled' : 'failed', speed: wasCancelled ? '已取消' : error.message, savePath, verification: { status: 'failed', reason: error.message }, size: file.size, md5: file.md5 || null, backupPath, engine: engineForFile, redownloadPrepared: Boolean(backupPath) });
     } finally {
       if (bioGuard) await bioGuard.close().catch(error => console.warn('关闭分段保护失败:', error.message));
       activeIntegrityChecks.delete(fileIndex);
