@@ -4,13 +4,20 @@ on:
   push:
     tags:
       - 'v*'          # 推送 v1.0.0 这样的 tag 时触发
-  workflow_dispatch:  # 也支持手动触发
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Validation platform (all for release)
+        default: all
+        type: choice
+        options: [all, windows]
 
 jobs:
   # ============================================================
   # Job 1: 构建 macOS DMG (arm64 Apple Silicon)
   # ============================================================
   build-mac:
+    if: github.event_name != 'workflow_dispatch' || inputs.platform != 'windows'
     runs-on: macos-latest
     steps:
       - name: 检出代码
@@ -87,6 +94,9 @@ jobs:
       - name: 安装 npm 依赖
         run: npm ci
 
+      - name: 验证安装包内置 aria2 独立运行
+        run: node scripts/check-bundled-aria.js
+
       - name: 传输记录、恢复和操作系统暂停回归
         run: npm test
 
@@ -131,6 +141,7 @@ jobs:
             dist/BioDownloader-Setup-*.exe.blockmap
 
   build-linux:
+    if: github.event_name != 'workflow_dispatch' || inputs.platform != 'windows'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
