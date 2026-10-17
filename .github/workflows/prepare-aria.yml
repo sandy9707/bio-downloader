@@ -1,5 +1,9 @@
 name: Prepare portable aria2
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/aria2-2.1]
+    paths: [scripts/prepare-linux-aria.sh, .github/workflows/prepare-aria.yml]
 jobs:
   linux:
     runs-on: ubuntu-22.04
