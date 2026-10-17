@@ -26,7 +26,7 @@ const ftp=net.createServer(socket=>{
 });
 const hostKey=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs1',format:'pem'});
 const sftp=new Server({hostKeys:[hostKey]},client=>{
- client.on('error',()=>{}).on('authentication',ctx=>ctx.method==='password'&&ctx.username==='fixture'&&ctx.password==='fixture'?ctx.accept():ctx.reject()).on('ready',()=>client.on('session',accept=>accept().on('sftp',accept=>{
+ client.on('error',error=>console.warn('SFTP fixture:',error.message)).on('authentication',ctx=>ctx.method==='password'&&ctx.username==='fixture'&&ctx.password==='fixture'?ctx.accept():ctx.reject()).on('ready',()=>client.on('session',accept=>accept().on('sftp',accept=>{
   const stream=accept(),attrs={mode:0o100644,size:bytes.length,uid:0,gid:0,atime:1,mtime:1};
   stream.on('OPEN',(id)=>stream.handle(id,Buffer.from('file'))).on('CLOSE',id=>stream.status(id,STATUS_CODE.OK));
   for(const command of ['STAT','LSTAT','FSTAT'])stream.on(command,id=>stream.attrs(id,attrs));

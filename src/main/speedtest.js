@@ -42,7 +42,7 @@ async function measureDownloader({ url, axelBin, binary = axelBin, engine = 'axe
     const env = { ...process.env };
     for (const key of ['http_proxy','https_proxy','all_proxy','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']) delete env[key];
     if (engine === 'aria2' && process.platform === 'linux') env.LD_LIBRARY_PATH = path.join(path.dirname(binary), 'lib');
-    proc = spawn(binary, engine === 'aria2' ? ariaArgs({ url: guard.url, filename: path.join(dir, 'sample.bin'), threads: 16 }) : ['-n', '16', '-k', '-o', path.join(dir, 'sample.bin'), guard.url], { env, windowsHide: true });
+    proc = spawn(binary, engine === 'aria2' ? ariaArgs({ url: guard.url, filename: path.join(dir, 'sample.bin'), threads: 16, binary }) : ['-n', '16', '-k', '-o', path.join(dir, 'sample.bin'), guard.url], { env, windowsHide: true });
     let errorText = '';
     proc.stderr.on('data', d => { errorText = (errorText + d).slice(-2000); });
     proc.stdout.resume();

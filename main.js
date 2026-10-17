@@ -351,6 +351,12 @@ function ensureBinaries() {
   if (platform === 'darwin' && arch === 'arm64' || platform === 'win32') {
     filesToCopy.push({ src: path.join(__dirname, 'src', 'bin', platform, platform === 'win32' ? 'aria2c.exe' : 'aria2c'), dest: platform === 'win32' ? 'aria2c.exe' : 'aria2c', fromAsar: true });
   }
+  if (platform === 'win32') {
+    const ariaDir = path.join(__dirname, 'src', 'bin', 'win32');
+    if (fs.existsSync(ariaDir)) for (const name of fs.readdirSync(ariaDir)) {
+      if (/\.(dll|crt)$/i.test(name)) filesToCopy.push({ src: path.join(ariaDir, name), dest: name, fromAsar: true });
+    }
+  }
   for (const item of filesToCopy) {
     const destPath = path.join(USER_BIN_DIR, item.dest);
     if (fs.existsSync(item.src)) {

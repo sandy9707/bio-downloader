@@ -30,7 +30,14 @@ const timer = setTimeout(() => { console.error('Live ENA download exceeded 6 min
   const actualMd5 = hash.digest('hex');
   assert.equal(actualMd5, file.md5);
   assert.deepEqual(charges, [file.size]);
-  const result = { platform: process.platform, engine: final.engine, file: file.name, size: file.size, actualMd5, expectedMd5: file.md5, seconds: (Date.now() - started) / 1000, verification: final.verification };
+  const ebiVerification = final.verification;
+  // Also exercise the engine's own TLS stack (bio transport uses the guard).
+  await engine.callIpcHandler('start-download', { files: [{ name: 'aria2-source.tar.gz', url: 'https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0.tar.gz', size: 3904613, originalIndex: 2 }], targetDir: path.join(temp, 'files'), token: 'test-no-account', maxConcurrent: 1 });
+  assert.equal(final?.status, 'completed', JSON.stringify(final));
+  const httpsSha256 = crypto.createHash('sha256').update(fs.readFileSync(final.savePath)).digest('hex');
+  assert.equal(httpsSha256, '8e7021c6d5e8f8240c9cc19482e0c8589540836747744724d86bf8af5a21f0e8');
+  assert.deepEqual(charges, [file.size, 3904613]);
+  const result = { platform: process.platform, engine: final.engine, file: file.name, size: file.size, actualMd5, expectedMd5: file.md5, seconds: (Date.now() - started) / 1000, verification: ebiVerification, httpsSha256 };
   const evidence = path.resolve('.evidence'); fs.mkdirSync(evidence, { recursive: true });
   fs.writeFileSync(path.join(evidence, `live-ebi-${process.platform}.json`), JSON.stringify(result, null, 2));
   console.log('FULL_EBI_VERIFIED', JSON.stringify(result));

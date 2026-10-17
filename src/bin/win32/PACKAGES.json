@@ -1,0 +1,341 @@
+{
+  "repository": "https://repo.msys2.org/mingw/ucrt64/",
+  "sourceRecipes": "https://github.com/msys2/MINGW-packages",
+  "packages": {
+    "mingw-w64-ucrt-x86_64-aria2": {
+      "NAME": [
+        "mingw-w64-ucrt-x86_64-aria2"
+      ],
+      "VERSION": [
+        "1.37.0-8"
+      ],
+      "FILENAME": [
+        "mingw-w64-ucrt-x86_64-aria2-1.37.0-8-any.pkg.tar.zst"
+      ],
+      "SHA256SUM": [
+        "57fa3fad14937aff981f21965bcfa0c8fe616de317f813ca389c8bae9cdd68c0"
+      ],
+      "URL": [
+        "https://aria2.github.io/"
+      ],
+      "LICENSE": [
+        "spdx:GPL-2.0-or-later"
+      ],
+      "BASE": [
+        "mingw-w64-aria2"
+      ]
+    },
+    "mingw-w64-ucrt-x86_64-zlib": {
+      "NAME": [
+        "mingw-w64-ucrt-x86_64-zlib"
+      ],
+      "VERSION": [
+        "1.3.2-2"
+      ],
+      "FILENAME": [
+        "mingw-w64-ucrt-x86_64-zlib-1.3.2-2-any.pkg.tar.zst"
+      ],
+      "SHA256SUM": [
+        "841401182976d2f9e17e5c0ebaac51f2a8014140ea53d67625e91c8fb3c85ea0"
+      ],
+      "URL": [
+        "https://www.zlib.net/"
+      ],
+      "LICENSE": [
+        "spdx:Zlib"
+      ],
+      "BASE": [
+        "mingw-w64-zlib"
+      ]
+    },
+    "mingw-w64-ucrt-x86_64-sqlite3": {
+      "NAME": [
+        "mingw-w64-ucrt-x86_64-sqlite3"
+      ],
+      "VERSION": [
+        "3.54.0-1"
+      ],
+      "FILENAME": [
+        "mingw-w64-ucrt-x86_64-sqlite3-3.54.0-1-any.pkg.tar.zst"
+      ],
+      "SHA256SUM": [
+        "fc7100490316733bbb96d5633d305a5d6c579200c321969cfa21d5a128055e65"
+      ],
+      "URL": [
+        "https://www.sqlite.org/"
+      ],
+      "LICENSE": [
+        "PublicDomain"
+      ],
+      "BASE": [
+        "mingw-w64-sqlite3"
+      ]
+    },
+    "mingw-w64-ucrt-x86_64-openssl": {
+      "NAME": [
+        "mingw-w64-ucrt-x86_64-openssl"
+      ],
+      "VERSION": [
+        "3.6.5-1"
+      ],
+      "FILENAME": [
+        "mingw-w64-ucrt-x86_64-openssl-3.6.5-1-any.pkg.tar.zst"
+      ],
+      "SHA256SUM": [
+        "773e021ebad83f14b5c103db467411e8ff064663e1c7e7f730e2be72f4117064"
+      ],
+      "URL": [
+        "https://openssl-library.org"
+      ],
+      "LICENSE": [
+        "spdx:Apache-2.0"
+      ],
+      "BASE": [
+        "mingw-w64-openssl"
+      ]
+    },
+    "mingw-w64-ucrt-x86_64-libxml2": {
+      "NAME": [
+        "mingw-w64-ucrt-x86_64-libxml2"
+      ],
+      "VERSION": [
+        "2.15.4-2"
+      ],
+      "FILENAME": [
+        "mingw-w64-ucrt-x86_64-libxml2-2.15.4-2-any.pkg.tar.zst"
+      ],
+      "SHA256SUM": [
+        "1678213c8acddcee2a393477c26cafcb7a4e47c2d611638c028853b502c7d662"
+      ],
+      "URL": [
+        "https://gitlab.gnome.org/GNOME/libxml2/-/wikis/home"
+      ],
+      "LICENSE": [
+        "spdx:MIT"
+      ],
+      "BASE": [
+        "mingw-w64-libxml2"
+      ]
+    },
+    "mingw-w64-ucrt-x86_64-libiconv": {
+      "NAME": [
+        "mingw-w64-ucrt-x86_64-libiconv"
+      ],
+      "VERSION": [
+        "1.19-1"
+      ],
+      "FILENAME": [
+        "mingw-w64-ucrt-x86_64-libiconv-1.19-1-any.pkg.tar.zst"
+      ],
+      "SHA256SUM": [
+        "9a500f38c2b91808741c62fae746b3e9110b33a1ecf5c30fa0c66dbedddf7e16"
+      ],
+      "URL": [
+        "https://www.gnu.org/software/libiconv/"
+      ],
+      "LICENSE": [
+        "spdx:LGPL-2.1-or-later",
+        "documentation:spdx:GPL-3.0-or-later"
+      ],
+      "BASE": [
+        "mingw-w64-libiconv"
+      ]
+    },
+    "mingw-w64-ucrt-x86_64-libssh2": {
+      "NAME": [
+        "mingw-w64-ucrt-x86_64-libssh2"
+      ],
+      "VERSION": [
+        "1.11.1-2"
+      ],
+      "FILENAME": [
+        "mingw-w64-ucrt-x86_64-libssh2-1.11.1-2-any.pkg.tar.zst"
+      ],
+      "SHA256SUM": [
+        "0e91316dfa4979dcabbfa9e71528ec9882ece619ce549cb25312089b4754fa65"
+      ],
+      "URL": [
+        "https://libssh2.org/"
+      ],
+      "LICENSE": [
+        "spdx:BSD-3-Clause"
+      ],
+      "BASE": [
+        "mingw-w64-libssh2"
+      ]
+    },
+    "mingw-w64-ucrt-x86_64-c-ares": {
+      "NAME": [
+        "mingw-w64-ucrt-x86_64-c-ares"
+      ],
+      "VERSION": [
+        "1.34.8-1"
+      ],
+      "FILENAME": [
+        "mingw-w64-ucrt-x86_64-c-ares-1.34.8-1-any.pkg.tar.zst"
+      ],
+      "SHA256SUM": [
+        "2313d531bc9dc7aae6be3ce0f8ace516bb04191c4f3f62c78c7dfd246d2a9ba6"
+      ],
+      "URL": [
+        "https://c-ares.org/"
+      ],
+      "LICENSE": [
+        "spdx:MIT"
+      ],
+      "BASE": [
+        "mingw-w64-c-ares"
+      ]
+    },
+    "mingw-w64-ucrt-x86_64-gettext-runtime": {
+      "NAME": [
+        "mingw-w64-ucrt-x86_64-gettext-runtime"
+      ],
+      "VERSION": [
+        "1.0-1"
+      ],
+      "FILENAME": [
+        "mingw-w64-ucrt-x86_64-gettext-runtime-1.0-1-any.pkg.tar.zst"
+      ],
+      "SHA256SUM": [
+        "ba693dda4ac375af76ce481ff3a6e7481286546cc7dc6d56c7021dae34084157"
+      ],
+      "URL": [
+        "https://www.gnu.org/software/gettext/"
+      ],
+      "LICENSE": [
+        "spdx:GPL-3.0-or-later AND LGPL-2.1-or-later"
+      ],
+      "BASE": [
+        "mingw-w64-gettext"
+      ]
+    },
+    "mingw-w64-ucrt-x86_64-libstdc++": {
+      "NAME": [
+        "mingw-w64-ucrt-x86_64-libstdc++"
+      ],
+      "VERSION": [
+        "16.2.0-6"
+      ],
+      "FILENAME": [
+        "mingw-w64-ucrt-x86_64-libstdc++-16.2.0-6-any.pkg.tar.zst"
+      ],
+      "SHA256SUM": [
+        "33c5e58a85a538cf843a8672991cce591f0231d66da3b66a57629712d64be17f"
+      ],
+      "URL": [
+        "https://gcc.gnu.org"
+      ],
+      "LICENSE": [
+        "spdx:GPL-3.0-or-later WITH GCC-exception-3.1 AND GFDL-1.3-or-later"
+      ],
+      "BASE": [
+        "mingw-w64-gcc"
+      ]
+    },
+    "mingw-w64-ucrt-x86_64-libwinpthread": {
+      "NAME": [
+        "mingw-w64-ucrt-x86_64-libwinpthread"
+      ],
+      "VERSION": [
+        "14.0.0.r426.g4564ee4b5-2"
+      ],
+      "FILENAME": [
+        "mingw-w64-ucrt-x86_64-libwinpthread-14.0.0.r426.g4564ee4b5-2-any.pkg.tar.zst"
+      ],
+      "SHA256SUM": [
+        "a02f5e09d666d3be657c78c86fe67c975d04fe33b5211cd5ff1b23a91c118524"
+      ],
+      "URL": [
+        "https://www.mingw-w64.org/"
+      ],
+      "LICENSE": [
+        "spdx:MIT AND BSD-3-Clause"
+      ],
+      "BASE": [
+        "mingw-w64-winpthreads"
+      ]
+    },
+    "mingw-w64-ucrt-x86_64-libgcc": {
+      "NAME": [
+        "mingw-w64-ucrt-x86_64-libgcc"
+      ],
+      "VERSION": [
+        "16.2.0-6"
+      ],
+      "FILENAME": [
+        "mingw-w64-ucrt-x86_64-libgcc-16.2.0-6-any.pkg.tar.zst"
+      ],
+      "SHA256SUM": [
+        "80b2497f019977dd9528b1abc8621b1328a0115ab1f724047ccbb56bf323f11d"
+      ],
+      "URL": [
+        "https://gcc.gnu.org"
+      ],
+      "LICENSE": [
+        "spdx:GPL-3.0-or-later WITH GCC-exception-3.1 AND GFDL-1.3-or-later"
+      ],
+      "BASE": [
+        "mingw-w64-gcc"
+      ]
+    }
+  },
+  "binaries": [
+    {
+      "name": "aria2c.exe",
+      "sha256": "45c48dbf03e001be672dbf2aa82d35936fcdfa694e2068a60ad8c5aa4860e931"
+    },
+    {
+      "name": "libstdc++-6.dll",
+      "sha256": "4e4822dc4aaa99383f581dae7ab9464ae89346c5ca742f7efbcdebe20b0fe7b5"
+    },
+    {
+      "name": "libwinpthread-1.dll",
+      "sha256": "e765ee6109a0080a7c42848911f4349099b3c15aa734d845cb0e438f6f5a91b5"
+    },
+    {
+      "name": "libgcc_s_seh-1.dll",
+      "sha256": "791ebf66e99c7c1b4ed3666468cec45a0172b4c8942ac6c84c3e9cab3e1b5270"
+    },
+    {
+      "name": "libintl-8.dll",
+      "sha256": "0e5a178731e6be6d115442a6ade3df7f03265cd1fc4338f8b6f86a8001cbf582"
+    },
+    {
+      "name": "libiconv-2.dll",
+      "sha256": "94ec68fb8d342b6c91b6b48a8d95092819cdcd006a7166e0b68062f946afd08a"
+    },
+    {
+      "name": "libaria2-0.dll",
+      "sha256": "456f0904fad2c072dbc33dbb20d1b2185db9acd9d3e6c1dc36f5c18f1eb9e8a7"
+    },
+    {
+      "name": "zlib1.dll",
+      "sha256": "11cd91171765cd65f1c3362e3df67e5f5a618a6b88c8cdec899b802eaf1c7b0d"
+    },
+    {
+      "name": "libxml2-16.dll",
+      "sha256": "b30887288a3ab17f2fa983b512630d3aa20ceca2e29c2c26113c6e0f4e2b643a"
+    },
+    {
+      "name": "libssl-3-x64.dll",
+      "sha256": "8b71cd694f8edfbddc76674111278db6bcdcde0dcd63b99238420193848e6dbf"
+    },
+    {
+      "name": "libcrypto-3-x64.dll",
+      "sha256": "97308feea369b305e562c0098638a1b02a06f52ee9fcc4b8cf3da362ff563cf4"
+    },
+    {
+      "name": "libssh2-1.dll",
+      "sha256": "7c9b4edb678b738b919950492c4a390482fdd644d1276d4728990fdd3c3ea989"
+    },
+    {
+      "name": "libsqlite3-0.dll",
+      "sha256": "706dc94f86e64a84763d337811a85bd9185c92846015f094193e7275a9517978"
+    },
+    {
+      "name": "libcares-2.dll",
+      "sha256": "a6eedc7793f680bed89808341f4169fc86c6a09594453fb8a76b09ff4078a140"
+    }
+  ]
+}

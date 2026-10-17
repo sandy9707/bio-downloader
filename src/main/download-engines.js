@@ -23,7 +23,7 @@ function selectEngine(file, settings = {}, filename) {
   if (!choices.includes(engine)) throw new Error('该协议不支持所选下载器，请在设置中调整下载引擎');
   return engine;
 }
-function ariaArgs({ url, filename, threads = 16, proxy = '' }) {
+function ariaArgs({ url, filename, threads = 16, proxy = '', binary }) {
   const path = require('path');
   return ['--no-conf=true', '--no-netrc=true', '--enable-color=false', '--human-readable=false',
     '--continue=true', '--always-resume=true', '--auto-save-interval=1',
@@ -32,13 +32,13 @@ function ariaArgs({ url, filename, threads = 16, proxy = '' }) {
     '--download-result=hide', '--max-tries=3', '--retry-wait=2', '--connect-timeout=20', '--timeout=30',
     '--max-connection-per-server=' + Math.min(16, threads), '--split=' + Math.min(16, threads), '--min-split-size=1M',
     '--all-proxy=' + proxy, '--http-proxy=' + proxy, '--https-proxy=' + proxy, '--ftp-proxy=' + proxy,
-    '--no-proxy=', '--dir=' + path.dirname(filename), '--out=' + path.basename(filename), url];
+    '--no-proxy=', ...(binary && fs.existsSync(path.join(path.dirname(binary), 'ca-certificates.crt')) ? ['--ca-certificate=' + path.join(path.dirname(binary), 'ca-certificates.crt')] : []), '--dir=' + path.dirname(filename), '--out=' + path.basename(filename), url];
 }
 function runAria({ binary, url, filename, threads, env, proxy = '', onProcess = () => {}, onProgress = () => {}, log = () => {} }) {
   return new Promise((resolve, reject) => {
     const cleanEnv = { ...env };
     for (const key of Object.keys(cleanEnv)) if (/^(http|https|ftp|all|no)_proxy$/i.test(key)) delete cleanEnv[key];
-    const proc = spawn(binary, ariaArgs({ url, filename, threads, proxy }), { env: cleanEnv, windowsHide: true });
+    const proc = spawn(binary, ariaArgs({ url, filename, threads, proxy, binary }), { env: cleanEnv, windowsHide: true });
     let tail = '', fragment = '';
     onProcess(proc);
     const output = data => {
