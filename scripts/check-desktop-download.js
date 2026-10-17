@@ -6,7 +6,9 @@ const axios=require('axios');axios.get=async()=>({data:{success:false,error:'Off
 const mode='fixed';
 require('../main');
 ipcMain.removeHandler('clash-status');ipcMain.handle('clash-status',()=>true);
-const bytes=Buffer.alloc(32768,42),server=http.createServer((req,res)=>{let start=0,end=bytes.length-1;const range=/bytes=(\d+)-(\d*)/.exec(req.headers.range||'');if(range){start=Number(range[1]);if(range[2])end=Math.min(Number(range[2]),end);res.statusCode=206;res.setHeader('Content-Range',`bytes ${start}-${end}/${bytes.length}`);}res.setHeader('Content-Length',end-start+1);res.end(req.method==='HEAD'?undefined:bytes.subarray(start,end+1));});
+let slowTransfer=true;
+const slowBytes=Buffer.alloc(32*1024*1024,42);
+const bytes=Buffer.alloc(32768,42),server=http.createServer((req,res)=>{const bytes=req.url==='/slow'?slowBytes:Buffer.alloc(32768,42);let start=0,end=bytes.length-1;const range=/bytes=(\d+)-(\d*)/.exec(req.headers.range||'');if(range){start=Number(range[1]);if(range[2])end=Math.min(Number(range[2]),end);res.statusCode=206;res.setHeader('Content-Range',`bytes ${start}-${end}/${bytes.length}`);}res.setHeader('Content-Length',end-start+1);if(req.url==='/slow'&&req.method!=='HEAD'){let timer,at=start;const send=()=>{if(res.destroyed)return;const next=Math.min(end+1,at+(slowTransfer?4096:65536));res.write(bytes.subarray(at,next));at=next;if(at>end)res.end();else timer=setTimeout(send,slowTransfer?200:1);};res.on('close',()=>clearTimeout(timer));send();}else res.end(req.method==='HEAD'?undefined:bytes.subarray(start,end+1));});
 const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000);
 (async()=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
@@ -68,5 +70,31 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  await win.webContents.executeJavaScript(`switchTab('transfers-tab');switchTransferSubTab('completed');`);
  await new Promise(r=>setTimeout(r,200));
  fs.writeFileSync(path.join(root,'.evidence','desktop-'+process.platform+'.png'),(await win.webContents.capturePage()).toPNG());
+ // Exercise the actual renderer while native aria2 downloads sparse ranges slowly.
+ const slowFile={name:'slow-progress.bin',url:`http://127.0.0.1:${server.address().port}/slow`,size:slowBytes.length};
+ await win.webContents.executeJavaScript(`currentQueue=${JSON.stringify([slowFile])};renderQueue();document.getElementById('downloadBtn').disabled=false;document.getElementById('downloadBtn').click();`);
+ let visible;
+ for(let i=0;i<100;i++){
+  await new Promise(r=>setTimeout(r,100));
+  visible=await win.webContents.executeJavaScript(`(()=>{const f=activeDownloads.find(f=>f.name==='slow-progress.bin');return f&&{...f};})()`);
+  if(visible?.receivedBytes>0)break;
+ }
+ assert(visible?.receivedBytes>0,'native aria2 must update the real UI before completion');
+ assert(visible.percentage>0&&visible.percentage<10,JSON.stringify(visible));
+ const displayed=await win.webContents.executeJavaScript(`(()=>{
+  const f=activeDownloads.find(f=>f.name==='slow-progress.bin'),id=f.originalIndex;
+  const read=()=>['trans-pct-','trans-size-','trans-eta-'].map(p=>document.getElementById(p+id).innerText);
+  const before=read();renderDownloadingList();const after=read();
+  return {before,after,expected:[transferProgressView(f).percentage+'%',formatBytes(f.receivedBytes)+' / '+formatBytes(f.totalBytes),computeEta(f.totalBytes-f.receivedBytes,f.speed)]};
+ })()`);
+ assert.deepEqual(displayed.before,displayed.after,'re-render must not change progress, bytes or ETA');
+ assert.deepEqual(displayed.after,displayed.expected,'all three indicators must use the same counters');
+ await win.webContents.executeJavaScript(`document.getAnimations().forEach(a=>a.finish())`);
+ fs.writeFileSync(path.join(root,'.evidence','progress-'+process.platform+'.png'),(await win.webContents.capturePage()).toPNG());
+ slowTransfer=false;
+ for(let i=0;i<200;i++){await new Promise(r=>setTimeout(r,100));if(await win.webContents.executeJavaScript(`!isDownloading`))break;}
+ assert.equal(await win.webContents.executeJavaScript(`completedDownloads.some(f=>f.name==='slow-progress.bin')`),true);
+ assert.deepEqual(fs.readFileSync(path.join(dir,'下载 files',slowFile.name)),slowBytes);
+ console.log('ELECTRON_PROGRESS_OK',JSON.stringify(displayed));
  console.log('ELECTRON_SMOKE',JSON.stringify({mode,state,errors,charges}));
 })().catch(e=>{console.error('ELECTRON_SMOKE_ERROR',e.message);process.exitCode=1}).finally(()=>{clearTimeout(timeout);server.closeAllConnections();server.close();app.exit(process.exitCode||0)});

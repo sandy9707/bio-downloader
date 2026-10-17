@@ -52,6 +52,8 @@ jobs:
           name: live-ebi-macos
           path: |
             .evidence/live-ebi-*.json
+            .evidence/download-progress-*.json
+            .evidence/progress-*.png
             .evidence/settings-*.png
           include-hidden-files: true
 
@@ -114,6 +116,8 @@ jobs:
           name: live-ebi-windows
           path: |
             .evidence/live-ebi-*.json
+            .evidence/download-progress-*.json
+            .evidence/progress-*.png
             .evidence/settings-*.png
           include-hidden-files: true
 
@@ -172,6 +176,8 @@ jobs:
           name: live-ebi-linux
           path: |
             .evidence/live-ebi-*.json
+            .evidence/download-progress-*.json
+            .evidence/progress-*.png
             .evidence/settings-*.png
           include-hidden-files: true
       - name: 保持旧服务器 glibc 2.17 运行时兼容

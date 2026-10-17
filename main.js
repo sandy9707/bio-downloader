@@ -2270,7 +2270,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     }
     engineForFile = selectEngine(file, getSettings(), savePath);
     if (engineForFile === 'axel') axelBin = getAxelBinaryPath();
-    sendStatus({ index: fileIndex, status: 'downloading', savePath, engine: engineForFile, backupPath, redownloadPrepared: Boolean(backupPath), speed: backupPath ? '原文件已保留，正在重新下载…' : '正在准备下载…' });
+    sendStatus({ index: fileIndex, status: 'downloading', phase: 'preparing', savePath, engine: engineForFile, backupPath, redownloadPrepared: Boolean(backupPath), speed: backupPath ? '原文件已保留，正在重新下载…' : '正在准备下载…' });
     // Fetch metadata alongside the transfer, including old saved tasks/direct ENA links.
     const referencePromise = enaIntegrity.reference(file, { deep: deepForFile });
     let diagnosticLogPath = null;
@@ -2603,8 +2603,9 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         index: fileIndex,
         fileName: file.name,
         status: 'downloading',
-        percentage: 0,
-        speed: '正在高速下载...',
+        percentage: null,
+        phase: 'connecting',
+        speed: '正在连接下载源…',
         savePath
       });
 
@@ -2668,6 +2669,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           const binary = await ensureAria2Plugin();
           const ariaEnv = { ...env };
           if (process.platform === 'linux') ariaEnv.LD_LIBRARY_PATH = [path.join(path.dirname(binary), 'lib'), ariaEnv.LD_LIBRARY_PATH].filter(Boolean).join(':');
+          let lastAriaProgressLog = 0;
           await runAria({ binary, url: bioGuard ? bioGuard.url : file.url, filename: savePath, threads, env: ariaEnv,
             proxy: bioGuard || isFtpProtocol || isSftpProtocol ? '' : env.http_proxy || '',
             log: line => { if (logStream && !logStream.writableEnded) logStream.write(line); },
@@ -2675,7 +2677,13 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
               activeAxelProcesses.set(fileIndex, proc);
               cancelTokens.set(fileIndex, () => { killProcess(proc); });
             },
-            onProgress: data => mainWindow.webContents.send('download-progress', { index: fileIndex, engine: 'aria2', ...data })
+            onProgress: data => {
+              mainWindow.webContents.send('download-progress', { index: fileIndex, engine: 'aria2', ...data });
+              if (logStream && !logStream.writableEnded && Date.now() - lastAriaProgressLog >= 5000) {
+                lastAriaProgressLog = Date.now();
+                logStream.write(`[aria2] received=${data.receivedBytes} total=${data.totalBytes} percentage=${data.percentage} speed=${data.speed}\n`);
+              }
+            }
           });
           activeAxelProcesses.delete(fileIndex);
           if (bioGuard?.error) throw bioGuard.error;
@@ -2734,37 +2742,45 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
 
           let lastProgressHandledAt = 0;
           let lastProgressLoggedAt = 0;
+          const axelFragments = new Map();
+          let latestAxelPercentage = null, latestAxelSpeed = null;
 
           const handleAxelProgress = (data, streamName) => {
             const output = data.toString();
             const now = Date.now();
             const isTerminalMessage = /error|failed|cannot|denied|not found/i.test(output);
-            // Axel 可每秒输出数百次回车进度；所有模式统一最多 1Hz 解析和刷新。
-            if (!isTerminalMessage && now - lastProgressHandledAt < 1000) return;
+            // Parse every chunk before throttling UI updates. Dropping chunks
+            // loses percentages when a pipe splits the progress line into dots,
+            // speed and percentage, leaving the UI frozen until a later match.
+            const fragment = (axelFragments.get(streamName) || '') + output;
+            const pctMatches = [...fragment.matchAll(/\[\s*(\d+)%\]/g)];
+            const speedMatches = [...fragment.matchAll(/\[\s*([\d.]+\s*[KMGT]*B\/s)\]/g)];
+            if (pctMatches.length) latestAxelPercentage = +pctMatches.at(-1)[1];
+            if (speedMatches.length) latestAxelSpeed = speedMatches.at(-1)[1];
+            // Only carry an unfinished bracket across chunks, never old readings.
+            const bracket = fragment.lastIndexOf('[');
+            axelFragments.set(streamName, bracket > fragment.lastIndexOf(']') ? fragment.slice(bracket).slice(-100) : '');
+            if (logStream && isTerminalMessage) logStream.write(`[${streamName}] ${output}`);
+            if (now - lastProgressHandledAt < 1000) return;
+            if (latestAxelPercentage === null && latestAxelSpeed === null) return;
             lastProgressHandledAt = now;
-            const pctMatches = [...output.matchAll(/\[\s*(\d+)%\]/g)];
-            const speedMatches = [...output.matchAll(/\[\s*([\d\.]+\s*[KMGT]*B\/s)\]/g)];
-            const pctMatch = pctMatches[pctMatches.length - 1];
-            const speedMatch = speedMatches[speedMatches.length - 1];
-
-            let percentage = pctMatch ? parseInt(pctMatch[1]) : null;
-            let speed = speedMatch ? speedMatch[1] : null;
+            const percentage = latestAxelPercentage, speed = latestAxelSpeed;
             if (percentage !== null || speed !== null) {
               if (logStream && (percentage === 100 || now - lastProgressLoggedAt >= 5000)) {
                 lastProgressLoggedAt = now;
                 logStream.write(`[${streamName}] progress=${percentage ?? '-'} speed=${speed || '-'}\n`);
               }
-              let axelReceivedBytes = null;
-              try { axelReceivedBytes = fs.statSync(savePath).size; } catch (e) { axelReceivedBytes = null; }
+              // Axel writes disjoint ranges: file length is NOT downloaded bytes.
+              // Its console reports whole percentages, so keep byte/ETA estimates
+              // at that same precision instead of reading the sparse file length.
+              const axelReceivedBytes = percentage !== null && file.size > 0 ? Math.floor(file.size * percentage / 100) : null;
               mainWindow.webContents.send('download-progress', {
-                index: fileIndex,
+                index: fileIndex, engine: 'axel',
                 percentage,
                 speed,
-                receivedBytes: axelReceivedBytes,
+                receivedBytes: axelReceivedBytes, receivedBytesApproximate: true,
                 totalBytes: file.size || null
               });
-            } else if (logStream && isTerminalMessage) {
-              logStream.write(`[${streamName}] ${output}`);
             }
           };
 

@@ -36,6 +36,7 @@ function ariaArgs({ url, filename, threads = 16, proxy = '', binary }) {
     '--continue=true', '--always-resume=true', '--auto-save-interval=1',
     '--auto-file-renaming=false', '--allow-overwrite=false', '--file-allocation=none',
     '--follow-torrent=false', '--follow-metalink=false', '--check-integrity=false', '--summary-interval=1', '--console-log-level=warn',
+    '--stderr=true', '--show-console-readout=false', '--truncate-console-readout=false',
     '--download-result=hide', '--max-tries=3', '--retry-wait=2', '--connect-timeout=20', '--timeout=30',
     '--max-connection-per-server=' + Math.min(16, threads), '--split=' + Math.min(16, threads), '--min-split-size=1M',
     '--all-proxy=' + proxy, '--http-proxy=' + proxy, '--https-proxy=' + proxy, '--ftp-proxy=' + proxy,
@@ -46,19 +47,30 @@ function runAria({ binary, url, filename, threads, env, proxy = '', onProcess = 
     const cleanEnv = ariaEnvironment(binary, env);
     for (const key of Object.keys(cleanEnv)) if (/^(http|https|ftp|all|no)_proxy$/i.test(key)) delete cleanEnv[key];
     const proc = spawn(binary, ariaArgs({ url, filename, threads, proxy, binary }), { env: cleanEnv, windowsHide: true });
-    let tail = '', fragment = '';
+    let tail = '';
     onProcess(proc);
-    const output = data => {
-      const text = redact(data.toString()); tail = (tail + text).slice(-3000); fragment += text;
-      const lines = fragment.split(/[\r\n]/); fragment = lines.pop().slice(-2000);
-      for (const line of lines) {
-        // Completed bytes are aria2's piece count, never the sparse file length.
-        const match = /\s(\d+)B\/(\d+)B\((\d+)%\).*?DL:(\d+)B/.exec(line);
-        if (match) onProgress({ receivedBytes: +match[1], totalBytes: +match[2], percentage: Math.min(99, +match[3]), speed: (+match[4] / 1024).toFixed(1) + ' KB/s' });
-        else if (/error|failed|exception/i.test(line)) log(line + '\n');
-      }
+    // stdout and stderr are independent streams; never join their partial lines.
+    // Periodic summaries on stderr avoid buffered stdout and stale TTY readouts
+    // in Windows GUI applications. Parse the final summary in each chunk.
+    const output = () => {
+      let fragment = '';
+      return data => {
+        const text = redact(data.toString()); tail = (tail + text).slice(-3000); fragment += text;
+        const lines = fragment.split(/[\r\n]/); fragment = lines.pop().slice(-2000);
+        let progress;
+        for (const line of lines) {
+          const match = /\[#\w+\s+(\d+)B\/(\d+)B\((?:\d+%|--%)\).*?DL:(\d+)B/.exec(line);
+          if (match) {
+            const receivedBytes = +match[1], totalBytes = +match[2], speedBps = +match[3];
+            progress = { receivedBytes, totalBytes, speedBps,
+              percentage: totalBytes > 0 ? Math.min(100, Math.floor(receivedBytes * 1000 / totalBytes) / 10) : 0,
+              speed: (speedBps / 1024).toFixed(1) + ' KB/s' };
+          } else if (/error|failed|exception/i.test(line)) log(line + '\n');
+        }
+        if (progress) onProgress(progress);
+      };
     };
-    proc.stdout.on('data', output); proc.stderr.on('data', output);
+    proc.stdout.on('data', output()); proc.stderr.on('data', output());
     proc.once('error', reject);
     proc.once('close', code => code === 0 ? resolve() : reject(new Error('aria2c 退出码 ' + code + ': ' + tail.trim().slice(-400))));
   });

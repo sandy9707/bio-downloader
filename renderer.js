@@ -2648,6 +2648,17 @@ function computeEta(remainingBytes, speedStr) {
   return formatEta(remainingBytes / bps);
 }
 
+// Use one byte snapshot for the bar, byte label and ETA, including re-renders.
+// Legacy records without byte counters retain their percentage-based estimate.
+function transferProgressView(file) {
+  const total = Number(file.totalBytes) > 0 ? Number(file.totalBytes) : Number(file.size) || 0;
+  const legacyAxel = file.engine === 'axel' && !file.receivedBytesApproximate;
+  const knownReceived = !legacyAxel && file.receivedBytes != null && Number.isFinite(Number(file.receivedBytes));
+  const received = Math.max(0, knownReceived ? Number(file.receivedBytes) : total * (Number(file.percentage) || 0) / 100);
+  const percentage = Math.max(0, Math.min(100, total > 0 ? Math.floor(received * 1000 / total) / 10 : Number(file.percentage) || 0));
+  return { total, received, percentage, approximate: legacyAxel || Boolean(file.receivedBytesApproximate) };
+}
+
 function matchesTransferSearch(name) {
   if (!transferSearchQuery) return true;
   return String(name || '').toLowerCase().includes(transferSearchQuery);
@@ -2678,12 +2689,10 @@ function renderDownloadingList() {
   activeDownloads.filter((f) => matchesTransferSearch(f.name)).forEach((file) => {
     const fileId = file.originalIndex;
     const paused = file.status === 'paused';
-    const percentage = Math.min(100, file.percentage || 0);
-    const totalSize = file.size || 0;
-    const receivedSize = totalSize > 0 ? (totalSize * percentage) / 100 : 0;
+    const { percentage, total: totalSize, received: receivedSize, approximate } = transferProgressView(file);
     const speedText = paused ? '—' : (file.speed || (file.status === 'waiting' ? '排队中...' : ''));
-    const eta = paused ? '' : computeEta(totalSize > 0 ? totalSize - receivedSize : 0, file.speed);
-    const statusText = paused ? (file.startupError ? '未启动：' + escapeHtml(file.startupError) : '已暂停 · 可续传') : (file.status === 'waiting' ? '排队中...' : file.phase === 'verifying' ? '正在校验文件' : '正在高速下载');
+    const eta = paused || ['waiting', 'preparing', 'connecting', 'verifying'].includes(file.phase || file.status) ? '' : computeEta(totalSize > 0 ? totalSize - receivedSize : 0, file.speed);
+    const statusText = paused ? (file.startupError ? '未启动：' + escapeHtml(file.startupError) : '已暂停 · 可续传') : (file.status === 'waiting' ? '排队中...' : file.phase === 'verifying' ? '正在校验文件' : file.phase === 'preparing' ? '正在准备下载' : file.phase === 'connecting' ? '正在连接下载源' : '正在高速下载');
 
     const itemEl = document.createElement('div');
     itemEl.className = 'transfer-item tl-card' + (paused ? ' tl-paused' : '');
@@ -2705,7 +2714,7 @@ function renderDownloadingList() {
           <span class="tl-pct" id="trans-pct-${fileId}">${percentage}%</span>
         </div>
         <div class="transfer-item-meta">
-          <span class="transfer-item-size" id="trans-size-${fileId}">${totalSize > 0 ? formatBytes(receivedSize) + ' / ' + formatBytes(totalSize) : formatBytes(receivedSize)}</span>
+          <span class="transfer-item-size" id="trans-size-${fileId}">${approximate ? '约 ' : ''}${totalSize > 0 ? formatBytes(receivedSize) + ' / ' + formatBytes(totalSize) : formatBytes(receivedSize)}</span>
           <span class="transfer-item-speed" id="trans-speed-${fileId}">${escapeHtml(speedText)}</span>
           <span class="tl-eta" id="trans-eta-${fileId}">${escapeHtml(eta)}</span>
           <span class="transfer-item-status${paused ? ' paused' : ''}" id="trans-status-${fileId}">${statusText}</span>
@@ -3475,7 +3484,7 @@ function handleDownloadStatus(data) {
   if (txt) {
     if (status === 'downloading') {
       txt.className = 'item-status status-downloading';
-      txt.innerText = data.phase === 'verifying' ? '正在校验文件' : '正在高速下载';
+      txt.innerText = data.phase === 'verifying' ? '正在校验文件' : data.phase === 'preparing' ? '正在准备下载' : data.phase === 'connecting' ? '正在连接下载源' : '正在高速下载';
       if (data.speed) {
         const speedEl = document.getElementById(`speed-text-${queueIndex}`);
         if (speedEl) speedEl.innerText = data.speed;
@@ -3565,8 +3574,10 @@ function handleDownloadStatus(data) {
       const transStatus = document.getElementById(`trans-status-${index}`);
       const transSpeed = document.getElementById(`trans-speed-${index}`);
       if (transStatus) {
-        transStatus.innerText = status === 'waiting' ? '排队中...' : data.phase === 'verifying' ? '正在校验文件' : '正在高速下载';
+        transStatus.innerText = status === 'waiting' ? '排队中...' : data.phase === 'verifying' ? '正在校验文件' : data.phase === 'preparing' ? '正在准备下载' : data.phase === 'connecting' ? '正在连接下载源' : '正在高速下载';
       }
+      const etaEl = document.getElementById(`trans-eta-${index}`);
+      if (etaEl && data.phase) etaEl.innerText = '';
       if (transSpeed && data.speed) {
         transSpeed.innerText = data.speed;
       }
@@ -3581,13 +3592,13 @@ window.api.onDownloadProgress((data) => {
   const queueIndex = currentQueue.findIndex(file => file.originalIndex === index);
 
   // 1. 更新下载中心的队列 UI
-  if (percentage !== null) {
+  if (percentage != null) {
     const fill = document.getElementById(`progress-fill-${queueIndex}`);
     const pct = document.getElementById(`progress-pct-${queueIndex}`);
     if (fill) fill.style.width = percentage + '%';
     if (pct) pct.innerText = percentage + '%';
   }
-  if (speed !== null) {
+  if (speed != null) {
     const speedEl = document.getElementById(`speed-text-${queueIndex}`);
     if (speedEl) speedEl.innerText = '当前速度: ' + speed;
   }
@@ -3600,19 +3611,25 @@ window.api.onDownloadProgress((data) => {
     }
     if (receivedBytes != null) {
       activeItem.receivedBytes = receivedBytes;
+      activeItem.receivedBytesApproximate = Boolean(data.receivedBytesApproximate);
     }
     if (totalBytes != null) {
       activeItem.totalBytes = totalBytes;
     }
+    if (data.engine) activeItem.engine = data.engine;
+    activeItem.phase = 'transferring';
+    const view = transferProgressView(activeItem);
+    activeItem.percentage = view.percentage;
+    const statusEl = document.getElementById(`trans-status-${index}`);
+    if (statusEl && activeItem.status !== 'paused') statusEl.innerText = '正在高速下载';
     const fill = document.getElementById(`trans-progress-fill-${index}`);
     const sizeEl = document.getElementById(`trans-size-${index}`);
     const pctEl = document.getElementById(`trans-pct-${index}`);
     if (fill) fill.style.width = (activeItem.percentage || 0) + '%';
     if (pctEl) pctEl.innerText = (activeItem.percentage || 0) + '%';
     if (sizeEl) {
-      const totalSize = activeItem.totalBytes != null ? activeItem.totalBytes : (activeItem.size || 0);
-      const receivedSize = activeItem.receivedBytes != null ? activeItem.receivedBytes : (totalSize > 0 ? (totalSize * (activeItem.percentage || 0)) / 100 : 0);
-      sizeEl.innerText = totalSize > 0 ? `${formatBytes(receivedSize)} / ${formatBytes(totalSize)}` : formatBytes(receivedSize);
+      const { total: totalSize, received: receivedSize } = view;
+      sizeEl.innerText = (view.approximate ? '约 ' : '') + (totalSize > 0 ? `${formatBytes(receivedSize)} / ${formatBytes(totalSize)}` : formatBytes(receivedSize));
     }
     if (speed !== null && speed !== undefined) {
       activeItem.speed = speed;
@@ -3622,8 +3639,7 @@ window.api.onDownloadProgress((data) => {
     // 实时估算剩余时间(ETA)
     const etaEl = document.getElementById(`trans-eta-${index}`);
     if (etaEl) {
-      const totalSize = activeItem.totalBytes != null ? activeItem.totalBytes : (activeItem.size || 0);
-      const receivedSize = activeItem.receivedBytes != null ? activeItem.receivedBytes : (totalSize > 0 ? (totalSize * (activeItem.percentage || 0)) / 100 : 0);
+      const { total: totalSize, received: receivedSize } = view;
       etaEl.innerText = computeEta(totalSize > 0 ? totalSize - receivedSize : 0, activeItem.speed);
     }
     updateGlobalTotalSpeed();
