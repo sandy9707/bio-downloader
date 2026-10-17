@@ -1268,7 +1268,7 @@ registerApiHandlers(ipcMain, BACKEND_BASE_URL, app);
 function inspectTool(toolId) {
   const resolved = resolveToolBinary(toolId);
   if (!resolved.path) return { installed: false, usable: false, version: null, errorDetail: '', path: '', source: '' };
-  const env = { ...process.env };
+  const env = toolId === 'aria2' ? ariaEnvironment(resolved.path) : { ...process.env };
   if (toolId === 'aria2' && process.platform === 'linux' && resolved.source === 'bundled') {
     env.LD_LIBRARY_PATH = [path.join(path.dirname(resolved.path), 'lib'), env.LD_LIBRARY_PATH].filter(Boolean).join(':');
   }
@@ -1343,7 +1343,7 @@ ipcMain.handle('plugin-set-path', async (event, { pluginId, binaryPath }) => {
     throw new Error(`该文件不是可用的 ${pluginId === 'axel' ? 'Axel' : 'aria2c'} 可执行程序`);
   }
   saveSettings({ [key]: normalized });
-  const output = spawnSync(normalized, ['--version'], { encoding: 'utf8', timeout: 3000, windowsHide: true }).stdout || '';
+  const output = spawnSync(normalized, ['--version'], { encoding: 'utf8', timeout: 3000, windowsHide: true, env: toolId === 'aria2' ? ariaEnvironment(normalized) : process.env }).stdout || '';
   const match = pluginId === 'axel' ? output.match(/Axel\s+([\d.]+)/i) : output.match(/aria2\s+version\s+([\d.]+)/i);
   return { success: true, path: normalized, version: match ? match[1] : null };
 });
