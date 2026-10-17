@@ -304,7 +304,7 @@ function switchTab(tabId) {
   navItems.forEach(item => item.classList.remove('active'));
   
   // 查找对应的菜单项目
-  const activeNavItem = Array.from(navItems).find(item => item.getAttribute('onclick').includes(tabId));
+  const activeNavItem = Array.from(navItems).find(item => item.getAttribute('onclick').includes(tabId === 'download-engines-tab' ? 'settings-tab' : tabId));
   if (activeNavItem) activeNavItem.classList.add('active');
 
   // 切换视图显示
@@ -321,7 +321,8 @@ function switchTab(tabId) {
     'cloud-tab': '云下载',
     'profile-tab': '个人中心',
     'plugins-tab': '扩展插件',
-    'settings-tab': '全局设置'
+    'settings-tab': '全局设置',
+    'download-engines-tab': '下载器配置'
   };
   document.getElementById('tabTitle').innerText = titles[tabId] || '下载中心';
   if (tabId === 'cloud-tab') {
@@ -630,6 +631,16 @@ async function triggerCheckForUpdates() {
     showToast('检查更新时出错: ' + err.message, 'error');
   }
 }
+
+if (window.api.onUpdateDownloadProgress) window.api.onUpdateDownloadProgress(data => {
+  if (!isUpdating) return;
+  const phase = { connecting: '正在连接', verifying: '正在校验更新包', retrying: '正在切换备用源' }[data.phase];
+  const text = phase || `下载 ${data.percentage || 0}% · ${data.speed || '连接中'}`;
+  for (const id of ['btnHotPatchUpdate', 'btnUpgrade2x', 'btnUpdatePreview']) {
+    const button = document.getElementById(id);
+    if (button?.disabled) button.innerText = `${data.source} · ${text}`;
+  }
+});
 
 async function startHotPatchUpdate() {
   if (isUpdating) {

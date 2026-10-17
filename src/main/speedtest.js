@@ -32,7 +32,7 @@ async function measureDownloader({ url, axelBin, binary = axelBin, engine = 'axe
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'biodl-speedtest-'));
   let guard, proc, timer, stopped = false, received = 0;
   try {
-    // Reuse the real range-checked Axel path. Count network chunks instead of
+    // Reuse the real range-checked download path. Count network chunks instead of
     // sparse/preallocated file length, which can be the full file immediately.
     guard = await createBioTransferGuard({ url, engine, filename: path.join(dir, 'sample.bin'), proxy,
       timeout: Math.min(5000, duration(timeoutMs)),
@@ -56,6 +56,6 @@ async function measureDownloader({ url, axelBin, binary = axelBin, engine = 'axe
     if (guard) await guard.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
-  function stop() { if (!stopped && proc) { stopped = true; proc.kill(); } }
+  function stop() { if (!stopped && proc) { stopped = true; proc.kill('SIGKILL'); } }
 }
 module.exports = { measureNetwork, measureDownloader };

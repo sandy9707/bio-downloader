@@ -122,6 +122,10 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.removeAllListeners('curl-download-progress');
     ipcRenderer.on('curl-download-progress', (event, data) => callback(data));
   },
+  onUpdateDownloadProgress: (callback) => {
+    ipcRenderer.removeAllListeners('update-download-progress');
+    ipcRenderer.on('update-download-progress', (_event, data) => callback(data));
+  },
   onSpeedtestProgress: (callback) => {
     ipcRenderer.removeAllListeners('speedtest-progress');
     ipcRenderer.on('speedtest-progress', (event, data) => callback(data));

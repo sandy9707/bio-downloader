@@ -1,0 +1,38 @@
+const assert = require('node:assert/strict');
+const fs = require('fs'), os = require('os'), path = require('path'), http = require('http'), crypto = require('crypto');
+const { updateSources, downloadUpdate } = require('../src/main/update-download');
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'biodl-update-测试-'));
+process.env.BIODL_DATA_DIR = temp;
+const main = require('../main');
+const bytes = crypto.randomBytes(4 * 1024 * 1024), sha = crypto.createHash('sha256').update(bytes).digest('hex');
+const hits = [], events = [];
+const server = http.createServer((req, res) => {
+  hits.push(req.url);
+  const match = /bytes=(\d+)-(\d*)/.exec(req.headers.range || '');
+  const start = match ? +match[1] : 0, end = match?.[2] ? +match[2] : bytes.length - 1;
+  res.writeHead(match ? 206 : 200, { 'Content-Length': end - start + 1, 'Content-Type': 'application/octet-stream', 'Accept-Ranges': 'bytes', ...(match ? { 'Content-Range': `bytes ${start}-${end}/${bytes.length}` } : {}) });
+  res.end(req.url.includes('corrupt') ? Buffer.alloc(end - start + 1, 13) : bytes.subarray(start, end + 1));
+});
+(async () => {
+  const backend = 'https://biodown.ye.aimeals.cn', url = '/downloads/patch-2.1.1.asar?source=github&v=2.1.1';
+  const direct = updateSources(url, backend), accelerated = updateSources(url, backend, true);
+  assert(direct[0].url.startsWith('https://gh-proxy.org/https://github.com/sandy9707/bio-downloader/releases/download/v2.1.1/patch-2.1.1.asar'));
+  assert.equal(accelerated[0].proxy, true); assert(accelerated[0].url.startsWith('https://github.com/'));
+  assert.equal(new URL(direct[2].url).searchParams.get('source'), 'server');
+  assert.equal(updateSources('https://untrusted.invalid/downloads/patch-2.1.1.asar', backend).length, 1);
+  assert(updateSources('/downloads/BioDownloader-Linux-x64-2.1.1.tar.gz', backend)[0].url.includes('/v2.1.1/BioDownloader-Linux-x64-2.1.1.tar.gz'));
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`, binary = (await main.callIpcHandler('plugin-get-status')).plugins.find(p => p.id === 'aria2').path;
+  assert(binary, 'native bundled aria2 required');
+  const filename = path.join(temp, '更新 patch.tmp');
+  const options = { binary, filename, expectedSha256: sha, onProgress: data => events.push(data) };
+  fs.writeFileSync(filename, 'stale bytes'); fs.writeFileSync(filename + '.aria2', 'invalid old control file');
+  const result = await downloadUpdate({ ...options, sources: [{ url: base + '/corrupt', label: 'bad mirror' }, { url: 'http://unresolvable.invalid/good', label: 'accelerated', proxy: base }] });
+  assert.equal(result.source, 'accelerated'); assert.deepEqual(fs.readFileSync(filename), bytes);
+  assert(hits.some(url => url === 'http://unresolvable.invalid/good'), 'must use the explicit proxy');
+  assert(events.some(e => e.phase === 'retrying') && events.some(e => e.phase === 'verifying'));
+  await assert.rejects(downloadUpdate({ ...options, sources: [{ url: base + '/corrupt', label: 'bad' }] }), /当前版本未更改/);
+  assert(!fs.existsSync(filename) && !fs.existsSync(filename + '.aria2'), 'invalid bytes must be removed');
+  await assert.rejects(downloadUpdate({ ...options, expectedSha256: '', sources: [] }), /SHA256/);
+  console.log('UPDATE_DOWNLOAD_OK: native aria2, Unicode path, SHA rejection, clean mirror fallback, explicit acceleration');
+})().catch(e => { console.error(e); process.exitCode = 1; }).finally(() => { server.closeAllConnections(); server.close(); fs.rmSync(temp, { recursive: true, force: true }); });

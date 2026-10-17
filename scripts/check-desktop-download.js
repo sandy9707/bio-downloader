@@ -11,7 +11,7 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
 (async()=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
  await app.whenReady();
- const win=BrowserWindow.getAllWindows()[0]; await new Promise(r=>win.webContents.once('did-finish-load',r));
+ const win=BrowserWindow.getAllWindows()[0];win.webContents.setBackgroundThrottling(false); await new Promise(r=>win.webContents.once('did-finish-load',r));
  await new Promise(r=>setTimeout(r,1000));
  const errors=[];win.webContents.on('console-message',(_,level,message)=>{if(level>=2)errors.push(message)});
  const files=Array.from({length:3},(_,i)=>({name:`test${i}.bin`,url:`http://127.0.0.1:${server.address().port}/${i}`,size:bytes.length,md5:crypto.createHash('md5').update(bytes).digest('hex')}));
@@ -46,11 +46,25 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  assert.equal(charges,7,'repaste all links redownloads only confirmed mismatch');
  records=await win.webContents.executeJavaScript(`completedDownloads`);assert.equal(records.length,4);
  const replaced=records.find(r=>r.name===files[0].name);assert.equal(replaced.verification.status,'verified');assert.deepEqual(fs.readFileSync(replaced.backupPath),Buffer.alloc(bytes.length,77));
+ await win.webContents.executeJavaScript(`switchTab('settings-tab');document.getElementById('configureDownloaders').click();`);
+ assert.equal(await win.webContents.executeJavaScript(`currentTab`),'download-engines-tab');
+ assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll('#download-engines-tab select').length`),5);
+ fs.mkdirSync(path.join(root,'.evidence'),{recursive:true});
+ await win.webContents.executeJavaScript(`document.getAnimations().forEach(a=>a.finish())`);
+ await new Promise(r=>setTimeout(r,600));
+ fs.writeFileSync(path.join(root,'.evidence','settings-engines-'+process.platform+'.png'),(await win.webContents.capturePage()).toPNG());
  await win.webContents.executeJavaScript(`document.getElementById('engine-http').value='axel';saveDownloadEngines()`);
  assert.equal(await win.webContents.executeJavaScript(`window.api.getSettings().then(s=>s.downloadEngines.http)`),'axel');
  await win.webContents.executeJavaScript(`document.getElementById('engine-http').value='aria2';saveDownloadEngines()`);
  assert.equal(await win.webContents.executeJavaScript(`window.api.getSettings().then(s=>s.downloadEngines.http)`),'aria2');
  fs.mkdirSync(path.join(root,'.evidence'),{recursive:true});
+ await win.webContents.executeJavaScript(`document.getElementById('backToSettings').click();document.getElementById('settingsDeepIntegrityToggle').scrollIntoView({block:'center'});`);
+ assert.equal(await win.webContents.executeJavaScript(`currentTab`),'settings-tab');
+ const toggleSizes=await win.webContents.executeJavaScript(`['settingsDeepIntegrityToggle','settingsLowPowerToggle','settingsLoggingToggle'].map(id=>{const r=document.getElementById(id).parentElement.getBoundingClientRect();return [r.width,r.height];})`);
+ assert(toggleSizes.every(([w,h])=>w===44&&h===24),JSON.stringify(toggleSizes));
+ await win.webContents.executeJavaScript(`document.getAnimations().forEach(a=>a.finish())`);
+ await new Promise(r=>setTimeout(r,600));
+ fs.writeFileSync(path.join(root,'.evidence','settings-md5-'+process.platform+'.png'),(await win.webContents.capturePage()).toPNG());
  await win.webContents.executeJavaScript(`switchTab('transfers-tab');switchTransferSubTab('completed');`);
  await new Promise(r=>setTimeout(r,200));
  fs.writeFileSync(path.join(root,'.evidence','desktop-'+process.platform+'.png'),(await win.webContents.capturePage()).toPNG());

@@ -10,6 +10,7 @@
     updateStatus: [],
     curlProgress: [],
     speedtestProgress: [],
+    updateDownloadProgress: [],
     extractionEvent: [],
     menuAddLink: [],
     extractionNav: []
@@ -22,6 +23,9 @@
     const sid = localStorage.getItem('biodl_session');
     const sseUrl = sid ? `/api/events?sid=${encodeURIComponent(sid)}` : '/api/events';
     sse = new EventSource(sseUrl);
+    sse.addEventListener('update-download-progress', (e) => {
+      try { listeners.updateDownloadProgress.forEach(fn => fn(JSON.parse(e.data))); } catch (_) {}
+    });
     sse.addEventListener('speedtest-progress', (e) => {
       try { listeners.speedtestProgress.forEach(fn => fn(JSON.parse(e.data))); } catch (_) {}
     });
@@ -171,6 +175,7 @@
       if (prop === 'onUpdateProgress') return (cb) => listeners.updateProgress.push(cb);
       if (prop === 'onUpdateStatus') return (cb) => listeners.updateStatus.push(cb);
       if (prop === 'onCurlProgress') return (cb) => listeners.curlProgress.push(cb);
+      if (prop === 'onUpdateDownloadProgress') return (cb) => { listeners.updateDownloadProgress = [cb]; };
       if (prop === 'onSpeedtestProgress') return (cb) => { listeners.speedtestProgress = [cb]; };
       if (prop === 'onExtractionEvent') return (cb) => listeners.extractionEvent.push(cb);
       if (prop === 'onMenuAddLink') return (cb) => listeners.menuAddLink.push(cb);

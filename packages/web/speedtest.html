@@ -172,7 +172,7 @@
       <!-- 网络基准速度 -->
       <div class="card">
         <h2>🌐 网络基准速度</h2>
-        <p>直连官方国内下载站文件，测试 Linux 服务器的下载速度（不是当前浏览器所在电脑）。</p>
+        <p>直连国内 CDN 上的真实文件，测试 Linux 服务器的下载速度（不是当前浏览器所在电脑）。</p>
         <div class="test-file-info">
           <span id="networkFileName" class="test-file-name">-</span>
           <span id="networkFileUrl" class="test-file-url"></span>
@@ -190,7 +190,7 @@
       <!-- 下载器真实速度 -->
       <div class="card">
         <h2>⚡ 下载器真实速度</h2>
-        <p>通过 16 线程加速引擎 + 代理下载国外 SRA 文件，反映加速下载速度。</p>
+        <p>通过高速通道与所选下载器下载真实 SRR 数据。请先在主窗口开启加速器。</p>
         <div class="test-file-info">
           <span id="downloaderFileName" class="test-file-name">-</span>
           <span id="downloaderFileUrl" class="test-file-url"></span>
@@ -207,10 +207,11 @@
     </div>
   </div>
 
+  <script src="shared/speedtest-sources.js"></script>
   <script src="web-bridge.js"></script>
   <script>
-    const NETWORK_TEST_URL = 'https://biodown.ye.aimeals.cn/downloads/latest/linux';
-    const DOWNLOADER_TEST_URL = 'https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR390728/SRR390728';
+    const NETWORK_TEST_URL = SpeedtestSources.network;
+    const DOWNLOADER_TEST_URL = SpeedtestSources.downloader;
     const NETWORK_TEST_TIMEOUT_MS = 10000;
     const DOWNLOADER_TEST_TIMEOUT_MS = 10000;
 
@@ -310,7 +311,7 @@
       document.getElementById('btnDownloaderTest').disabled = true;
       btn.innerText = '测试中...';
       statusEl.className = 'status info';
-      statusEl.innerText = '正在启动 16 线程下载...';
+      statusEl.innerText = '正在连接高速通道并启动所选下载器...';
       speedEl.innerText = '0.00';
       progressEl.style.width = '0%';
 

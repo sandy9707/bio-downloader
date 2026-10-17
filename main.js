@@ -1448,7 +1448,8 @@ function axiosProxyFor(urlStr) {
   return false;
 }
 
-async function applyHotPatch(patchUrl) {
+const { updateSources, downloadUpdate: downloadVerifiedUpdate } = require('./src/main/update-download');
+async function applyHotPatch(patchUrl, onProgress = () => {}) {
   if (!patchUrl) {
     throw new Error('未提供有效热更新补丁地址');
   }
@@ -1474,17 +1475,14 @@ async function applyHotPatch(patchUrl) {
   if (!manifest || !manifest.sha256 || !manifest.signature) {
     throw new Error('更新清单缺少签名信息,为安全起见中止热更新。');
   }
+  if (new URL(manifest.patchUrl, BACKEND_BASE_URL).pathname !== new URL(fullUrl).pathname) {
+    throw new Error('更新清单已变化，请重新检查更新');
+  }
 
   // 3) 下载补丁
   const tempPatchPath = path.join(app.getPath('userData'), 'patch_download.tmp');
-  console.log('Downloading hot patch from:', fullUrl);
-  const response = await axios({ url: fullUrl, method: 'GET', responseType: 'stream', timeout: 30000, proxy: axiosProxyFor(fullUrl) });
-  const writer = fs.createWriteStream(tempPatchPath);
-  await new Promise((resolve, reject) => {
-    response.data.pipe(writer);
-    writer.on('finish', resolve);
-    writer.on('error', reject);
-  });
+  await downloadVerifiedUpdate({ sources: updateSources(fullUrl, BACKEND_BASE_URL, !!clashProcess),
+    filename: tempPatchPath, binary: await ensureAria2Plugin(), expectedSha256: manifest.sha256, onProgress });
 
   const stat = fs.statSync(tempPatchPath);
   if (stat.size < 500) {
@@ -1535,7 +1533,7 @@ async function applyHotPatch(patchUrl) {
 }
 
 // 执行 Linux 自更新流程（下载新 tar.gz -> 校验 sha256 -> 就地安全解压覆盖代码 -> 保留用户数据）
-async function performLinuxSelfUpdate(tarballUrl, expectedSha256) {
+async function performLinuxSelfUpdate(tarballUrl, expectedSha256, onProgress = () => {}) {
   if (process.platform !== 'linux') throw new Error('仅支持在 Linux 系统执行此更新');
   const fullUrl = tarballUrl.startsWith('http') ? tarballUrl : `${BACKEND_BASE_URL}${tarballUrl}`;
   const appRoot = path.resolve(__dirname);
@@ -1545,20 +1543,8 @@ async function performLinuxSelfUpdate(tarballUrl, expectedSha256) {
 
   try {
     console.log('[LinuxUpdate] 正在下载最新程序包:', fullUrl);
-    const response = await axios({
-      url: fullUrl,
-      method: 'GET',
-      responseType: 'stream',
-      timeout: 120000,
-      proxy: axiosProxyFor(fullUrl)
-    });
-
-    const writer = fs.createWriteStream(downloadPath);
-    await new Promise((resolve, reject) => {
-      response.data.pipe(writer);
-      writer.on('finish', resolve);
-      writer.on('error', reject);
-    });
+    await downloadVerifiedUpdate({ sources: updateSources(fullUrl, BACKEND_BASE_URL, !!clashProcess),
+      filename: downloadPath, binary: await ensureAria2Plugin(), expectedSha256, onProgress });
 
     // 校验 sha256
     if (expectedSha256) {
@@ -1622,7 +1608,7 @@ ipcMain.handle('linux-self-update', async (event, { url, sha256 } = {}) => {
   }
   if (!targetUrl) throw new Error('未获取到 Linux 更新包下载地址');
 
-  const res = await performLinuxSelfUpdate(targetUrl, targetSha);
+  const res = await performLinuxSelfUpdate(targetUrl, targetSha, updateProgress(event));
   setTimeout(() => {
     console.log('[LinuxUpdate] 服务重启加载新版本中...');
     process.exit(0);
@@ -1630,8 +1616,16 @@ ipcMain.handle('linux-self-update', async (event, { url, sha256 } = {}) => {
   return res;
 });
 
+function updateProgress(event) {
+  return data => { if (!event.sender.isDestroyed?.()) event.sender.send('update-download-progress', data); };
+}
+let hotPatchBusy = false;
 ipcMain.handle('apply-hot-patch', async (event, { patchUrl }) => {
-  const res = await applyHotPatch(patchUrl);
+  if (hotPatchBusy) throw new Error('更新正在进行，请勿重复启动');
+  hotPatchBusy = true;
+  let res;
+  try { res = await applyHotPatch(patchUrl, updateProgress(event)); }
+  catch (e) { hotPatchBusy = false; throw e; }
   setTimeout(() => {
     if (process.platform === 'win32' && process.env.BIODL_FIXED_RUNTIME === '1') {
       spawn(process.execPath, [], {
@@ -1792,14 +1786,17 @@ ipcMain.handle('open-speedtest-page', async () => {
 });
 
 const { measureNetwork, measureDownloader } = require('./src/main/speedtest');
-ipcMain.handle('speedtest-network', (event, options = {}) => measureNetwork({ ...options,
+const speedtestSources = require('./shared/speedtest-sources');
+ipcMain.handle('speedtest-network', (event, options = {}) => measureNetwork({ url: speedtestSources.network, ...options,
   onProgress: data => { if (!event.sender.isDestroyed?.()) event.sender.send('speedtest-progress', data); }
 }));
 ipcMain.handle('speedtest-downloader', async (event, options = {}) => {
-  const engine = selectEngine({ url: options.url }, getSettings());
-  return measureDownloader({ ...options, engine,
+  if (!clashProcess) return { success: false, error: '请先在主窗口开启加速器，再测试 SRR 高速下载' };
+  const url = options.url || speedtestSources.downloader;
+  const engine = selectEngine({ url }, getSettings());
+  return measureDownloader({ ...options, url, engine,
     binary: engine === 'aria2' ? await ensureAria2Plugin() : getAxelBinaryPath(),
-    proxy: clashProcess && shouldUseProxy(options.url) ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false,
+    proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 },
     onProgress: data => { if (!event.sender.isDestroyed?.()) event.sender.send('speedtest-progress', data); }
   });
 });
