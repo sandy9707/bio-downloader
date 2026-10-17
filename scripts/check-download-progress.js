@@ -30,6 +30,8 @@ const evidence = [];
 let pending;
 (async () => {
   main.ensureBinaries();
+  const aria = (await main.callIpcHandler('plugin-get-status')).plugins.find(p => p.id === 'aria2');
+  assert.equal(aria.source, 'bundled', 'the actual bundled runtime must work in a Unicode profile; never hide failures behind PATH');
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   for (const engine of ['aria2', 'axel']) {
     slow = true; sent = 0; firstByteAt = 0;

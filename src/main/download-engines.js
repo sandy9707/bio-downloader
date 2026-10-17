@@ -27,8 +27,15 @@ function selectEngine(file, settings = {}, filename) {
 // Keep this runtime setting private to the aria2 child process.
 function ariaEnvironment(binary, env = process.env) {
   const result = { ...env }, dir = require('path').dirname(binary);
-  if (process.platform === 'win32' && fs.existsSync(require('path').join(dir, 'legacy.dll'))) result.OPENSSL_MODULES = dir;
+  if (process.platform === 'win32' && fs.existsSync(require('path').join(dir, 'legacy.dll'))) result.OPENSSL_MODULES = '.';
   return result;
+}
+// The Windows OpenSSL loader rejects non-ASCII absolute provider paths.
+// Resolve its bundled provider relative to the child working directory instead;
+// Node/Windows can set that directory using the Unicode API.
+function ariaWorkingDirectory(binary) {
+  const dir = require('path').dirname(binary);
+  return process.platform === 'win32' && fs.existsSync(require('path').join(dir, 'legacy.dll')) ? dir : undefined;
 }
 function ariaArgs({ url, filename, threads = 16, proxy = '', binary }) {
   const path = require('path');
@@ -46,7 +53,7 @@ function runAria({ binary, url, filename, threads, env, proxy = '', onProcess = 
   return new Promise((resolve, reject) => {
     const cleanEnv = ariaEnvironment(binary, env);
     for (const key of Object.keys(cleanEnv)) if (/^(http|https|ftp|all|no)_proxy$/i.test(key)) delete cleanEnv[key];
-    const proc = spawn(binary, ariaArgs({ url, filename, threads, proxy, binary }), { env: cleanEnv, windowsHide: true });
+    const proc = spawn(binary, ariaArgs({ url, filename, threads, proxy, binary }), { env: cleanEnv, cwd: ariaWorkingDirectory(binary), windowsHide: true });
     let tail = '';
     onProcess(proc);
     // stdout and stderr are independent streams; never join their partial lines.
@@ -75,4 +82,4 @@ function runAria({ binary, url, filename, threads, env, proxy = '', onProcess = 
     proc.once('close', code => code === 0 ? resolve() : reject(new Error('aria2c 退出码 ' + code + ': ' + tail.trim().slice(-400))));
   });
 }
-module.exports = { defaults, selectEngine, ariaArgs, ariaEnvironment, runAria };
+module.exports = { defaults, selectEngine, ariaArgs, ariaEnvironment, ariaWorkingDirectory, runAria };

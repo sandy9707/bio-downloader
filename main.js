@@ -423,7 +423,7 @@ function toolCandidates(toolId) {
 }
 
 function probeToolVersion(binary, env) {
-  const options = { encoding: 'utf8', timeout: 3000, env, windowsHide: true };
+  const options = { encoding: 'utf8', timeout: 3000, env, windowsHide: true, cwd: process.platform === 'win32' ? path.dirname(binary) : undefined };
   let result = spawnSync(binary, ['--version'], options);
   // A freshly extracted Windows executable can be delayed by system scanning.
   // Retry only a timeout; real loader/version errors must remain failures.

@@ -22,7 +22,9 @@ const server = http.createServer((req, res) => {
   assert.equal(updateSources('https://untrusted.invalid/downloads/patch-2.1.1.asar', backend).length, 1);
   assert(updateSources('/downloads/BioDownloader-Linux-x64-2.1.1.tar.gz', backend)[0].url.includes('/v2.1.1/BioDownloader-Linux-x64-2.1.1.tar.gz'));
   await new Promise(r => server.listen(0, '127.0.0.1', r));
-  const base = `http://127.0.0.1:${server.address().port}`, binary = (await main.callIpcHandler('plugin-get-status')).plugins.find(p => p.id === 'aria2').path;
+  const aria = (await main.callIpcHandler('plugin-get-status')).plugins.find(p => p.id === 'aria2');
+  assert.equal(aria.source, 'bundled', 'must test the bundled runtime in a Unicode profile');
+  const base = `http://127.0.0.1:${server.address().port}`, binary = aria.path;
   assert(binary, 'native bundled aria2 required');
   const filename = path.join(temp, '更新 patch.tmp');
   const options = { binary, filename, expectedSha256: sha, onProgress: data => events.push(data) };
