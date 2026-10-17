@@ -1,7 +1,7 @@
 const axios = require('axios');
 const fs = require('fs'), os = require('os'), path = require('path');
 const { spawn } = require('child_process');
-const { ariaArgs } = require('./download-engines');
+const { ariaArgs, ariaEnvironment } = require('./download-engines');
 const { createBioTransferGuard } = require('./bio-transfer-guard');
 const duration = ms => Math.max(250, Math.min(30000, Number(ms) || 10000));
 function meter(onProgress, started) {
@@ -39,7 +39,7 @@ async function measureDownloader({ url, axelBin, binary = axelBin, engine = 'axe
       checkControl: async () => { if (Date.now() - started >= duration(timeoutMs)) throw new Error('测速连接超时'); },
       onBytes(n) { received += n; counter.add(n); if (received >= (Number(expectedSizeMB) || 200) * 1024 * 1024) stop(); }
     });
-    const env = { ...process.env };
+    const env = engine === 'aria2' ? ariaEnvironment(binary) : { ...process.env };
     for (const key of ['http_proxy','https_proxy','all_proxy','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY']) delete env[key];
     if (engine === 'aria2' && process.platform === 'linux') env.LD_LIBRARY_PATH = path.join(path.dirname(binary), 'lib');
     proc = spawn(binary, engine === 'aria2' ? ariaArgs({ url: guard.url, filename: path.join(dir, 'sample.bin'), threads: 16, binary }) : ['-n', '16', '-k', '-o', path.join(dir, 'sample.bin'), guard.url], { env, windowsHide: true });

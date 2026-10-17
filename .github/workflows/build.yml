@@ -151,7 +151,7 @@ jobs:
       - run: npm ci
       - name: 复用已验证的静态 Axel 以兼容旧断点
         run: |
-          curl -fL --retry 3 -o /tmp/axel-baseline.tar.gz https://biodown.ye.aimeals.cn/downloads/BioDownloader-Linux-x64-2.0.49.tar.gz
+          curl -fL --retry 3 -o /tmp/axel-baseline.tar.gz https://github.com/sandy9707/bio-downloader/releases/download/v2.0.49/BioDownloader-Linux-x64-2.0.49.tar.gz
           echo '1d95428cc59961853a8b940a7b13ff2d014645eda99215aef33a1a24808deef0  /tmp/axel-baseline.tar.gz' | sha256sum -c -
           tar xzf /tmp/axel-baseline.tar.gz -C /tmp BioDownloader-Linux-x64/bin/linux/axel
           cp /tmp/BioDownloader-Linux-x64/bin/linux/axel bin/linux/axel

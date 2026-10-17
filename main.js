@@ -16,7 +16,7 @@ const EventEmitter = require('events');
 const { createEnaResolver, verifyFile } = require('./src/main/download-integrity');
 const { bioSource, createBioTransferGuard } = require('./src/main/bio-transfer-guard');
 const downloadFiles = require('./src/main/download-files');
-const { selectEngine, runAria } = require('./src/main/download-engines');
+const { selectEngine, runAria, ariaEnvironment } = require('./src/main/download-engines');
 const enaIntegrity = createEnaResolver(async (accession) => {
   const url = `https://www.ebi.ac.uk/ena/portal/api/filereport?accession=${encodeURIComponent(accession)}&result=read_run&fields=run_accession,fastq_ftp,fastq_md5,fastq_bytes&format=json`;
   // ENA regularly needs more than six seconds. Retry transient failures on
@@ -424,7 +424,7 @@ function toolCandidates(toolId) {
 
 function toolCandidateWorks(toolId, candidate) {
   if (!candidate.path || !fs.existsSync(candidate.path)) return false;
-  const env = { ...process.env };
+  const env = toolId === 'aria2' ? ariaEnvironment(candidate.path) : { ...process.env };
   if (toolId === 'aria2' && process.platform === 'linux' && candidate.source === 'bundled') {
     env.LD_LIBRARY_PATH = [path.join(path.dirname(candidate.path), 'lib'), env.LD_LIBRARY_PATH].filter(Boolean).join(':');
   }

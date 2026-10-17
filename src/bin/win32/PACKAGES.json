@@ -336,6 +336,10 @@
     {
       "name": "libcares-2.dll",
       "sha256": "a6eedc7793f680bed89808341f4169fc86c6a09594453fb8a76b09ff4078a140"
+    },
+    {
+      "name": "legacy.dll",
+      "sha256": "bded5aeba6e9ee061c01904009cfb0bad86fd9b4a74ee2aeec2646a9a9e09342"
     }
   ]
 }

@@ -23,6 +23,13 @@ function selectEngine(file, settings = {}, filename) {
   if (!choices.includes(engine)) throw new Error('该协议不支持所选下载器，请在设置中调整下载引擎');
   return engine;
 }
+// OpenSSL's provider is loaded dynamically and is not listed in PE imports.
+// Keep this runtime setting private to the aria2 child process.
+function ariaEnvironment(binary, env = process.env) {
+  const result = { ...env }, dir = require('path').dirname(binary);
+  if (process.platform === 'win32' && fs.existsSync(require('path').join(dir, 'legacy.dll'))) result.OPENSSL_MODULES = dir;
+  return result;
+}
 function ariaArgs({ url, filename, threads = 16, proxy = '', binary }) {
   const path = require('path');
   return ['--no-conf=true', '--no-netrc=true', '--enable-color=false', '--human-readable=false',
@@ -36,7 +43,7 @@ function ariaArgs({ url, filename, threads = 16, proxy = '', binary }) {
 }
 function runAria({ binary, url, filename, threads, env, proxy = '', onProcess = () => {}, onProgress = () => {}, log = () => {} }) {
   return new Promise((resolve, reject) => {
-    const cleanEnv = { ...env };
+    const cleanEnv = ariaEnvironment(binary, env);
     for (const key of Object.keys(cleanEnv)) if (/^(http|https|ftp|all|no)_proxy$/i.test(key)) delete cleanEnv[key];
     const proc = spawn(binary, ariaArgs({ url, filename, threads, proxy, binary }), { env: cleanEnv, windowsHide: true });
     let tail = '', fragment = '';
@@ -56,4 +63,4 @@ function runAria({ binary, url, filename, threads, env, proxy = '', onProcess = 
     proc.once('close', code => code === 0 ? resolve() : reject(new Error('aria2c 退出码 ' + code + ': ' + tail.trim().slice(-400))));
   });
 }
-module.exports = { defaults, selectEngine, ariaArgs, runAria };
+module.exports = { defaults, selectEngine, ariaArgs, ariaEnvironment, runAria };
