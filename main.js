@@ -422,13 +422,24 @@ function toolCandidates(toolId) {
   ];
 }
 
+function probeToolVersion(binary, env) {
+  const options = { encoding: 'utf8', timeout: 3000, env, windowsHide: true };
+  let result = spawnSync(binary, ['--version'], options);
+  // A freshly extracted Windows executable can be delayed by system scanning.
+  // Retry only a timeout; real loader/version errors must remain failures.
+  if (process.platform === 'win32' && result.error?.code === 'ETIMEDOUT') {
+    console.warn('[Plugin] 下载器首次启动探测超时，正在重试');
+    result = spawnSync(binary, ['--version'], { ...options, timeout: 15000 });
+  }
+  return result;
+}
 function toolCandidateWorks(toolId, candidate) {
   if (!candidate.path || !fs.existsSync(candidate.path)) return false;
   const env = toolId === 'aria2' ? ariaEnvironment(candidate.path) : { ...process.env };
   if (toolId === 'aria2' && process.platform === 'linux' && candidate.source === 'bundled') {
     env.LD_LIBRARY_PATH = [path.join(path.dirname(candidate.path), 'lib'), env.LD_LIBRARY_PATH].filter(Boolean).join(':');
   }
-  const result = spawnSync(candidate.path, ['--version'], { encoding: 'utf8', timeout: 3000, env, windowsHide: true });
+  const result = probeToolVersion(candidate.path, env);
   const output = `${result.stdout || ''}\n${result.stderr || ''}`;
   return result.status === 0 && (toolId === 'axel' ? /Axel\s+[\d.]+/i : toolId === 'curl' ? /curl\s+[\d.]+/i : /aria2\s+version\s+[\d.]+/i).test(output);
 }
@@ -1272,7 +1283,7 @@ function inspectTool(toolId) {
   if (toolId === 'aria2' && process.platform === 'linux' && resolved.source === 'bundled') {
     env.LD_LIBRARY_PATH = [path.join(path.dirname(resolved.path), 'lib'), env.LD_LIBRARY_PATH].filter(Boolean).join(':');
   }
-  const result = spawnSync(resolved.path, ['--version'], { encoding: 'utf8', timeout: 3000, env, windowsHide: true });
+  const result = probeToolVersion(resolved.path, env);
   const output = `${result.stdout || ''}\n${result.stderr || ''}`.trim();
   const versionMatch = toolId === 'axel'
     ? output.match(/Axel\s+([\d.]+)/i)
@@ -1343,7 +1354,7 @@ ipcMain.handle('plugin-set-path', async (event, { pluginId, binaryPath }) => {
     throw new Error(`该文件不是可用的 ${pluginId === 'axel' ? 'Axel' : pluginId === 'curl' ? 'curl' : 'aria2c'} 可执行程序`);
   }
   saveSettings({ [key]: normalized });
-  const output = spawnSync(normalized, ['--version'], { encoding: 'utf8', timeout: 3000, windowsHide: true, env: pluginId === 'aria2' ? ariaEnvironment(normalized) : process.env }).stdout || '';
+  const output = probeToolVersion(normalized, pluginId === 'aria2' ? ariaEnvironment(normalized) : process.env).stdout || '';
   const match = output.match(pluginId === 'axel' ? /Axel\s+([\d.]+)/i : pluginId === 'curl' ? /curl\s+([\d.]+)/i : /aria2\s+version\s+([\d.]+)/i);
   return { success: true, path: normalized, version: match ? match[1] : null };
 });
