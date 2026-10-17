@@ -17,13 +17,15 @@ const server = http.createServer((req, res) => {
   const m = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || '');
   const a = m ? +m[1] : 0, b = m && m[2] ? Math.min(+m[2], bytes.length - 1) : bytes.length - 1;
   received.push({ a, b, ifRange: req.headers['if-range'], url: req.url });
-  const bad = b - a > 4096 && a > 0;
+  // Main aria2 may finish this small local file before opening a second range.
+  // Inject a wrong range into its first body too, so the fault is actually served.
+  const bad = b - a > 4096 && (a > 0 || req.url.endsWith('/bio/bad.gz'));
   if (mode === 'transient-segments' && bad) {
     const key = `${a}-${b}`, failures = transientFailures.get(key) || 0;
     transientFailures.set(key, failures + 1);
     if (failures < 2) { res.writeHead(502, { 'Content-Length': 0 }); res.end(); return; }
   }
-  const actual = mode === 'wrong-range' && bad ? 0 : a;
+  const actual = mode === 'wrong-range' && bad ? (a === 0 ? 1 : 0) : a;
   const headers = { 'Content-Range': `bytes ${actual}-${actual + b - a}/${bytes.length}`, 'Content-Length': b - a + 1, 'Accept-Ranges': 'bytes', ETag: mode === 'changed' && bad ? '"generation-2"' : etag };
   if (mode === 'encoding' && bad) headers['Content-Encoding'] = 'gzip';
   res.writeHead(mode === 'ignored-range' && bad ? 200 : m ? 206 : 200, headers);

@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const fs = require('fs'), os = require('os'), path = require('path'), crypto = require('crypto');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'biodl-live-ebi-'));
-process.env.BIODL_DATA_DIR = path.join(temp, 'profile');
+process.env.BIODL_DATA_DIR = path.join(temp, '用户配置 profile');
 const axios = require('axios'), charges = [];
 axios.post = async (url, body) => {
   assert.ok(url.endsWith('/api/user/consume'));
