@@ -81,6 +81,7 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  }
  assert(visible?.receivedBytes>0,'native aria2 must update the real UI before completion');
  assert(visible.percentage>0&&visible.percentage<10,JSON.stringify(visible));
+ assert.equal(await win.webContents.executeJavaScript(`document.getElementById('status-text-0').innerText`),'正在高速下载');
  const displayed=await win.webContents.executeJavaScript(`(()=>{
   const f=activeDownloads.find(f=>f.name==='slow-progress.bin'),id=f.originalIndex;
   const read=()=>['trans-pct-','trans-size-','trans-eta-'].map(p=>document.getElementById(p+id).innerText);

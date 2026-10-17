@@ -3603,6 +3603,9 @@ window.api.onDownloadProgress((data) => {
     if (speedEl) speedEl.innerText = '当前速度: ' + speed;
   }
 
+  const queueStatus = document.getElementById(`status-text-${queueIndex}`);
+  if (queueStatus) queueStatus.innerText = '正在高速下载';
+
   // 2. 更新传输中心 UI
   const activeItem = activeDownloads.find(d => d.originalIndex === index);
   if (activeItem) {
