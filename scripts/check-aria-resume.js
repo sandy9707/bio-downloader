@@ -27,6 +27,11 @@ let guard, proc;
   const plugins = await main.callIpcHandler('plugin-get-status');
   const aria = plugins.plugins.find(p => p.id === 'aria2');
   assert.equal(aria.usable, true, JSON.stringify(aria)); assert.equal(aria.source, 'bundled');
+  const selected = await main.callIpcHandler('plugin-set-path', {pluginId:'aria2',binaryPath:aria.path});
+  assert.equal(selected.version, aria.version);
+  assert.equal((await main.callIpcHandler('plugin-get-status')).plugins.find(p=>p.id==='aria2').source, 'custom');
+  await main.callIpcHandler('save-settings', {aria2Path:''});
+
   const env = { ...process.env, LD_LIBRARY_PATH: path.join(path.dirname(aria.path), 'lib') };
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${server.address().port}/file`, filename = path.join(temp, 'resume.bin');

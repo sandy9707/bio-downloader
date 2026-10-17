@@ -1340,11 +1340,11 @@ ipcMain.handle('plugin-set-path', async (event, { pluginId, binaryPath }) => {
   }
   const key = pluginId + 'Path';
   if (!toolCandidateWorks(pluginId, { path: normalized, source: 'custom' })) {
-    throw new Error(`该文件不是可用的 ${pluginId === 'axel' ? 'Axel' : 'aria2c'} 可执行程序`);
+    throw new Error(`该文件不是可用的 ${pluginId === 'axel' ? 'Axel' : pluginId === 'curl' ? 'curl' : 'aria2c'} 可执行程序`);
   }
   saveSettings({ [key]: normalized });
-  const output = spawnSync(normalized, ['--version'], { encoding: 'utf8', timeout: 3000, windowsHide: true, env: toolId === 'aria2' ? ariaEnvironment(normalized) : process.env }).stdout || '';
-  const match = pluginId === 'axel' ? output.match(/Axel\s+([\d.]+)/i) : output.match(/aria2\s+version\s+([\d.]+)/i);
+  const output = spawnSync(normalized, ['--version'], { encoding: 'utf8', timeout: 3000, windowsHide: true, env: pluginId === 'aria2' ? ariaEnvironment(normalized) : process.env }).stdout || '';
+  const match = output.match(pluginId === 'axel' ? /Axel\s+([\d.]+)/i : pluginId === 'curl' ? /curl\s+([\d.]+)/i : /aria2\s+version\s+([\d.]+)/i);
   return { success: true, path: normalized, version: match ? match[1] : null };
 });
 
