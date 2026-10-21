@@ -1,6 +1,7 @@
 'use strict';
-// Independent candidate engine. Not wired into the production download selector.
+// BioDownloader range engine. Run in a worker to isolate hashing and file I/O.
 const fs = require('fs/promises');
+const { randomUUID } = require('crypto');
 const path = require('path');
 const http = require('http');
 const https = require('https');
@@ -29,7 +30,7 @@ class NativeTransfer {
     for (const key of ['timeoutMs', 'retryBudgetMs', 'retryBaseMs', 'retryMaxMs', 'progressIntervalMs']) integer(this.options[key], 1, 86400000, key);
     integer(this.options.lockStaleMs, 2000, 60000, '锁超时');
     this.url = u.href; this.destination = path.resolve(options.filename);
-    this.sourceKey = digest(this.url); this.completed = new Map(); this.active = new Map(); this.controllers = new Set();
+    this.sourceKey = digest(this.url); this.completed = new Map(); this.anchors = new Map(); this.active = new Map(); this.controllers = new Set();
     this.stop = new AbortController(); this.running = false; this.limit = this.options.connections;
     this.confirmedBytes = 0; this.networkBytes = 0; this.lastNetworkBytes = 0; this.lastTick = Date.now(); this.goodBlocks = 0;
     this.httpAgent = new http.Agent({ keepAlive: true, maxSockets: this.options.connections });
@@ -106,8 +107,10 @@ class NativeTransfer {
   blockLength(index) { return Math.min(this.meta.blockSize, this.meta.size - index * this.meta.blockSize); }
   async restore() {
     const records = this.journal.records, header = records[0];
-    if (!header || header.type !== 'header' || header.version !== 1 || header.sourceKey !== this.sourceKey) throw new TransferError('JOURNAL_SOURCE', '断点格式或原链接不匹配');
+    if (!header || header.type !== 'header' || header.version !== 2 || header.sourceKey !== this.sourceKey) throw new TransferError('JOURNAL_SOURCE', '断点格式或原链接不匹配');
     if (header.size !== this.meta.size || header.etag !== this.meta.etag) throw new TransferError('SOURCE_CHANGED', '源文件版本已变化，不能继续原断点');
+    this.transferId = header.transferId;
+    if (!/^[a-f0-9-]{36}$/.test(this.transferId || '')) throw new TransferError('JOURNAL_CORRUPT', '断点任务标识损坏');
     integer(header.size, 1, Number.MAX_SAFE_INTEGER, '断点文件大小');
     integer(header.blockSize, 65536, 16 * 1024 * 1024, '断点分块大小'); this.meta.blockSize = header.blockSize;
     this.blockCount = Math.ceil(this.meta.size / this.meta.blockSize);
@@ -115,17 +118,20 @@ class NativeTransfer {
     for (const r of records.slice(1)) {
       if (['piece', 'invalidate'].includes(r.type)) {
         integer(r.index, 0, this.blockCount - 1, '断点索引');
-        if (r.type === 'invalidate') this.completed.delete(r.index);
+        if (r.type === 'invalidate') { this.completed.delete(r.index); this.anchors.delete(r.index); }
         else {
           if (!/^[a-f0-9]{64}$/.test(r.hash)) throw new TransferError('JOURNAL_CORRUPT', '断点摘要损坏');
+          if (!['left', 'right'].every(key => r[key] === null || /^[a-f0-9]{64}$/.test(r[key]))) throw new TransferError('JOURNAL_CORRUPT', '断点边界摘要损坏');
+          this.anchors.set(r.index, { left: r.left, right: r.right });
           this.completed.set(r.index, r.hash);
         }
-      } else if (!['seal', 'complete'].includes(r.type)) throw new TransferError('JOURNAL_CORRUPT', '未知断点记录');
+      } else if (!['seal', 'complete', 'receipt', 'published'].includes(r.type)) throw new TransferError('JOURNAL_CORRUPT', '未知断点记录');
     }
+    for (const [index, anchors] of this.anchors) this.checkBoundary(index, anchors);
     const stat = await this.data.stat();
     if (stat.size > this.meta.size) throw new TransferError('DATA_SIZE', '临时文件超出源文件大小，已保留现场');
-    const last = records[records.length - 1];
-    const clean = last?.type === 'seal' && same(last.file, fingerprint(stat));
+    const last = this.publishedFile ? records.filter(record => record.type === 'published').at(-1) : records[records.length - 1];
+    const clean = ['seal', 'published'].includes(last?.type) && same(last.file, fingerprint(stat));
     let verified = 0;
     if (!clean) {
       this.event('state', { phase: 'checking-local', blocks: this.completed.size });
@@ -137,7 +143,7 @@ class NativeTransfer {
           if (!bytesRead) break; offset += bytesRead;
         }
         if (offset !== bytes.length || digest(bytes) !== hash) {
-          await this.journal.append({ type: 'invalidate', index }); this.completed.delete(index);
+          await this.journal.append({ type: 'invalidate', index }); this.completed.delete(index); this.anchors.delete(index);
           this.event('repair', { block: index, reason: 'local-hash-mismatch' });
         } else verified += offset;
       }
@@ -145,16 +151,26 @@ class NativeTransfer {
     this.confirmedBytes = [...this.completed.keys()].reduce((n, i) => n + this.blockLength(i), 0);
     this.event('resume', { committedBytes: this.confirmedBytes, fast: clean, verifiedBytes: verified });
   }
+  checkBoundary(index, anchors) {
+    const previous = this.anchors.get(index - 1), next = this.anchors.get(index + 1);
+    if ((previous && previous.right !== anchors.left) || (next && next.left !== anchors.right)) {
+      throw new TransferError('BOUNDARY_MISMATCH', '相邻分块的重叠内容不一致，已停止拼接并保留断点');
+    }
+  }
   async piece(index) {
     await this.retry(async () => {
       this.active.set(index, 0);
       try {
         const start = index * this.meta.blockSize;
-        const { bytes } = await this.range(start, start + this.blockLength(index) - 1, this.meta, n => this.active.set(index, n));
-        const hash = digest(bytes);
+        const end = start + this.blockLength(index), from = Math.max(0, start - 32), to = Math.min(this.meta.size, end + 32);
+        const { bytes: response } = await this.range(from, to - 1, this.meta, n => this.active.set(index, Math.max(0, Math.min(end - start, n - (start - from)))));
+        const anchor = boundary => digest(response.subarray(Math.max(0, boundary - 32) - from, Math.min(this.meta.size, boundary + 32) - from));
+        const anchors = { left: start ? anchor(start) : null, right: end < this.meta.size ? anchor(end) : null };
+        this.checkBoundary(index, anchors); this.anchors.set(index, anchors);
+        const bytes = response.subarray(start - from, end - from), hash = digest(bytes);
         // Ordering is essential: data durable -> journal durable -> progress committed.
         this.check(); await writeAll(this.data, bytes, start); await this.data.sync();
-        await this.journal.append({ type: 'piece', index, hash });
+        await this.journal.append({ type: 'piece', index, hash, ...anchors });
         this.completed.set(index, hash); this.confirmedBytes += bytes.length;
         if (++this.goodBlocks >= 8 && this.limit < this.options.connections) { this.limit++; this.goodBlocks = 0; }
         this.event('piece', { index, committedBytes: this.confirmedBytes });
@@ -181,16 +197,18 @@ class NativeTransfer {
       if (await exists(this.destination)) {
         // A crash after publishing must never cause an overwrite or new transfer.
         // Verify every journaled piece before acknowledging an existing output.
-        if (!(await exists(this.journalPath))) throw new TransferError('OUTPUT_EXISTS', '目标文件已存在，已保留原件');
+        if (!(await exists(this.journalPath))) throw new TransferError('OUTPUT_EXISTS', '目标文件已存在但缺少专属内核断点信息，已保留原件');
         this.journal = await Journal.open(this.journalPath); this.data = await fs.open(this.destination, 'r');
-        const h = this.journal.records[0]; this.meta = { size: h?.size, etag: h?.etag, blockSize: h?.blockSize };
+        const h = this.journal.records[0]; this.meta = { ...(await this.retry(() => this.range(0, 0))).meta, blockSize: h?.blockSize };
         const complete = this.journal.records.some(r => r.type === 'complete');
         if (!complete || this.journal.records[0]?.sourceKey !== this.sourceKey) throw new TransferError('OUTPUT_EXISTS', '现有文件不属于已完成的当前任务');
-        // Remove seal shortcut for publication recovery: output may have been edited.
-        this.journal.records.push({ type: 'complete' }); await this.restore();
+        // An unchanged publication fingerprint is a clean completion. If it is
+        // absent (crash during publication) or changed, verify every local block.
+        this.publishedFile = true; await this.restore();
         if (this.completed.size !== this.blockCount) throw new TransferError('OUTPUT_CHANGED', '已完成文件被修改，保留原件等待处理');
-        this.event('complete', { size: this.meta.size, recovered: true }); return { status: 'completed', size: this.meta.size, recovered: true };
+        this.event('complete', { size: this.meta.size, recovered: true, percentage: 100, remoteChecksumVerified: false }); return { status: 'completed', size: this.meta.size, recovered: true, remoteChecksumVerified: false, transferId: this.transferId, receiptAccounts: recordsReceiptAccounts(this.journal.records) };
       }
+      await checkPublicationSupport(parent);
       this.event('state', { phase: 'probing' });
       const probe = await this.retry(() => this.range(0, 0));
       this.meta = { ...probe.meta, blockSize: this.options.blockSize };
@@ -204,7 +222,8 @@ class NativeTransfer {
       if (hasPart) await this.restore();
       else {
         await this.data.sync();
-        await this.journal.append({ type: 'header', version: 1, sourceKey: this.sourceKey, ...this.meta });
+        this.transferId = randomUUID();
+        await this.journal.append({ type: 'header', version: 2, transferId: this.transferId, sourceKey: this.sourceKey, ...this.meta });
         await syncDirectory(parent);
       }
       this.safeToSeal = true;
@@ -233,8 +252,9 @@ class NativeTransfer {
       // with the fully downloaded part retained instead of overwriting output.
       await fs.link(this.part, this.destination); published = true;
       await syncDirectory(parent); await fs.unlink(this.part); await syncDirectory(parent);
+      await this.journal.append({ type: 'published', file: fingerprint(await fs.stat(this.destination)) });
       this.event('complete', { size: this.meta.size, blocks: this.blockCount, percentage: 100, remoteChecksumVerified: false });
-      return { status: 'completed', size: this.meta.size, blocks: this.blockCount, remoteChecksumVerified: false };
+      return { status: 'completed', size: this.meta.size, blocks: this.blockCount, remoteChecksumVerified: false, transferId: this.transferId, receiptAccounts: [] };
     } catch (error) {
       if (this.stoppedByUser && !this.fatal) {
         await this.seal(); this.event('state', { phase: 'paused', committedBytes: this.confirmedBytes });
@@ -254,4 +274,16 @@ class NativeTransfer {
     }
   }
 }
+async function checkPublicationSupport(directory) {
+  const from = path.join(directory, '.biodl-probe-' + randomUUID()), to = from + '.link';
+  try {
+    const handle = await fs.open(from, 'wx'); await handle.close();
+    try { await fs.link(from, to); }
+    catch (error) {
+      if (['ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'EXDEV', 'ENOSYS'].includes(error.code)) throw new TransferError('FILESYSTEM_UNSUPPORTED', '此磁盘不支持专属内核的安全文件发布');
+      throw error;
+    }
+  } finally { await fs.unlink(to).catch(() => {}); await fs.unlink(from).catch(() => {}); }
+}
+const recordsReceiptAccounts = records => records.filter(record => record.type === 'receipt').map(record => record.accountKey);
 module.exports = { NativeTransfer, TransferError };

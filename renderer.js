@@ -555,10 +555,12 @@ async function triggerCheckForUpdates() {
     if (res.success) {
       // 正式版更新卡片:有正式版新版本 或 有稳定版回滚选项(预览版用户开高级模式回滚到正式版)时显示
       const stableRollback = res.stableRollback;
-      if (res.hasUpdate || stableRollback) {
-        updateInfoGlobal = res;
-        const stableVersion = res.hasUpdate ? res.latestVersion : stableRollback.version;
-        const stableNotes = res.hasUpdate ? res.releaseNotes : stableRollback.releaseNotes;
+      const hasStableUpdate = res.hasUpdate && !res.isPreviewClient;
+      document.getElementById('updateCard').style.display = 'none';
+      if (hasStableUpdate || stableRollback) {
+        updateInfoGlobal = hasStableUpdate ? res : { ...res, ...stableRollback };
+        const stableVersion = hasStableUpdate ? res.latestVersion : stableRollback.version;
+        const stableNotes = hasStableUpdate ? res.releaseNotes : stableRollback.releaseNotes;
         document.getElementById('updateLatestVersion').innerText = stableVersion;
         document.getElementById('updateReleaseNotes').innerText = stableNotes;
 
@@ -570,7 +572,7 @@ async function triggerCheckForUpdates() {
             btnHot.onclick = startLinuxSelfUpdate;
           } else if (res.patchUrl) {
             btnHot.style.display = 'inline-block';
-            btnHot.innerText = res.hasUpdate ? '⚡ 下载并应用更新补丁' : '⚡ 回滚到正式版 (热更新)';
+            btnHot.innerText = hasStableUpdate ? '⚡ 下载并应用更新补丁' : '⚡ 回滚到正式版 (热更新)';
             btnHot.onclick = startHotPatchUpdate;
           } else {
             btnHot.style.display = 'none';
@@ -580,11 +582,11 @@ async function triggerCheckForUpdates() {
         document.getElementById('updateCard').style.display = 'block';
         const cardTitle = document.querySelector('#updateCard span');
         if (cardTitle) {
-          cardTitle.innerHTML = res.hasUpdate
+          cardTitle.innerHTML = hasStableUpdate
             ? `🎁 检测到新版本 v<span id="updateLatestVersion">${stableVersion}</span>`
             : `🔄 正式版 v<span id="updateLatestVersion">${stableVersion}</span> 可回滚`;
         }
-        showToast(res.hasUpdate ? '检测到新版本，请及时更新' : '检测到正式版可回滚', res.hasUpdate ? 'success' : 'info');
+        showToast(hasStableUpdate ? '检测到新版本，请及时更新' : '检测到正式版可回滚', hasStableUpdate ? 'success' : 'info');
       } else {
         // 正式版通道已是最新,但预览版通道可能仍有新版本:避免误导提示
         // (预览版客户端自动跟随 P2 通道;正式版用户需开启高级模式才能看到预览版)
@@ -766,7 +768,9 @@ async function startPreviewUpdate() {
   isUpdating = true;
   showToast('正在下载预览版热更新包...', 'info');
   try {
-    const res = await window.api.applyHotPatch(previewInfoGlobal.patchUrl);
+    const res = previewInfoGlobal.platform === 'linux'
+      ? await window.api.linuxSelfUpdate({ url: previewInfoGlobal.linuxUrl, sha256: previewInfoGlobal.sha256 })
+      : await window.api.applyHotPatch(previewInfoGlobal.patchUrl);
     if (res.success) showToast(res.message || '预览版升级成功！应用即将重启...', 'success');
   } catch (err) {
     showToast('升级到预览版失败: ' + err.message, 'error');
@@ -1168,7 +1172,7 @@ function renderQueue() {
     if (lowPowerModeSetting) threads = Math.min(threads, 16);
     if (stableModeSetting) threads = 1;
 
-    const threadHint = stableModeSetting ? '<span style="color:#ef4444; font-weight:bold;">稳定模式 (1线程)</span>' : `${file.engine === 'axel' ? 'Axel' : file.engine === 'curl' ? 'curl' : 'aria2'} · 最多 ${file.engine === 'axel' ? threads : Math.min(16, threads)} 连接`;
+    const threadHint = stableModeSetting ? '<span style="color:#ef4444; font-weight:bold;">稳定模式 (1线程)</span>' : `${file.engine === 'native' ? 'BioDownloader' : file.engine === 'axel' ? 'Axel' : file.engine === 'curl' ? 'curl' : 'aria2'} · 最多 ${file.engine === 'native' ? Math.min(4, threads) : file.engine === 'axel' ? threads : Math.min(16, threads)} 连接`;
 
     itemEl.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -2871,7 +2875,7 @@ function renderCompletedList() {
         </div>
         <div class="transfer-item-meta">
           <span class="transfer-item-size">${formatBytes(item.size || 0)}</span>
-          <span class="transfer-item-status completed"${item.verification && ['unavailable', 'mismatch', 'computed', 'failed'].includes(item.verification.status) ? ' style="color: #d97706;"' : ''} title="${escapeHtml(item.verification && item.verification.reason || '')}">${item.md5Progress ? escapeHtml(item.md5Progress) : item.verification?.status === 'failed' ? '校验失败：' + escapeHtml(item.verification.reason || '请重试') : item.verification?.status === 'computed' ? '已计算 MD5，缺少参考值（未比对）' : item.verification && item.verification.status === 'mismatch' ? '已保存 · MD5 与参考值不一致，需核对' : item.verification && item.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : item.verification && item.verification.status === 'verified' ? 'MD5 与参考值一致' : item.verification && item.verification.status === 'quick-checked' ? (item.verification.transport ? '源文件抽样通过（未做 MD5）' : '快速检查通过（未做 MD5）') : item.skip ? '大小匹配 (跳过)' : '下载完成'}</span>
+          <span class="transfer-item-status completed"${item.verification && ['unavailable', 'mismatch', 'computed', 'failed'].includes(item.verification.status) ? ' style="color: #d97706;"' : ''} title="${escapeHtml(item.verification && item.verification.reason || '')}">${item.md5Progress ? escapeHtml(item.md5Progress) : item.verification?.status === 'failed' ? '校验失败：' + escapeHtml(item.verification.reason || '请重试') : item.verification?.status === 'computed' ? '已计算 MD5，缺少参考值（未比对）' : item.verification && item.verification.status === 'mismatch' ? '已保存 · MD5 与参考值不一致，需核对' : item.verification && item.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : item.verification && item.verification.status === 'verified' ? 'MD5 与参考值一致' : item.verification && item.verification.status === 'quick-checked' ? (item.verification.transport?.engine === 'native' ? '分块与边界检查通过（未做 MD5）' : item.verification.transport ? '源文件抽样通过（未做 MD5）' : '快速检查通过（未做 MD5）') : item.skip ? '大小匹配 (跳过)' : '下载完成'}</span>
           ${item.verification?.actualMd5 ? `<span style="word-break:break-all;user-select:text;">本地 MD5：${escapeHtml(item.verification.actualMd5)}</span>` : ''}
           ${item.verification?.status === 'unavailable' || item.verification?.status === 'computed' ? `<span>${escapeHtml(item.verification.reason || '缺少参考 MD5，可点击校验重试')}</span>` : ''}
           ${item.backupPath ? `<span style="word-break:break-all;user-select:text;" title="${escapeHtml(item.backupPath)}">原文件已保留：${escapeHtml(item.backupPath)}</span>` : ''}
@@ -3452,7 +3456,7 @@ async function initTransfersAndSettings(settings) {
   if (stableModeToggle) stableModeToggle.checked = stableModeSetting;
   const deepIntegrityToggle = document.getElementById('settingsDeepIntegrityToggle');
   if (deepIntegrityToggle) deepIntegrityToggle.checked = Boolean(settings && settings.deepIntegrityCheck);
-  for (const [group, value] of Object.entries({ http: 'aria2', bio: 'inherit', ftp: 'aria2', sftp: 'aria2', ftps: 'curl', ...settings?.downloadEngines })) {
+  for (const [group, value] of Object.entries({ http: 'native', bio: 'inherit', ftp: 'aria2', sftp: 'aria2', ftps: 'curl', ...settings?.downloadEngines })) {
     const select = document.getElementById('engine-' + group); if (select) select.value = value;
   }
 
@@ -4357,19 +4361,20 @@ async function refreshPluginsList() {
               ${statusBadge}
             </div>
             <div style="font-size:0.82rem; color:var(--text-muted); line-height:1.45; margin-bottom:0.4rem;">${escapeHtml(p.description)}</div>
-            <div style="font-size:0.75rem; color:var(--text-muted); font-family:monospace;">
+            <div style="font-size:0.75rem; color:var(--text-muted); font-family:monospace; overflow-wrap:anywhere;">
               <span>平台: ${escapeHtml(p.platform)}</span>
               ${p.source ? `<span style="margin-left:0.8rem;">来源: ${escapeHtml({bundled:'软件内置',system:'系统 PATH',custom:'用户指定'}[p.source] || p.source)}</span>` : ''}
               ${p.path ? `<span style="margin-left:0.8rem;">路径: ${escapeHtml(p.path)}</span>` : ''}
             </div>
             ${p.errorDetail ? `<div style="margin-top:0.4rem; padding:0.4rem 0.6rem; background:rgba(239, 68, 68, 0.1); border-radius:4px; font-size:0.75rem; color:#ef4444; font-family:monospace; word-break:break-all;">报错原因: ${escapeHtml(p.errorDetail)}</div>` : ''}
-            <div style="display:flex; gap:0.5rem; margin-top:0.7rem; align-items:center; flex-wrap:wrap;">
+            ${p.internal ? '' : `<div style="display:flex; gap:0.5rem; margin-top:0.7rem; align-items:center; flex-wrap:wrap;">
               <input id="pluginPath-${escapeHtml(p.id)}" type="text" placeholder="填写 ${escapeHtml(p.id === 'axel' ? 'axel' : p.id === 'curl' ? 'curl' : 'aria2c')} 可执行文件绝对路径" style="flex:1; min-width:260px; padding:0.5rem 0.65rem; font-size:0.78rem;">
               <button class="btn btn-secondary" onclick="handleSetPluginPath('${escapeHtml(p.id)}', this)" style="font-size:0.78rem; padding:0.4rem 0.7rem;">使用此路径</button>
-            </div>
+            </div>`}
           </div>
-          <div style="display:flex; align-items:center; gap:0.5rem;">
-            ${actionBtn}
+          <div style="display:flex; align-items:center; gap:0.5rem;flex-wrap:wrap;">
+            ${['native','aria2','axel'].includes(p.id) ? `<button class="btn ${res.defaultEngine === p.id ? 'btn-secondary' : 'btn-primary'}" data-primary-engine="${p.id}" onclick="setPrimaryDownloader('${p.id}')" ${res.defaultEngine === p.id || !isOk ? 'disabled' : ''}>${res.defaultEngine === p.id ? '当前主力下载器' : '设为主力下载器'}</button>` : ''}
+            ${p.internal ? '' : actionBtn}
           </div>
         </div>
       `;
@@ -4436,3 +4441,14 @@ window.handleSetPluginPath = handleSetPluginPath;
 window.cancelExtractionDownload = cancelExtractionDownload;
 window.extractionRunCode = extractionRunCode;
 window.extractionDownloadResource = extractionDownloadResource;
+
+async function setPrimaryDownloader(engine) {
+  if (!['native', 'aria2', 'axel'].includes(engine)) return;
+  try {
+    const settings = await window.api.getSettings();
+    await window.api.saveSettings({ downloadEngineSchema: 2, downloadEngines: { ...settings.downloadEngines, http: engine, bio: 'inherit' } });
+    for (const [group, value] of Object.entries((await window.api.getSettings()).downloadEngines)) { const select = document.getElementById('engine-' + group); if (select) select.value = value; }
+    await refreshPluginsList();
+    showToast('已切换主力下载器；新任务生效，已有断点仍由原内核恢复');
+  } catch (error) { showToast('切换失败：' + error.message, 'error'); }
+}

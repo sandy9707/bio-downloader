@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 const { program } = require('commander');
-const { NativeTransfer } = require('../src/experimental/native-transfer');
+const { NativeTransfer } = require('../src/main/native-transfer');
 program.name('biodl-native').description('BioDownloader 独立候选内核；不修改正式客户端设置')
   .argument('<url>').requiredOption('-o, --output <path>').option('-j, --connections <n>', '并发连接数', '4')
   .option('--proxy <url>', '明确指定 HTTP 代理（加速模式使用现有 Mihomo）').option('--direct', '明确选择直连')
@@ -19,5 +19,5 @@ try {
   task.options.onEvent = event => { if (event.type === 'progress') { if (Date.now() - last > 1000) { last = Date.now(); process.stdout.write(JSON.stringify(event) + '\n'); } } else observer(event); };
   process.once('SIGINT', () => task.pause()); process.once('SIGTERM', () => task.pause());
   task.run().then(result => { process.exitCode = result.status === 'paused' ? 75 : 0; })
-    .catch(e => { console.error(JSON.stringify({ error: e.code || 'UNKNOWN', message: e instanceof require('../src/experimental/native-transfer').TransferError ? e.message : '系统或网络错误；已保留文件和断点' })); process.exitCode = 1; });
+    .catch(e => { console.error(JSON.stringify({ error: e.code || 'UNKNOWN', message: e instanceof require('../src/main/native-transfer').TransferError ? e.message : '系统或网络错误；已保留文件和断点' })); process.exitCode = 1; });
 } catch (e) { console.error(e.message); process.exitCode = 1; }

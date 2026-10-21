@@ -1,8 +1,8 @@
 'use strict';
 const assert = require('assert/strict'), fs = require('fs'), fsp = require('fs/promises'), path = require('path'), os = require('os'), http = require('http'), crypto = require('crypto');
 const { spawn } = require('child_process');
-const { NativeTransfer } = require('../src/experimental/native-transfer');
-const { Journal } = require('../src/experimental/native-transfer/journal');
+const { NativeTransfer } = require('../src/main/native-transfer');
+const { Journal } = require('../src/main/native-transfer/journal');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'biodl-native-中文-'));
 const data = crypto.randomBytes(2 * 1024 * 1024 + 37), blockSize = 65536;
@@ -13,7 +13,7 @@ const server = http.createServer((req, res) => {
   const m = /^bytes=(\d+)-(\d+)$/.exec(req.headers.range || '');
   if (!m) { res.writeHead(400); res.end(); return; }
   const start = +m[1], end = +m[2], probe = end === start;
-  const index = Math.floor(start / blockSize), key = `${start}-${end}`, count = (attempts.get(key) || 0) + 1; attempts.set(key, count);
+  const index = Math.floor((start + 32) / blockSize), key = `${start}-${end}`, count = (attempts.get(key) || 0) + 1; attempts.set(key, count);
   requests.push({ start, end, ifMatch: req.headers['if-match'], url: req.url });
   if (!probe && mode === 'busy' && count <= 2) { res.writeHead(429, { 'Retry-After': '0' }); res.end(); return; }
   if (!probe && mode === 'unavailable') { res.writeHead(503); res.end(); return; }
@@ -30,7 +30,7 @@ const server = http.createServer((req, res) => {
   function send() {
     if (res.destroyed) return;
     if (mode === 'hold') { timer = setTimeout(send, 50); return; }
-    const next = Math.min(end + 1, offset + (offset === start && mode === 'slow' ? 1024 : 16384)); res.write(data.subarray(offset, next)); offset = next;
+    const next = Math.min(end + 1, offset + (offset === start && mode === 'slow' ? 1024 : 16384)); const chunk = Buffer.from(data.subarray(offset, next)); if (mode === 'boundary' && start > 0 && offset === start) chunk[0] ^= 1; res.write(chunk); offset = next;
     if (offset === end + 1) res.end(); else timer = setTimeout(send, mode === 'slow' ? 15 + index % 3 : 1);
   }
   send();
@@ -54,7 +54,7 @@ async function pausePartial(name, extra = {}) {
 }
 async function childTask(name, killAfterCommit = false) {
   const options = { url: base + '/file', filename: path.join(temp, name), proxy: false, blockSize, connections: 4, lockStaleMs: 2000, progressIntervalMs: 10 };
-  const source = `const {NativeTransfer}=require('./src/experimental/native-transfer');const options=JSON.parse(process.argv[1]);const t=new NativeTransfer({...options,onEvent:e=>{if(e.type==='piece')process.stdout.write('COMMIT '+e.committedBytes+'\\n')}});t.run().then(()=>process.exit(0)).catch(e=>{process.stderr.write(e.code||e.message);process.exit(1)});`;
+  const source = `const {NativeTransfer}=require('./src/main/native-transfer');const options=JSON.parse(process.argv[1]);const t=new NativeTransfer({...options,onEvent:e=>{if(e.type==='piece')process.stdout.write('COMMIT '+e.committedBytes+'\\n')}});t.run().then(()=>process.exit(0)).catch(e=>{process.stderr.write(e.code||e.message);process.exit(1)});`;
   return new Promise((resolve, reject) => {
     child = spawn(process.execPath, ['-e', source, JSON.stringify(options)], { cwd: path.join(__dirname, '..'), stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '', killed = false; const timer = setTimeout(() => { child.kill('SIGKILL'); reject(Error('Child fixture timed out')); }, 30000);
@@ -93,7 +93,7 @@ const deadline = setTimeout(() => { console.error('NATIVE_TEST_TIMEOUT'); child?
     await pausePartial('repair.bin'); const part = path.join(temp, 'repair.bin.biodl-part');
     const fd = fs.openSync(part, 'r+'); fs.writeSync(fd, Buffer.from('corrupt'), 0, 7, 1); fs.closeSync(fd);
     reset(); const events = []; await task('repair.bin', { onEvent: e => events.push(e) }).run(); equalFile('repair.bin');
-    assert(events.some(e => e.type === 'repair' && e.block === 0)); assert(requests.some(r => r.start === 0 && r.end === blockSize - 1));
+    assert(events.some(e => e.type === 'repair' && e.block === 0)); assert(requests.some(r => r.start === 0 && r.end === blockSize + 31));
   });
   await test('real process kill recovers durable journal without overwriting committed blocks', async () => {
     reset('slow'); const killed = await childTask('crash.bin', true); assert(killed.killed);
@@ -116,7 +116,7 @@ const deadline = setTimeout(() => { console.error('NATIVE_TEST_TIMEOUT'); child?
     const raw = fs.readFileSync(p); raw[15] ^= 1; fs.writeFileSync(p, raw); reset();
     await assert.rejects(task('journal-bad.bin').run(), e => e.code === 'JOURNAL_CORRUPT'); assert(!fs.existsSync(path.join(temp, 'journal-bad.bin')));
   });
-  for (const [fault, code] of [['range','RANGE_INVALID'],['ignore-range','RANGE_INVALID'],['change','SOURCE_CHANGED'],['encoding','ENCODING_CHANGED'],['weak','VALIDATOR_REQUIRED']]) {
+  for (const [fault, code] of [['boundary','BOUNDARY_MISMATCH'],['range','RANGE_INVALID'],['ignore-range','RANGE_INVALID'],['change','SOURCE_CHANGED'],['encoding','ENCODING_CHANGED'],['weak','VALIDATOR_REQUIRED']]) {
     await test('reject invalid source: ' + fault, async () => { reset(fault); await assert.rejects(task(fault + '.bin').run(), e => e.code === code); assert(!fs.existsSync(path.join(temp, fault + '.bin'))); });
   }
   await test('source change after restart preserves old bytes', async () => {
@@ -159,6 +159,13 @@ const deadline = setTimeout(() => { console.error('NATIVE_TEST_TIMEOUT'); child?
     try{await assert.rejects(task('journal-full.bin').run(),e=>e.code==='ENOSPC')}finally{Journal.prototype.append=append}
     assert(!fs.existsSync(path.join(temp,'journal-full.bin')));assert(!fs.existsSync(path.join(temp,'journal-full.bin.lock')));
     await task('journal-full.bin').run();equalFile('journal-full.bin');
+  });
+  await test('unsupported publication filesystem fails before downloading file data', async () => {
+    reset(); const link = fsp.link;
+    fsp.link = async () => { const error = new Error('fixture unsupported links'); error.code = 'EOPNOTSUPP'; throw error; };
+    try { await assert.rejects(task('unsupported.bin').run(), error => error.code === 'FILESYSTEM_UNSUPPORTED'); }
+    finally { fsp.link = link; }
+    assert.equal(requests.length, 0); assert(!fs.existsSync(path.join(temp, 'unsupported.bin.biodl-part')));
   });
   await test('pause interrupts long retry sleep promptly', async()=>{
     reset('unavailable');let t;const started=Date.now();

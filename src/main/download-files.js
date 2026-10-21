@@ -1,7 +1,7 @@
 const fs = require('fs'), path = require('path'), crypto = require('crypto');
 const { bioSource } = require('./bio-transfer-guard');
 const active = new Set();
-const suffixes = ['', '.st', '.aria2', '.biodl.json', '.biodl-verification.json'];
+const suffixes = ['', '.st', '.aria2', '.biodl.json', '.biodl-verification.json', '.biodl-part', '.biodl-journal'];
 const sourceKey = url => crypto.createHash('sha256').update(bioSource(url) || String(url || '')).digest('hex');
 function claimFile(filename) {
   const key = process.platform === 'win32' ? path.resolve(filename).toLowerCase() : path.resolve(filename);
@@ -9,7 +9,7 @@ function claimFile(filename) {
   active.add(key);
   return () => active.delete(key);
 }
-function hasResume(filename) { return fs.existsSync(filename + '.st') || fs.existsSync(filename + '.aria2'); }
+function hasResume(filename) { return fs.existsSync(filename + '.st') || fs.existsSync(filename + '.aria2') || fs.existsSync(filename + '.biodl-part') || (!fs.existsSync(filename) && fs.existsSync(filename + '.biodl-journal')); }
 async function priorMismatch(filename, url) {
   if (!fs.existsSync(filename) || hasResume(filename)) return false;
   for (const suffix of ['.biodl-verification.json', '.biodl.json']) {

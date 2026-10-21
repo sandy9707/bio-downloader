@@ -1677,6 +1677,8 @@
           </button>
         </div>
 
+        <p class="settings-hint">选择主力下载器用于新任务。已有断点继续使用原内核；源站或磁盘不支持专属内核时，仅在尚未创建断点的情况下使用 aria2c 兼容下载。</p>
+        <button class="btn btn-secondary" onclick="switchTab('download-engines-tab')" style="margin-bottom:1rem;">按下载类型配置</button>
         <div id="pluginsListContainer" style="display:flex; flex-direction:column; gap:1rem;">
           <!-- 动态渲染插件卡片 -->
         </div>
@@ -1697,8 +1699,8 @@
       <div class="card" style="max-width:860px;">
         <h3 style="margin:0 0 0.5rem;">按下载类型分配</h3>
         <p class="settings-hint">按下载类型选择引擎，修改后自动保存，仅对新任务生效。</p>
-        <div class="engine-row"><div><label for="engine-http"><strong>普通 HTTP / HTTPS</strong></label><p>适用于大多数直接下载链接。</p></div><select id="engine-http" onchange="saveDownloadEngines()"><option value="aria2">aria2c（默认）</option><option value="axel">Axel</option></select></div>
-        <div class="engine-row"><div><label for="engine-bio"><strong>EBI / ENA / NCBI 静态文件</strong></label><p>为生信数据选择下载器，完整性保护保持开启。</p></div><select id="engine-bio" onchange="saveDownloadEngines()"><option value="inherit">跟随普通下载</option><option value="aria2">aria2c</option><option value="axel">Axel</option></select></div>
+        <div class="engine-row"><div><label for="engine-http"><strong>普通 HTTP / HTTPS</strong></label><p>适用于大多数直接下载链接。</p></div><select id="engine-http" onchange="saveDownloadEngines()"><option value="native">BioDownloader（默认）</option><option value="aria2">aria2c</option><option value="axel">Axel</option></select></div>
+        <div class="engine-row"><div><label for="engine-bio"><strong>EBI / ENA / NCBI 静态文件</strong></label><p>为生信数据选择下载器，完整性保护保持开启。</p></div><select id="engine-bio" onchange="saveDownloadEngines()"><option value="inherit">跟随普通下载</option><option value="native">BioDownloader</option><option value="aria2">aria2c</option><option value="axel">Axel</option></select></div>
         <div class="engine-row"><div><label for="engine-ftp"><strong>FTP</strong></label><p>普通 FTP 文件传输。</p></div><select id="engine-ftp" onchange="saveDownloadEngines()"><option value="aria2">aria2c（默认）</option><option value="curl">curl</option></select></div>
         <div class="engine-row"><div><label for="engine-sftp"><strong>SFTP</strong></label><p>通过 SSH 加密的文件传输。</p></div><select id="engine-sftp" onchange="saveDownloadEngines()"><option value="aria2">aria2c（默认）</option><option value="curl">curl</option></select></div>
         <div class="engine-row"><div><label for="engine-ftps"><strong>FTPS</strong></label><p>通过 TLS 加密的 FTP 传输。</p></div><select id="engine-ftps" onchange="saveDownloadEngines()"><option value="curl">curl</option></select></div>
@@ -1842,7 +1844,7 @@
               <span class="switch-slider"></span>
             </label>
           </div>
-          <p class="settings-hint">默认自动检查文件大小与格式；受支持的生信链接还会检查分段、源文件变化及最多 32 处抽样。MD5 不一致时保留文件并提示核对。</p>
+          <p class="settings-hint">默认自动检查文件大小与格式。专属内核核对源文件版本、每块范围和相邻块重叠内容；aria2c / Axel 保留原生信分段与抽样保护。MD5 不一致时保留文件并提示核对。</p>
           <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem;">对下一批任务生效。已有文件请到「传输列表 → 已完成」，点击文件旁的「校验 MD5」或「校验未核验文件 MD5」。本地校验不重复下载、不扣下载流量。抽样不等于全文校验，不能排除未抽中位置的损坏；MD5 也作为参考信息使用。重新添加原链接时，已确认 MD5 不一致的文件会保留原件并重新下载一次；也可在传输列表一键重下。不重复下载尚未校验的文件。</div>
         </div>
 
@@ -1914,7 +1916,7 @@
         <span>🗑</span> <span id="deleteTransferModalTitle">删除下载任务</span>
       </h3>
       <p style="font-size: 0.9rem; color: var(--text-color); margin-bottom: 0.8rem; line-height: 1.5;">
-        请选择删除方式。如果选择同时删除本地文件，将永久删除已下载内容以及未完成的断点临时文件（如 <code>.st</code>、<code>.aria2</code>）。
+        请选择删除方式。如果选择同时删除本地文件，将永久删除已下载内容以及未完成的断点临时文件（如 <code>.st</code>、<code>.aria2</code>、<code>.biodl-part</code> 和 <code>.biodl-journal</code>）。
       </p>
       <div style="background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.7rem 0.9rem; margin-bottom: 1.2rem; font-size: 0.82rem;">
         <div style="font-weight: 700; color: var(--text-primary); margin-bottom: 0.3rem; word-break: break-all;" id="deleteTransferName">-</div>

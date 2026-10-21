@@ -2,6 +2,7 @@ const axios = require('axios');
 const fs = require('fs'), os = require('os'), path = require('path');
 const { spawn } = require('child_process');
 const { ariaArgs, ariaEnvironment, ariaWorkingDirectory } = require('./download-engines');
+const { startNativeDownload } = require('./native-download');
 const { createBioTransferGuard } = require('./bio-transfer-guard');
 const duration = ms => Math.max(250, Math.min(30000, Number(ms) || 10000));
 function meter(onProgress, started) {
@@ -30,8 +31,19 @@ async function measureNetwork({ url, timeoutMs, onProgress = () => {} }) {
 async function measureDownloader({ url, axelBin, binary = axelBin, engine = 'axel', proxy = false, timeoutMs, expectedSizeMB = 200, onProgress = () => {} }) {
   const started = Date.now(), counter = meter(onProgress, started);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'biodl-speedtest-'));
+  let nativeTask;
   let guard, proc, timer, stopped = false, received = 0;
   try {
+    if (engine === 'native') {
+      nativeTask = startNativeDownload({ url, filename: path.join(dir, 'sample.bin'), proxy, connections: 4,
+        timeoutMs: Math.min(5000, duration(timeoutMs)) }, event => {
+        if (event.type === 'progress') { const delta = Math.max(0, event.networkBytes - received); received = event.networkBytes; counter.add(delta); }
+        if (received >= (Number(expectedSizeMB) || 200) * 1024 * 1024) stop();
+      });
+      timer = setTimeout(stop, duration(timeoutMs));
+      try { await nativeTask.promise; } catch (error) { if (!stopped) throw error; }
+      return counter.result();
+    }
     // Reuse the real range-checked download path. Count network chunks instead of
     // sparse/preallocated file length, which can be the full file immediately.
     guard = await createBioTransferGuard({ url, engine, filename: path.join(dir, 'sample.bin'), proxy,
@@ -56,6 +68,6 @@ async function measureDownloader({ url, axelBin, binary = axelBin, engine = 'axe
     if (guard) await guard.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
-  function stop() { if (!stopped && proc) { stopped = true; proc.kill('SIGKILL'); } }
+  function stop() { if (nativeTask && !stopped) { stopped = true; nativeTask.cancel(); } if (!stopped && proc) { stopped = true; proc.kill('SIGKILL'); } }
 }
 module.exports = { measureNetwork, measureDownloader };

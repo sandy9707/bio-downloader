@@ -3,7 +3,8 @@ name: Build & Release
 on:
   push:
     tags:
-      - 'v*'          # 推送 v1.0.0 这样的 tag 时触发
+      - 'v*'
+      - '!v*-preview*' # Preview publishes the already-validated workflow_dispatch artifacts.
   workflow_dispatch:
     inputs:
       platform:
@@ -40,6 +41,9 @@ jobs:
       - name: 传输记录、恢复和操作系统暂停回归
         run: npm test
 
+      - name: 专属内核 2 GiB、并发、暂停和主进程强杀恢复
+        run: node scripts/check-native-app.js --stress
+
       - name: 实际桌面批量按钮与手动 MD5 校验
         run: npm run test:desktop
 
@@ -55,6 +59,7 @@ jobs:
             .evidence/download-progress-*.json
             .evidence/progress-*.png
             .evidence/settings-*.png
+            .evidence/native-*.json
           include-hidden-files: true
 
       - name: 依据 Git Tag 同步 package.json 版本号
@@ -104,6 +109,9 @@ jobs:
       - name: 传输记录、恢复和操作系统暂停回归
         run: npm test
 
+      - name: 专属内核 2 GiB、并发、暂停和主进程强杀恢复
+        run: node scripts/check-native-app.js --stress
+
       - name: 实际桌面批量按钮与手动 MD5 校验
         run: npm run test:desktop
 
@@ -119,6 +127,7 @@ jobs:
             .evidence/download-progress-*.json
             .evidence/progress-*.png
             .evidence/settings-*.png
+            .evidence/native-*.json
           include-hidden-files: true
 
       - name: 依据 Git Tag 同步 package.json 版本号
@@ -139,6 +148,11 @@ jobs:
         run: npm run dist -- --win
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: 从 Windows 成品 app.asar 运行下载与插件测试
+        run: npm run test:desktop
+        env:
+          BIODL_TEST_ASAR: dist/win-unpacked/resources/app.asar
 
       - name: 上传 Windows 安装包
         uses: actions/upload-artifact@v4
@@ -168,6 +182,8 @@ jobs:
         run: bash scripts/prepare-linux-aria.sh
       - name: Linux 核心、测速与 Web 桥接回归
         run: npm test
+      - name: 专属内核 2 GiB、并发、暂停和主进程强杀恢复
+        run: node scripts/check-native-app.js --stress
       - name: 完整 EBI 下载及独立 MD5
         run: node scripts/check-live-ebi-download.js
       - name: 保存 Linux 真实下载结果
@@ -179,6 +195,7 @@ jobs:
             .evidence/download-progress-*.json
             .evidence/progress-*.png
             .evidence/settings-*.png
+            .evidence/native-*.json
           include-hidden-files: true
       - name: 保持旧服务器 glibc 2.17 运行时兼容
         run: |
@@ -278,4 +295,4 @@ jobs:
             2. 在「下载中心」选择数据类型（SRA/EBI/GEO/直链），输入对应编号或链接，点击"检验下载大小"后即可享受 16 线程加速下载。
           files: ./release-files/*
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, 'preview') }}

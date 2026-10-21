@@ -1,7 +1,7 @@
 'use strict';
 // Public fixtures only; no app account, subscription, settings or billing calls.
 const fs=require('fs'),os=require('os'),path=require('path'),crypto=require('crypto'),axios=require('axios'),assert=require('assert/strict');
-const {NativeTransfer}=require('../src/experimental/native-transfer');
+const {NativeTransfer}=require('../src/main/native-transfer');
 const {parseEnaReport}=require('../src/main/download-integrity');
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'biodl-native-live-中文-'));
 const results=[];let task;
