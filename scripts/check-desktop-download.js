@@ -2,7 +2,7 @@ const fs=require('fs'),path=require('path'),os=require('os'),assert=require('ass
 const root=process.cwd(),appRoot=process.env.BIODL_TEST_ASAR?path.resolve(process.env.BIODL_TEST_ASAR):root,dir=fs.mkdtempSync(path.join(os.tmpdir(),'biodl-electron-batch-'));process.env.BIODL_DATA_DIR=path.join(dir,'profile');
 fs.mkdirSync(process.env.BIODL_DATA_DIR,{recursive:true});fs.writeFileSync(path.join(process.env.BIODL_DATA_DIR,'settings.json'),JSON.stringify({loggingEnabled:true,token:null}));
 const {app,BrowserWindow,ipcMain,session}=require('electron');app.setAppPath(appRoot);app.getVersion=()=>require(path.join(appRoot,'package.json')).version;
-if(appRoot!==root){Object.defineProperty(app,'isPackaged',{value:true});process.resourcesPath=path.dirname(appRoot);}
+if(appRoot!==root){Object.defineProperty(app,'isPackaged',{value:true});Object.defineProperty(process,'resourcesPath',{value:path.dirname(appRoot)});assert.equal(process.resourcesPath,path.dirname(appRoot));}
 const axios=require(path.join(appRoot,'node_modules/axios/dist/node/axios.cjs'));axios.get=async()=>({data:{success:false,error:'Offline test fixture'}});let charges=0;axios.post=async(url)=>{assert(url.endsWith('/api/user/consume'));charges++;return {data:{success:true}}};
 const mode='fixed';
 require(path.join(appRoot,'main.js'));
@@ -73,6 +73,7 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  await new Promise(r=>setTimeout(r,200));
  fs.writeFileSync(path.join(root,'.evidence','desktop-'+process.platform+'.png'),(await win.webContents.capturePage()).toPNG());
  await win.webContents.executeJavaScript(`switchTab('plugins-tab');refreshPluginsList()`);
+ if(appRoot!==root){const bundled=await win.webContents.executeJavaScript(`window.api.getPluginStatus().then(r=>r.plugins.filter(p=>['axel','aria2'].includes(p.id)).map(p=>({id:p.id,source:p.source,usable:p.usable})))`);assert.equal(bundled.length,2);assert(bundled.every(p=>p.source==='bundled'&&p.usable),JSON.stringify(bundled));}
  for (const engine of ['axel','aria2','native']) {
   await win.webContents.executeJavaScript(`document.querySelector('[data-primary-engine="${engine}"]').click()`);
   for(let i=0;i<50;i++){await new Promise(r=>setTimeout(r,100));if(await win.webContents.executeJavaScript(`document.querySelector('[data-primary-engine="${engine}"]')?.disabled===true`))break;}
