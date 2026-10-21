@@ -76,6 +76,14 @@ const deadline = setTimeout(() => { console.error('NATIVE_TEST_TIMEOUT'); child?
     assert(requests.filter(r => r.end > r.start).every(r => r.ifMatch === etag));
     assert(!fs.existsSync(path.join(temp, '并行.bin.biodl-part')));
   });
+  await test('interrupted publication cleans only its own verified hardlink', async () => {
+    reset();await task('publication.bin').run();const output=path.join(temp,'publication.bin'),part=output+'.biodl-part';
+    // Recreate the exact filesystem state between publishing and removing part.
+    fs.linkSync(output,part);const recovered=await task('publication.bin').run();assert(recovered.recovered);assert(!fs.existsSync(part));equalFile('publication.bin');
+    const events=[];await task('publication.bin',{onEvent:e=>events.push(e)}).run();assert(events.find(e=>e.type==='resume').fast);
+    fs.writeFileSync(part,'unrelated partial bytes');await assert.rejects(task('publication.bin').run(),e=>e.code==='PUBLISH_CONFLICT');
+    assert.equal(fs.readFileSync(part,'utf8'),'unrelated partial bytes');equalFile('publication.bin');
+  });
   await test('five resets per block recover automatically; no three-error whole-file abort', async () => {
     reset('reset'); const events = []; await task('reset.bin', { onEvent: e => events.push(e) }).run(); equalFile('reset.bin');
     assert(events.some(e => e.type === 'retry' && e.attempt >= 5)); assert(events.some(e => e.type === 'retry' && e.connections === 1));

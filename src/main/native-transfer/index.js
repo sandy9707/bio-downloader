@@ -209,6 +209,17 @@ class NativeTransfer {
         // absent (crash during publication) or changed, verify every local block.
         this.publishedFile = true; await this.restore();
         if (this.completed.size !== this.blockCount) throw new TransferError('OUTPUT_CHANGED', '已完成文件被修改，保留原件等待处理');
+        // Publication can be interrupted between link(destination) and
+        // unlink(part). Only remove our second name for the SAME verified inode;
+        // never discard an unrelated partial file that appeared beside it.
+        if (await exists(this.part)) {
+          const [output, part] = await Promise.all([this.data.stat({ bigint: true }), fs.stat(this.part, { bigint: true })]);
+          if (output.ino === 0n || output.dev !== part.dev || output.ino !== part.ino) throw new TransferError('PUBLISH_CONFLICT', '完成文件旁存在无法确认来源的临时文件，已保留两者');
+          await fs.unlink(this.part); await syncDirectory(parent);
+        }
+        const publication = this.journal.records.filter(r => r.type === 'published').at(-1);
+        const currentFile = fingerprint(await this.data.stat());
+        if (!same(publication?.file, currentFile)) await this.journal.append({ type: 'published', file: currentFile });
         this.event('complete', { size: this.meta.size, recovered: true, percentage: 100, remoteChecksumVerified: false }); return { status: 'completed', size: this.meta.size, recovered: true, remoteChecksumVerified: false, transferId: this.transferId, receiptAccounts: recordsReceiptAccounts(this.journal.records) };
       }
       await checkPublicationSupport(parent);
