@@ -9,7 +9,7 @@ process.env.BIODL_DATA_DIR = path.join(temp, 'profile');
 const axios = require('axios'), charges = []; axios.post = async (_url, body) => { charges.push(body.bytes); return {data:{success:true}}; };
 const main = require('../main'), MiB = 1048576, pattern = crypto.randomBytes(MiB), sockets = new Set();
 const sizes = { '/large': (stress ? 2 * 1024 : 32) * MiB + 17, '/small1': 8 * MiB + 9, '/small2': 8 * MiB + 3, '/cancel': 16 * MiB + 37, '/weak': 2 * MiB + 7, '/kill': 64 * MiB + 11 };
-let etag = '"app-generation-1"', requests = 0, child;
+let etag = '"app-generation-1"', requests = 0, child, holdCancel = true;
 function bytesAt(start, length) {
   const data = Buffer.allocUnsafe(length);
   for (let offset = 0; offset < length;) { const local = (start + offset) % MiB, n = Math.min(length - offset, MiB - local); pattern.copy(data, offset, local, local + n); offset += n; }
@@ -33,6 +33,10 @@ const server = http.createServer((req, res) => {
   let offset = start, timer;
   const send = () => {
     if (res.destroyed) return;
+    // Keep this transfer open until the test cancels it. A fast Linux runner
+    // can finish 16 MiB before the first 250 ms UI tick; waiting for a tick
+    // without this barrier would miss the cancellation window entirely.
+    if (route === '/cancel' && holdCancel && offset > start) { timer = setTimeout(send, 10); return; }
     const n = Math.min(128 * 1024, end + 1 - offset); res.write(bytesAt(offset, n)); offset += n;
     if (offset > end) res.end(); else timer = setTimeout(send, route === '/kill' ? 20 : stress && route === '/large' ? 15 : 6);
   };
@@ -69,7 +73,7 @@ const started = Date.now(), deadline = setTimeout(() => { child?.kill('SIGKILL')
   const largeHash = await verify('/large'); await verify('/small1'); await verify('/small2');
   const count = charges.length; await download([file('/large',4)]); assert.equal(final(4).status,'completed'); assert.equal(charges.length,count,'completed recovery must not charge again');
   const cancelled = download([file('/cancel',5)]); await until(()=>progress.some(e=>e.index===5&&e.receivedBytes>0));
-  await main.callIpcHandler('cancel-download',5); await cancelled; assert.equal(final(5).status,'cancelled'); assert.equal(charges.length,count);
+  await main.callIpcHandler('cancel-download',5); await cancelled; holdCancel=false; assert.equal(final(5).status,'cancelled'); assert.equal(charges.length,count);
   etag='"app-generation-2"'; await download([file('/cancel',6)]); assert.equal(final(6).status,'failed'); assert.match(final(6).speed,/版本/); assert.equal(charges.length,count);
   etag='"app-generation-1"'; await main.callIpcHandler('save-settings',{downloadEngines:{http:'aria2',bio:'inherit'}});
   await download([file('/cancel',7)]); assert.equal(final(7).status,'completed'); assert.equal(final(7).engine,'native','native checkpoint pins engine despite preference change'); assert.equal(charges.length,count+1,'completed-after-cancel recovery reports consumption once'); await verify('/cancel');
