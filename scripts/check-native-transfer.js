@@ -97,7 +97,12 @@ const deadline = setTimeout(() => { console.error('NATIVE_TEST_TIMEOUT'); child?
   });
   await test('real process kill recovers durable journal without overwriting committed blocks', async () => {
     reset('slow'); const killed = await childTask('crash.bin', true); assert(killed.killed);
-    await sleep(2400); reset(); const events = [];
+    // proper-lockfile's first timestamp is rounded up to the next second when
+    // probing filesystem precision. Measure its expiry rather than assuming
+    // 2400 ms after process exit is sufficient on every platform.
+    const lockStat = await fsp.stat(path.join(temp, 'crash.bin.lock'));
+    await sleep(Math.max(0, lockStat.mtimeMs + 2000 - Date.now()) + 150);
+    reset(); const events = [];
     await task('crash.bin', { onEvent: e => events.push(e) }).run(); equalFile('crash.bin');
     const resumed = events.find(e => e.type === 'resume'); assert(resumed.committedBytes > 0); assert(!resumed.fast); assert(resumed.verifiedBytes > 0);
     assert(requests.filter(r => r.end > r.start).length < Math.ceil(data.length / blockSize));
