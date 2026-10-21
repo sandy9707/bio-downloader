@@ -9,6 +9,9 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "test:desktop": "electron scripts/check-desktop-download.js",
+    "test:native": "node scripts/check-native-transfer.js",
+    "test:native:live": "node scripts/check-native-transfer-live.js",
+    "native:download": "node scripts/native-download.js",
     "build:linux": "node scripts/sync-linux-web.js && node scripts/build-linux.js"
   },
   "repository": {
@@ -18,7 +21,8 @@
   "dependencies": {
     "axios": "^1.6.8",
     "cheerio": "^1.0.0-rc.12",
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "proper-lockfile": "^4.1.2"
   },
   "devDependencies": {
     "electron": "30.5.1",
