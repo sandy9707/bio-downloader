@@ -10,6 +10,7 @@ const sha = x => crypto.createHash('sha256').update(x).digest('hex');
 const evidence = [], sockets = new Set();
 let mode = 'good', requests = [], attempts = new Map(), busy = 0, maxBusy = 0, etag = '"generation-1"';
 const server = http.createServer((req, res) => {
+  if(req.url.endsWith('/redirect') || req.url.endsWith('/downgrade')) { res.writeHead(302,{Location:(req.url.endsWith('/downgrade')?'http:':'https:')+'//not-a-real-host.invalid/file'});res.end();return; }
   const m = /^bytes=(\d+)-(\d+)$/.exec(req.headers.range || '');
   if (!m) { res.writeHead(400); res.end(); return; }
   const start = +m[1], end = +m[2], probe = end === start;
@@ -131,6 +132,23 @@ const deadline = setTimeout(() => { console.error('NATIVE_TEST_TIMEOUT'); child?
     assert(requests.every(r => r.url.startsWith('http://not-a-real-host.invalid/')));
     const probe = http.createServer(); await new Promise(r => probe.listen(0,'127.0.0.1',r)); const port=probe.address().port; await new Promise(r=>probe.close(r)); reset();
     await assert.rejects(task('no-fallback.bin',{proxy:{protocol:'http',host:'127.0.0.1',port},retryBudgetMs:30}).run(),e=>e.code==='NETWORK_WAIT');assert.equal(requests.length,0);
+  });
+  await test('HTTPS CDN redirects stay on the HTTP proxy; TLS downgrade is rejected', async () => {
+    reset(); const cert=fs.readFileSync(path.join(__dirname,'fixtures/native-tls/test-cert.pem'));
+    const tlsSockets=new Set(), tls=require('https').createServer({cert,key:fs.readFileSync(path.join(__dirname,'fixtures/native-tls/test-key.pem'))},(req,res)=>{
+      if(req.url==='/redirect'||req.url==='/downgrade'){res.writeHead(302,{Location:(req.url==='/downgrade'?'http:':'https:')+'//localhost:'+tls.address().port+'/file'});res.end();return;}
+      server.emit('request',req,res);
+    });
+    tls.on('connection',s=>{tlsSockets.add(s);s.on('close',()=>tlsSockets.delete(s));});
+    await new Promise(r=>tls.listen(0,'127.0.0.1',r));let tunnels=0;
+    const connect=(req,socket,head)=>{assert.equal(req.url,'localhost:'+tls.address().port);tunnels++;const upstream=require('net').connect(tls.address().port,'127.0.0.1',()=>{socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');if(head.length)upstream.write(head);socket.pipe(upstream).pipe(socket);});socket.on('error',()=>upstream.destroy());upstream.on('error',()=>socket.destroy());socket.on('close',()=>upstream.destroy());};
+    server.on('connect',connect);const proxy={protocol:'http',host:'127.0.0.1',port:server.address().port};
+    try {
+      const good=task('proxy-redirect.bin',{url:'https://localhost:'+tls.address().port+'/redirect',proxy});good.httpsAgent.options.ca=cert;
+      await good.run();equalFile('proxy-redirect.bin');assert(tunnels>0);assert(requests.length>1);
+      reset();const bad=task('proxy-downgrade.bin',{url:'https://localhost:'+tls.address().port+'/downgrade',proxy});bad.httpsAgent.options.ca=cert;
+      await assert.rejects(bad.run(),/HTTPS/);assert.equal(requests.length,0);assert(!fs.existsSync(path.join(temp,'proxy-downgrade.bin')));
+    } finally {server.off('connect',connect);for(const s of tlsSockets)s.destroy();await new Promise(r=>tls.close(r));}
   });
   await test('cross-process target lock prevents simultaneous writers', async () => {
     reset('slow'); const t = task('lock.bin'); let started;

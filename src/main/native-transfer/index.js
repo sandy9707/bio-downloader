@@ -77,7 +77,10 @@ class NativeTransfer {
         signal: controller.signal, timeout: this.options.timeoutMs, maxRedirects: 5, decompress: false,
         httpAgent: this.httpAgent, httpsAgent: this.httpsAgent, validateStatus: () => true,
         headers: { Range: `bytes=${start}-${end}`, 'Accept-Encoding': 'identity', ...(meta ? { 'If-Match': meta.etag } : {}) },
-        beforeRedirect: opt => { if (this.url.startsWith('https:') && opt.protocol !== 'https:') throw new TransferError('TLS_DOWNGRADE', '拒绝 HTTPS 降级'); }
+        // Axios rewrites opt.protocol to the HTTP proxy's protocol. href keeps
+        // the real redirect target; checking protocol would reject safe HTTPS
+        // CDN redirects whenever the user's Mihomo accelerator is enabled.
+        beforeRedirect: opt => { if (this.url.startsWith('https:') && new URL(opt.href).protocol !== 'https:') throw new TransferError('TLS_DOWNGRADE', '拒绝 HTTPS 降级'); }
       });
       const h = response.headers;
       if (response.status === 429 || response.status >= 500) {
