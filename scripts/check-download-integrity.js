@@ -90,7 +90,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   engine.ensureBinaries();
   assert.equal(Boolean((await engine.callIpcHandler('get-settings')).deepIntegrityCheck), false, 'full MD5 must be opt-in');
-  await engine.callIpcHandler('save-settings', { loggingEnabled: true, deepIntegrityCheck: true });
+  await engine.callIpcHandler('save-settings', { loggingEnabled: true, deepIntegrityCheck: true, downloadEngines: {http: 'aria2'} });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   async function check(name, { size = good.length, expected = md5(good), existing, url = `${base}/${name}`, status = 'failed', verification, charged = 0 } = {}) {

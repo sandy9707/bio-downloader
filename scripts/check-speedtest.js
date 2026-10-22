@@ -13,7 +13,7 @@ const server = http.createServer((req,res)=>{
  if(req.url==='/html'){res.writeHead(200,{'Content-Type':'text/html'});res.end('<html>error</html>');return;}
  const range = /bytes=(\d+)-(\d*)/.exec(req.headers.range||'');
  let start=range?+range[1]:0,end=range&&range[2]?+range[2]:size-1;
- res.writeHead(range?206:200,{'Content-Length':end-start+1,'Accept-Ranges':'bytes','Content-Range':`bytes ${start}-${end}/${size}`,'Content-Type':'application/octet-stream'});
+ res.writeHead(range?206:200,{'Content-Length':end-start+1,'Accept-Ranges':'bytes','Content-Range':`bytes ${start}-${end}/${size}`,'Content-Type':'application/octet-stream',ETag:'"speed-fixture"'});
  function send(){if(res.destroyed)return;const n=Math.min(8192,end-start+1);if(n<=0){res.end();return;}if(req.url.includes('/axel')&&end-start>0)payloadBytes+=n;res.write(Buffer.alloc(n,42));start+=n;timer=setTimeout(send,10);}
  let timer;res.on('close',()=>clearTimeout(timer));send();
 });
@@ -26,7 +26,7 @@ const server = http.createServer((req,res)=>{
  const blocked=await main.callIpcHandler('speedtest-downloader',{});assert.equal(blocked.success,false);assert.match(blocked.error,/开启加速器/);
  const plugins=(await main.callIpcHandler('plugin-get-status')).plugins;
  let downloaded;
- for (const engine of ['aria2','axel']) {
+ for (const engine of ['native','aria2','axel']) {
    const binary=plugins.find(p=>p.id===engine).path;
    progress=0; payloadBytes=0;
    downloaded=await measureDownloader({url:'http://unresolvable.example.invalid/axel',engine,binary,proxy:{protocol:'http',host:'127.0.0.1',port:server.address().port},timeoutMs:1100,onProgress:()=>progress++});

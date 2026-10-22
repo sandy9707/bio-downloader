@@ -164,6 +164,7 @@ async function close(guard) { await guard.close(); guards.delete(guard); }
     await new Promise(resolve => recoveringProxy.close(resolve));
   }
 
+  await engine.callIpcHandler('save-settings', { downloadEngines: { http: 'aria2', bio: 'inherit' } });
   // Real main IPC: completion, dedup, failed response, no consumption for skipped/bad files.
   const axios = require('axios'), charges = [], events = [];
   axios.post = async (_url, body) => { charges.push(body.bytes); return { data: { success: true } }; };

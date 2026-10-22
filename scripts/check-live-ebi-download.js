@@ -1,5 +1,5 @@
 // Release gate: a whole public ENA file through the actual main IPC and bundled
-// aria2, with an independent full MD5 afterward. No login or real billing.
+// native range engine, with an independent full MD5 afterward. No login or real billing.
 const assert = require('node:assert/strict');
 const fs = require('fs'), os = require('os'), path = require('path'), crypto = require('crypto');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'biodl-live-ebi-'));
@@ -10,10 +10,15 @@ axios.post = async (url, body) => {
   charges.push(body.bytes); return { data: { success: true } };
 };
 const engine = require('../main');
-let final;
+let final, lastProgress = null, lastStatus = null;
 engine.eventBus.on('download-status', e => { if (['completed', 'failed'].includes(e.status)) final = e; });
+engine.eventBus.on('download-progress', e => { lastProgress = { engine:e.engine, receivedBytes:e.receivedBytes, totalBytes:e.totalBytes, speed:e.speed }; });
+engine.eventBus.on('download-status', e => { lastStatus = {status:e.status,phase:e.phase}; });
 const started = Date.now();
-const timer = setTimeout(() => { console.error('Live ENA download exceeded 6 minutes'); process.exit(2); }, 360000);
+// A slow public route must not be confused with data corruption. Keep the full
+// file + independent digest gate, but allow the engine's bounded retry budget.
+const heartbeat = setInterval(()=>console.log('LIVE_EBI_PROGRESS',JSON.stringify({seconds:(Date.now()-started)/1000,lastStatus,lastProgress})),30000);
+const timer = setTimeout(() => { console.error('Live ENA download exceeded 20 minutes',JSON.stringify({lastStatus,lastProgress})); process.exit(2); }, 1200000);
 (async () => {
   engine.ensureBinaries();
   const files = await engine.callIpcHandler('check-download-size', { type: 'ebi_raw', inputVal: 'SRR390728' });
@@ -22,9 +27,10 @@ const timer = setTimeout(() => { console.error('Live ENA download exceeded 6 min
   assert.ok(file.url.startsWith('http://ftp.sra.ebi.ac.uk/'));
   await engine.callIpcHandler('start-download', { files: [{ ...file, originalIndex: 1 }], targetDir: path.join(temp, 'files'), token: 'test-no-account', maxConcurrent: 1 });
   assert.equal(final?.status, 'completed', JSON.stringify(final));
-  assert.equal(final.engine, 'aria2');
+  assert.equal(final.engine, 'native');
   assert.equal(final.verification.method, 'quick', 'production default must not perform full MD5');
-  assert.equal(final.verification.transport.status, 'sampled');
+  assert.equal(final.verification.transport.status, 'range-verified');
+  assert.equal(final.verification.transport.boundaries, 'overlap-checked');
   const hash = crypto.createHash('md5');
   for await (const bytes of fs.createReadStream(final.savePath)) hash.update(bytes);
   const actualMd5 = hash.digest('hex');
@@ -42,6 +48,6 @@ const timer = setTimeout(() => { console.error('Live ENA download exceeded 6 min
   fs.writeFileSync(path.join(evidence, `live-ebi-${process.platform}.json`), JSON.stringify(result, null, 2));
   console.log('FULL_EBI_VERIFIED', JSON.stringify(result));
 })().catch(e => { console.error(e); process.exitCode = 1; }).finally(async () => {
-  clearTimeout(timer); await engine.callIpcHandler('cancel-download');
+  clearTimeout(timer); clearInterval(heartbeat); await engine.callIpcHandler('cancel-download');
   fs.rmSync(temp, { recursive: true, force: true });
 });

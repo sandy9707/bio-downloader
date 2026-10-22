@@ -14,7 +14,8 @@ async function additionalSpace(files, destination) {
     if (!Number.isSafeInteger(size) || size <= 0) continue;
     let allocated = 0;
     try {
-      const stat = await fs.promises.stat(filename);
+      const dataPath = fs.existsSync(filename + '.biodl-part') ? filename + '.biodl-part' : filename;
+      const stat = await fs.promises.stat(dataPath);
       if (stat.isFile() && !file.redownloadMismatch && !(await priorMismatch(filename, file.url))) {
         allocated = Number.isFinite(stat.blocks) ? Math.min(stat.size, stat.blocks * 512)
           : hasResume(filename) ? 0 : stat.size;

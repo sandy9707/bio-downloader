@@ -37,7 +37,7 @@ let guard, proc;
   const url = `http://127.0.0.1:${server.address().port}/file`, filename = path.join(temp, 'resume.bin');
   const open = file => createBioTransferGuard({ url, filename: file, expectedSize: size, engine: 'aria2', onFatal: () => proc?.kill('SIGKILL') });
   const run = file => runAria({ binary: aria.path, url: guard.url, filename: file, threads: 4, env, onProcess: p => proc = p });
-  for (const [url, engine] of [['https://example.org/a','aria2'],['ftp://example.org/a','aria2'],['sftp://example.org/a','aria2'],['ftps://example.org/a','curl']]) assert.equal(selectEngine({url}), engine);
+  for (const [url, engine] of [['https://example.org/a','native'],['ftp://example.org/a','aria2'],['sftp://example.org/a','aria2'],['ftps://example.org/a','curl']]) assert.equal(selectEngine({url}), engine);
   assert.equal(selectEngine({url}, {downloadEngines:{http:'axel'}}), 'axel');
   slow = true; guard = await open(filename);
   const interrupted = run(filename).catch(e => e);

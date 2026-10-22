@@ -1,0 +1,38 @@
+name: Native transfer candidate
+on:
+  push:
+    branches: [feature/native-transfer-engine]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fault-and-live:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            node: 20
+          - os: macos-14
+            node: 20
+          - os: ubuntu-22.04
+            node: 18
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci
+      - name: Crash, resume, corruption, disk and proxy faults
+        run: npm run test:native
+      - name: Whole EBI and HTTPS downloads with independent hashes
+        run: npm run test:native:live
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-evidence-${{ matrix.os }}
+          path: .evidence/native-*.json
+          include-hidden-files: true
+          if-no-files-found: warn

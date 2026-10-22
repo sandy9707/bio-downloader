@@ -14,6 +14,23 @@ const server = http.createServer((req, res) => {
   res.end(req.url.includes('corrupt') ? Buffer.alloc(end - start + 1, 13) : bytes.subarray(start, end + 1));
 });
 (async () => {
+  const axios = require('axios'), originalGet = axios.get, pkg = require('../package.json'), originalVersion = pkg.version;
+  try {
+    const stable = { version: '2.1.2', linuxUrl: '/downloads/stable.tar.gz', sha256: 'stable-hash', patchUrl: '/downloads/stable.asar' };
+    const preview = { version: '2.2.0-preview.2', linuxUrl: 'https://github.com/example/preview.tar.gz', linuxSha256: 'linux-hash', sha256: 'asar-hash', patchUrl: '/downloads/preview.asar', winUrl: 'https://github.com/example/preview.exe' };
+    const channels = [];
+    axios.get = async url => { const channel = new URL(url).searchParams.get('channel'); channels.push(channel); return {data: channel === 'P2' ? preview : stable}; };
+    pkg.version = '2.1.2';
+    const normal = await main.callIpcHandler('check-for-updates');
+    assert.equal(normal.hasUpdate, false); assert.equal(normal.preview, null); assert.deepEqual(channels, ['2']);
+    const optIn = await main.callIpcHandler('check-for-updates', {advancedMode:true});
+    assert.equal(optIn.preview.sha256, 'linux-hash'); assert.equal(optIn.preview.winUrl, preview.winUrl);
+    pkg.version = '2.2.0-preview.1';
+    const next = await main.callIpcHandler('check-for-updates', {advancedMode:true});
+    assert.equal(next.latestVersion, preview.version); assert.equal(next.hasUpdate, true);
+    assert.equal(next.linuxUrl, preview.linuxUrl); assert.equal(next.sha256, 'linux-hash');
+    assert.equal(next.stableRollback.version, '2.1.2'); assert.equal(next.stableRollback.sha256, 'stable-hash');
+  } finally { axios.get = originalGet; pkg.version = originalVersion; }
   const backend = 'https://biodown.ye.aimeals.cn', url = '/downloads/patch-2.1.1.asar?source=github&v=2.1.1';
   const direct = updateSources(url, backend), accelerated = updateSources(url, backend, true);
   assert(direct[0].url.startsWith('https://gh-proxy.org/https://github.com/sandy9707/bio-downloader/releases/download/v2.1.1/patch-2.1.1.asar'));

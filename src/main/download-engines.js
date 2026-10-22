@@ -2,8 +2,24 @@ const fs = require('fs');
 const redact = text => text.replace(/(\w+:\/\/)[^\s/]*@/g, '$1[redacted]@').replace(/([?&](?:token|password|key|signature)=)[^&\s]+/gi, '$1[redacted]');
 const { spawn } = require('child_process');
 const { bioSource } = require('./bio-transfer-guard');
-const defaults = { http: 'aria2', bio: 'inherit', ftp: 'aria2', sftp: 'aria2', ftps: 'curl' };
+const defaults = { http: 'native', bio: 'inherit', ftp: 'aria2', sftp: 'aria2', ftps: 'curl' };
+function migrateEngineSettings(settings = {}) {
+  return { ...settings, downloadEngineSchema: 2,
+    downloadEngines: settings.nativeDownloadEngines || { ...defaults, ...settings.downloadEngines, http: 'native', bio: 'inherit' } };
+}
+// Keep old clients' settings readable if the user rolls back from the preview.
+function storeEngineSettings(settings) {
+  const engines = { ...defaults, ...settings.downloadEngines };
+  return { ...settings, nativeDownloadEngines: engines,
+    downloadEngines: { ...engines, http: engines.http === 'native' ? 'aria2' : engines.http,
+      bio: engines.bio === 'native' ? 'inherit' : engines.bio } };
+}
 function selectEngine(file, settings = {}, filename) {
+  const nativeState = filename && ['.biodl-part', '.biodl-journal'].some(suffix => fs.existsSync(filename + suffix));
+  if (nativeState) {
+    if (['.st', '.aria2', '.biodl.json'].some(suffix => fs.existsSync(filename + suffix))) throw new Error('同时存在不同内核的断点，已保留文件，请先核对来源');
+    return 'native';
+  }
   if (filename && fs.existsSync(filename + '.st') && fs.existsSync(filename + '.aria2')) throw new Error('同时存在两种下载器断点，已保留文件，请先核对断点来源');
   // Never interpret another engine's sparse file/control file as sequential data.
   if (filename && fs.existsSync(filename + '.st')) return 'axel';
@@ -12,14 +28,14 @@ function selectEngine(file, settings = {}, filename) {
     const record = filename + '.biodl.json';
     if (fs.existsSync(filename) && fs.statSync(record).size < 1024 * 1024) {
       const state = JSON.parse(fs.readFileSync(record, 'utf8'));
-      if (!state.completed && state.resume) return state.engine === 'aria2' ? 'aria2' : 'axel';
+      if (state.engine === 'aria2' || state.engine === 'axel') return state.engine;
     }
   } catch (_) {}
   const config = { ...defaults, ...settings.downloadEngines };
   const protocol = new URL(file.url).protocol;
-  const group = bioSource(file.url) ? 'bio' : ({ 'ftp:': 'ftp', 'sftp:': 'sftp', 'ftps:': 'ftps' }[protocol] || 'http');
+  const group = ({ 'ftp:': 'ftp', 'sftp:': 'sftp', 'ftps:': 'ftps' }[protocol]) || (bioSource(file.url) ? 'bio' : 'http');
   const engine = config[group] === 'inherit' ? config.http : config[group];
-  const choices = ['ftp', 'sftp'].includes(group) ? ['aria2', 'curl'] : group === 'ftps' ? ['curl'] : ['aria2', 'axel'];
+  const choices = ['ftp', 'sftp'].includes(group) ? ['aria2', 'curl'] : group === 'ftps' ? ['curl'] : ['native', 'aria2', 'axel'];
   if (!choices.includes(engine)) throw new Error('该协议不支持所选下载器，请在设置中调整下载引擎');
   return engine;
 }
@@ -82,4 +98,4 @@ function runAria({ binary, url, filename, threads, env, proxy = '', onProcess = 
     proc.once('close', code => code === 0 ? resolve() : reject(new Error('aria2c 退出码 ' + code + ': ' + tail.trim().slice(-400))));
   });
 }
-module.exports = { defaults, selectEngine, ariaArgs, ariaEnvironment, ariaWorkingDirectory, runAria };
+module.exports = { defaults, migrateEngineSettings, storeEngineSettings, selectEngine, ariaArgs, ariaEnvironment, ariaWorkingDirectory, runAria };

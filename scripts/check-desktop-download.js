@@ -1,14 +1,15 @@
 const fs=require('fs'),path=require('path'),os=require('os'),assert=require('assert'),http=require('http'),crypto=require('crypto');
-const root=process.cwd(),dir=fs.mkdtempSync(path.join(os.tmpdir(),'biodl-electron-batch-'));process.env.BIODL_DATA_DIR=path.join(dir,'profile');
+const root=process.cwd(),appRoot=process.env.BIODL_TEST_ASAR?path.resolve(process.env.BIODL_TEST_ASAR):root,dir=fs.mkdtempSync(path.join(os.tmpdir(),'biodl-electron-batch-'));process.env.BIODL_DATA_DIR=path.join(dir,'profile');
 fs.mkdirSync(process.env.BIODL_DATA_DIR,{recursive:true});fs.writeFileSync(path.join(process.env.BIODL_DATA_DIR,'settings.json'),JSON.stringify({loggingEnabled:true,token:null}));
-const {app,BrowserWindow,ipcMain,session}=require('electron');app.setAppPath(root);app.getVersion=()=>require(path.join(root,'package.json')).version;
-const axios=require('axios');axios.get=async()=>({data:{success:false,error:'Offline test fixture'}});let charges=0;axios.post=async(url)=>{assert(url.endsWith('/api/user/consume'));charges++;return {data:{success:true}}};
+const {app,BrowserWindow,ipcMain,session}=require('electron');app.setAppPath(appRoot);app.getVersion=()=>require(path.join(appRoot,'package.json')).version;
+if(appRoot!==root){Object.defineProperty(app,'isPackaged',{value:true});Object.defineProperty(process,'resourcesPath',{value:path.dirname(appRoot)});assert.equal(process.resourcesPath,path.dirname(appRoot));}
+const axios=require(path.join(appRoot,'node_modules/axios/dist/node/axios.cjs'));axios.get=async()=>({data:{success:false,error:'Offline test fixture'}});let charges=0;axios.post=async(url)=>{assert(url.endsWith('/api/user/consume'));charges++;return {data:{success:true}}};
 const mode='fixed';
-require('../main');
+require(path.join(appRoot,'main.js'));
 ipcMain.removeHandler('clash-status');ipcMain.handle('clash-status',()=>true);
 let slowTransfer=true;
 const slowBytes=Buffer.alloc(32*1024*1024,42);
-const bytes=Buffer.alloc(32768,42),server=http.createServer((req,res)=>{const bytes=req.url==='/slow'?slowBytes:Buffer.alloc(32768,42);let start=0,end=bytes.length-1;const range=/bytes=(\d+)-(\d*)/.exec(req.headers.range||'');if(range){start=Number(range[1]);if(range[2])end=Math.min(Number(range[2]),end);res.statusCode=206;res.setHeader('Content-Range',`bytes ${start}-${end}/${bytes.length}`);}res.setHeader('Content-Length',end-start+1);if(req.url==='/slow'&&req.method!=='HEAD'){let timer,at=start;const send=()=>{if(res.destroyed)return;const next=Math.min(end+1,at+(slowTransfer?4096:65536));res.write(bytes.subarray(at,next));at=next;if(at>end)res.end();else timer=setTimeout(send,slowTransfer?200:1);};res.on('close',()=>clearTimeout(timer));send();}else res.end(req.method==='HEAD'?undefined:bytes.subarray(start,end+1));});
+const bytes=Buffer.alloc(32768,42),server=http.createServer((req,res)=>{const bytes=req.url==='/slow'?slowBytes:Buffer.alloc(32768,42);let start=0,end=bytes.length-1;const range=/bytes=(\d+)-(\d*)/.exec(req.headers.range||'');if(range){start=Number(range[1]);if(range[2])end=Math.min(Number(range[2]),end);res.statusCode=206;res.setHeader('Content-Range',`bytes ${start}-${end}/${bytes.length}`);}res.setHeader('Content-Length',end-start+1);res.setHeader('ETag','"desktop-fixture"');if(req.url==='/slow'&&req.method!=='HEAD'){let timer,at=start;const send=()=>{if(res.destroyed)return;const next=Math.min(end+1,at+(slowTransfer?4096:65536));res.write(bytes.subarray(at,next));at=next;if(at>end)res.end();else timer=setTimeout(send,slowTransfer?200:1);};res.on('close',()=>clearTimeout(timer));send();}else res.end(req.method==='HEAD'?undefined:bytes.subarray(start,end+1));});
 const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000);
 (async()=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
@@ -20,7 +21,8 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  await win.webContents.executeJavaScript(`currentUser={token:'fixture',trafficLimit:1e12,trafficConsumed:0};defaultDir=${JSON.stringify(path.join(dir,'下载 files'))};currentQueue=${JSON.stringify(files)};renderQueue();document.getElementById('downloadBtn').disabled=false;document.getElementById('downloadBtn').click();`);
  let state;
  for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,200));state=await win.webContents.executeJavaScript(`({downloading:isDownloading,active:activeDownloads.map(f=>({name:f.name,status:f.status})),completed:completedDownloads.length,failed:failedDownloads.length,toast:document.getElementById('notificationToast').innerText})`);if(state.completed===3||!state.downloading)break;}
- assert.equal(state.completed,3,JSON.stringify({state,errors}));assert.equal(charges,3);assert.match(state.toast,/完成 3/);
+ assert.equal(state.completed,3,JSON.stringify({state,errors}));
+ assert.equal(await win.webContents.executeJavaScript(`completedDownloads.every(f=>f.engine==='native')`),true);assert.equal(charges,3);assert.match(state.toast,/完成 3/);
  if(mode==='fixed'){
   await win.webContents.executeJavaScript(`switchTransferSubTab('completed');verifyAllCompletedMd5();`);
   for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,100));if(await win.webContents.executeJavaScript(`manualMd5Run===null`))break;}
@@ -70,16 +72,27 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  await win.webContents.executeJavaScript(`switchTab('transfers-tab');switchTransferSubTab('completed');`);
  await new Promise(r=>setTimeout(r,200));
  fs.writeFileSync(path.join(root,'.evidence','desktop-'+process.platform+'.png'),(await win.webContents.capturePage()).toPNG());
- // Exercise the actual renderer while native aria2 downloads sparse ranges slowly.
+ await win.webContents.executeJavaScript(`switchTab('plugins-tab');refreshPluginsList()`);
+ if(appRoot!==root){const bundled=await win.webContents.executeJavaScript(`window.api.getPluginStatus().then(r=>r.plugins.filter(p=>['axel','aria2'].includes(p.id)).map(p=>({id:p.id,source:p.source,usable:p.usable})))`);assert.equal(bundled.length,2);assert(bundled.every(p=>p.source==='bundled'&&p.usable),JSON.stringify(bundled));}
+ for (const engine of ['axel','aria2','native']) {
+  await win.webContents.executeJavaScript(`document.querySelector('[data-primary-engine="${engine}"]').click()`);
+  for(let i=0;i<50;i++){await new Promise(r=>setTimeout(r,100));if(await win.webContents.executeJavaScript(`document.querySelector('[data-primary-engine="${engine}"]')?.disabled===true`))break;}
+  assert.equal(await win.webContents.executeJavaScript(`window.api.getSettings().then(s=>s.downloadEngines.http)`),engine);
+ }
+
+ assert.equal(await win.webContents.executeJavaScript(`window.api.getSettings().then(s=>s.downloadEngines.http)`),'native');
+ assert.equal(await win.webContents.executeJavaScript(`document.getElementById('pluginPath-native')===null`),true);
+ fs.writeFileSync(path.join(root,'.evidence','settings-plugins-'+process.platform+'.png'),(await win.webContents.capturePage()).toPNG());
+ // Exercise the actual renderer while the native engine receives ranges slowly.
  const slowFile={name:'slow-progress.bin',url:`http://127.0.0.1:${server.address().port}/slow`,size:slowBytes.length};
  await win.webContents.executeJavaScript(`currentQueue=${JSON.stringify([slowFile])};renderQueue();document.getElementById('downloadBtn').disabled=false;document.getElementById('downloadBtn').click();`);
  let visible;
  for(let i=0;i<100;i++){
   await new Promise(r=>setTimeout(r,100));
   visible=await win.webContents.executeJavaScript(`(()=>{const f=activeDownloads.find(f=>f.name==='slow-progress.bin');return f&&{...f};})()`);
-  if(visible?.receivedBytes>0)break;
+  if(visible?.percentage>0)break;
  }
- assert(visible?.receivedBytes>0,'native aria2 must update the real UI before completion');
+ assert(visible?.receivedBytes>0,'native engine must update the real UI before completion');
  assert(visible.percentage>0&&visible.percentage<10,JSON.stringify(visible));
  assert.equal(await win.webContents.executeJavaScript(`document.getElementById('status-text-0').innerText`),'正在高速下载');
  const displayed=await win.webContents.executeJavaScript(`(()=>{
