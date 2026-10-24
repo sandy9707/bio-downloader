@@ -1230,6 +1230,7 @@
       cursor: default;
     }
   </style>
+  <link rel="stylesheet" href="shared/campus-notice.css">
 </head>
 <body>
 
@@ -1666,6 +1667,12 @@
 
     <!-- VIEW: 扩展插件 -->
     <div class="tab-view" id="plugins-tab">
+      <div class="card" id="sshPluginCard" style="margin-bottom:1.5rem;">
+        <h3 style="margin:0 0 .6rem;">SSH · 连接 Linux Web</h3>
+        <p class="settings-hint">在本机打开服务器上的 BioDownloader，无需开放 43280 公网端口。桌面端内置，无需另装 OpenSSH；使用普通 SSH 账号即可。</p>
+        <button class="btn btn-secondary" onclick="openSshPanel()">配置 SSH 连接 →</button>
+      </div>
+
       <div class="card" style="max-width: 800px; margin: 0 auto; width: 100%;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.2rem; flex-wrap:wrap; gap:0.5rem;">
           <div>
@@ -1693,6 +1700,30 @@
       </div>
     </div>
 
+
+    <div class="tab-view" id="ssh-tunnel-tab">
+      <button class="btn btn-secondary" onclick="switchTab('plugins-tab')" style="align-self:flex-start;">← 返回扩展插件</button>
+      <div class="card" style="max-width:780px;">
+        <h3>连接 Linux Web</h3>
+        <p class="settings-hint">先在服务器运行 <code>./biodl start --host 127.0.0.1</code>。连接只在当前电脑开放；关闭客户端会断开隧道，服务器下载继续运行。</p>
+        <div class="engine-row"><label for="sshHost">服务器地址</label><input id="sshHost" placeholder="服务器域名或 IP" autocomplete="off"></div>
+        <div class="engine-row"><label for="sshUsername">SSH 用户名</label><input id="sshUsername" placeholder="普通服务器账号" autocomplete="off"></div>
+        <div class="engine-row"><label for="sshPort">SSH 端口</label><input id="sshPort" type="number" value="22" min="1" max="65535"></div>
+        <div class="engine-row"><label for="sshPassword">SSH 密码（或使用私钥）</label><input id="sshPassword" type="password" autocomplete="new-password"></div>
+        <div class="engine-row"><label for="sshKeyPath">私钥文件（可选）</label><input id="sshKeyPath" readonly placeholder="未选择"><button class="btn btn-secondary" onclick="chooseSshKey()">选择</button></div>
+        <div class="engine-row"><label for="sshPassphrase">私钥口令（可选）</label><input id="sshPassphrase" type="password" autocomplete="new-password"></div>
+        <div class="engine-row"><label for="sshRemotePort">服务器 Web 端口</label><input id="sshRemotePort" type="number" value="43280" min="1" max="65535"></div>
+        <div class="engine-row"><label for="sshLocalPort">本机端口（0 自动分配）</label><input id="sshLocalPort" type="number" value="0" min="0" max="65535"></div>
+        <p class="settings-hint">密码和私钥口令仅用于您指定的 SSH 服务器认证，不保存到配置或 BioDownloader 服务端。首次连接需要核对服务器指纹；已记录指纹发生变化时会拒绝连接。</p>
+        <p id="sshTunnelState" role="status">尚未连接</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn" id="sshConnectButton" onclick="startSshTunnel()">连接并打开网页</button>
+          <button class="btn btn-secondary" onclick="window.api.sshTunnelOpen().catch(e=>showToast(e.message,'error'))">打开已连接网页</button>
+          <button class="btn btn-secondary" onclick="stopSshTunnel()">断开</button>
+          <button class="btn btn-secondary" onclick="refreshSshStatus()">刷新状态</button>
+        </div>
+      </div>
+    </div>
     <!-- VIEW: 设置 -->
     <div class="tab-view" id="download-engines-tab">
       <button class="btn btn-secondary" id="backToSettings" onclick="switchTab('settings-tab')" style="align-self:flex-start;">← 返回设置</button>
@@ -2097,8 +2128,10 @@
   <!-- 通知信息框 -->
   <div class="notification" id="notificationToast">提示信息</div>
 
+  <button type="button" onclick="window.campusNotice?.show()" style="position:fixed;bottom:8px;right:16px;z-index:5;border:0;background:transparent;color:#718096;font-size:12px;cursor:pointer">使用声明</button>
   <!-- 载入渲染器逻辑 -->
   <script src="shared/download-sources.js"></script>
+  <script src="shared/campus-notice.js"></script>
   <script src="renderer.js"></script>
   <script>
     function openQrLightbox(imgSrc) {

@@ -4,7 +4,7 @@ const [baseline,archive]=process.argv.slice(2).map(p=>path.resolve(p));
 if(process.platform!=='linux')throw new Error('Run the upgrade test on Linux');
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'biodl-upgrade-')),app=path.join(temp,'app'),profile=path.join(temp,'profile');
 fs.cpSync(baseline,app,{recursive:true});fs.mkdirSync(profile);
-fs.writeFileSync(path.join(profile,'settings.json'),JSON.stringify({defaultDir:path.join(temp,'downloads'),loggingEnabled:false,token:null}));
+fs.writeFileSync(path.join(profile,'settings.json'),JSON.stringify({defaultDir:path.join(temp,'downloads'),loggingEnabled:false,token:null,dataLocationMarker:'kept'}));
 fs.writeFileSync(path.join(profile,'keep-history.json'),'persistent marker');fs.mkdirSync(path.join(app,'my-downloads'));fs.writeFileSync(path.join(app,'my-downloads/keep.fastq'),'user data');
 const node=path.join(app,'runtime/node'),sha=crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
 const runtimeSha=crypto.createHash('sha256').update(fs.readFileSync(node)).digest('hex');
@@ -25,4 +25,13 @@ function run(code){return new Promise((resolve,reject)=>{const child=cp.spawn(no
   cp.execFileSync(path.join(app,'bin/linux/aria2/aria2c'),['--version']);
   console.log('LINUX_UPGRADE_OK',stage,require('../package.json').version);
  }
+ // Replacing the entire application folder must still read the SAME external profile.
+ fs.rmSync(app,{recursive:true,force:true});
+ cp.execFileSync('tar',['-xzf',archive,'-C',temp]);
+ fs.renameSync(path.join(temp,'BioDownloader-Linux-x64'),app);
+ const settings=await run(`require('./main').callIpcHandler('get-settings').then(s=>{if(s.dataLocationMarker!=='kept')process.exit(1);console.log('EXTERNAL_PROFILE_REUSED')})`);
+ assert(settings.includes('EXTERNAL_PROFILE_REUSED'));
+ assert.equal(fs.readFileSync(path.join(profile,'keep-history.json'),'utf8'),'persistent marker');
+ console.log('LINUX_FOLDER_REPLACEMENT_OK: external settings and history remain');
+
 })().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>{server.closeAllConnections();server.close();fs.rmSync(temp,{recursive:true,force:true});});

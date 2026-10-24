@@ -134,6 +134,12 @@
     installPlugin: (id) => ({ channel: 'plugin-install', payload: { pluginId: id } }),
     setPluginPath: (id, binaryPath) => ({ channel: 'plugin-set-path', payload: { pluginId: id, binaryPath } }),
 
+    sshTunnelStatus: 'ssh-tunnel-status',
+    sshTunnelStart: options => ({ channel: 'ssh-tunnel-start', payload: options }),
+    sshTunnelStop: 'ssh-tunnel-stop',
+    sshTunnelOpen: 'ssh-tunnel-open',
+    sshSelectKey: 'ssh-select-key',
+    setUsageChoice: (choice) => ({ channel: 'set-usage-choice', payload: choice }),
     linuxSelfUpdate: (opts) => ({ channel: 'linux-self-update', payload: opts }),
 
     getTransfersHistory: 'get-transfers-history',
@@ -168,6 +174,7 @@
   // 3. 构建动态 window.api Proxy 代理
   window.api = new Proxy({}, {
     get(target, prop) {
+      if (prop === 'isElectron') return false;
       // 监听器
       if (prop === 'onMd5VerificationProgress') return (cb) => listeners.md5Progress.push(cb);
       if (prop === 'onDownloadStatus') return (cb) => listeners.downloadStatus.push(cb);

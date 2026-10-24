@@ -44,6 +44,9 @@ jobs:
       - name: 专属内核 2 GiB、并发、暂停和主进程强杀恢复
         run: node scripts/check-native-app.js --stress
 
+      - name: 使用声明、拒绝保护和重启记忆
+        run: npm run test:usage
+
       - name: 实际桌面批量按钮与手动 MD5 校验
         run: npm run test:desktop
 
@@ -60,6 +63,8 @@ jobs:
             .evidence/progress-*.png
             .evidence/settings-*.png
             .evidence/native-*.json
+            .evidence/usage-*
+            .evidence/ssh-desktop-*
           include-hidden-files: true
 
       - name: 依据 Git Tag 同步 package.json 版本号
@@ -112,6 +117,9 @@ jobs:
       - name: 专属内核 2 GiB、并发、暂停和主进程强杀恢复
         run: node scripts/check-native-app.js --stress
 
+      - name: 使用声明、拒绝保护和重启记忆
+        run: npm run test:usage
+
       - name: 实际桌面批量按钮与手动 MD5 校验
         run: npm run test:desktop
 
@@ -128,6 +136,8 @@ jobs:
             .evidence/progress-*.png
             .evidence/settings-*.png
             .evidence/native-*.json
+            .evidence/usage-*
+            .evidence/ssh-desktop-*
           include-hidden-files: true
 
       - name: 依据 Git Tag 同步 package.json 版本号
@@ -151,6 +161,11 @@ jobs:
 
       - name: 从 Windows 成品 app.asar 运行下载与插件测试
         run: npm run test:desktop
+        env:
+          BIODL_TEST_ASAR: dist/win-unpacked/resources/app.asar
+
+      - name: 验证 Windows 成品使用声明
+        run: npm run test:usage
         env:
           BIODL_TEST_ASAR: dist/win-unpacked/resources/app.asar
 
@@ -196,6 +211,8 @@ jobs:
             .evidence/progress-*.png
             .evidence/settings-*.png
             .evidence/native-*.json
+            .evidence/usage-*
+            .evidence/ssh-desktop-*
           include-hidden-files: true
       - name: 保持旧服务器 glibc 2.17 运行时兼容
         run: |

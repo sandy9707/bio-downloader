@@ -1,0 +1,68 @@
+const fs = require('fs'), path = require('path'), os = require('os'), assert = require('assert'), http = require('http'), net = require('net'), crypto = require('crypto');
+const root = process.cwd(), appRoot = process.env.BIODL_TEST_ASAR ? path.resolve(process.env.BIODL_TEST_ASAR) : root;
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'biodl-usage-中文-'));
+process.env.BIODL_DATA_DIR = dir;
+fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ token: 'fixture', usageChoice: 'unset' }));
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
+let openedUrl; shell.openExternal = async url => { openedUrl = url; };
+let sshServer, fixtureWeb; const fixtureConnections = new Set();
+app.setPath('userData', path.join(dir, 'electron'));
+app.setAppPath(appRoot); app.getVersion = () => require(path.join(appRoot, 'package.json')).version;
+if (appRoot !== root) { Object.defineProperty(app, 'isPackaged', { value: true }); Object.defineProperty(process, 'resourcesPath', { value: path.dirname(appRoot) }); }
+const axios = require(path.join(appRoot, 'node_modules/axios/dist/node/axios.cjs'));
+let starts = 0, detectionRequests = 0;
+axios.get = async url => { if (/network\/environment|ipify|icanhazip/.test(url)) detectionRequests++; return { data: { success: false } }; };
+axios.post = async () => ({ data: { success: true } });
+require(path.join(appRoot, 'main.js'));
+ipcMain.removeHandler('api-get-user-info'); ipcMain.handle('api-get-user-info', () => ({ success: true, token: 'fixture', username: '测试账户', uid: 'test', expireAt: '2099-01-01', trafficLimit: 1e12, trafficConsumed: 0, isActive: true }));
+ipcMain.removeHandler('clash-status'); ipcMain.handle('clash-status', () => false);
+ipcMain.removeHandler('clash-start'); ipcMain.handle('clash-start', () => { starts++; return { success: true }; });
+const timeout = setTimeout(() => { console.error('USAGE_UI_TIMEOUT'); app.exit(2); }, 45000);
+(async () => {
+  await app.whenReady(); const win = BrowserWindow.getAllWindows()[0]; win.webContents.setBackgroundThrottling(false);
+  await new Promise(resolve => win.webContents.once('did-finish-load', resolve));
+  const delay = () => new Promise(resolve => setTimeout(resolve, 500)); await delay();
+  const run = code => win.webContents.executeJavaScript(code);
+  assert.equal(starts, 0); assert.equal(await run('document.querySelector(".bd-network-dialog").open'), true);
+  await run('document.querySelector("[data-usage-decline]").click()'); await delay();
+  assert.equal(await run('campusNotice.getState().choice'), 'declined');
+  assert.equal(await run('document.body.classList.contains("bd-campus-risk")'), true);
+  assert.equal(await run('ensureTransferConnection()'), false); assert.equal(starts, 0);
+  assert.equal(await run('document.querySelector(".bd-network-dialog h2").textContent'), '已选择不使用');
+  fs.mkdirSync(path.join(root,'.evidence'), { recursive: true });
+  fs.writeFileSync(path.join(root,'.evidence','usage-declined-'+process.platform+'.png'), (await win.webContents.capturePage()).toPNG());
+  await run('document.querySelector("[data-usage-accept]").click()'); await delay();
+  assert.equal(await run('campusNotice.getState().choice'), 'accepted');
+  assert.equal(await run('document.querySelector(".bd-network").hidden'), true);
+  assert.equal(await run('document.body.classList.contains("bd-campus-risk")'), false);
+  assert.equal(await run('ensureTransferConnection()'), true); assert.equal(starts, 1);
+  const loaded = new Promise(resolve => win.webContents.once('did-finish-load', resolve)); win.reload(); await loaded; await delay();
+  assert.equal(await run('document.querySelector(".bd-network-dialog").open'), false);
+  assert.equal(await run('campusNotice.getState().choice'), 'accepted');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'settings.json'))).usageChoice, 'accepted');
+  assert.equal(detectionRequests, 0);
+  fixtureWeb = http.createServer((q,r) => r.end('SSH_DESKTOP_FIXTURE'));
+  await new Promise(r => fixtureWeb.listen(0,'127.0.0.1',r));
+  const { Server } = require(path.join(appRoot,'node_modules/ssh2'));
+  const key = crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs1',format:'pem'});
+  sshServer = new Server({hostKeys:[key]}, client => {
+    fixtureConnections.add(client); client.on('error',()=>{});
+    client.on('authentication',ctx => ctx.method==='password' && ctx.password==='fixture-only' ? ctx.accept() : ctx.reject());
+    client.on('ready',()=>client.on('tcpip',(accept,reject,info)=>{
+      const sock=net.connect(info.destPort,info.destIP,()=>{const stream=accept();sock.pipe(stream);stream.pipe(sock);stream.on('error',()=>sock.destroy());stream.on('close',()=>sock.destroy());});sock.on('error',()=>reject());
+    }));
+  });
+  await new Promise(r=>sshServer.listen(0,'127.0.0.1',r));
+  await run('openSshPanel()'); assert.equal(await run('currentTab'),'ssh-tunnel-tab');
+  await run(`document.getElementById('sshHost').value='127.0.0.1';document.getElementById('sshUsername').value='fixture';document.getElementById('sshPassword').value='fixture-only';document.getElementById('sshPort').value=${sshServer.address().port};document.getElementById('sshRemotePort').value=${fixtureWeb.address().port};window.confirm=()=>true;startSshTunnel()`);
+  assert.match(openedUrl, /^http:\/\/127\.0\.0\.1:/);
+  assert.equal(await(await fetch(openedUrl)).text(),'SSH_DESKTOP_FIXTURE');
+  assert.equal(await run("document.getElementById('sshPassword').value"),'');
+  assert(!fs.readFileSync(path.join(dir,'settings.json'),'utf8').includes('fixture-only'));
+  fs.writeFileSync(path.join(root,'.evidence','ssh-desktop-'+process.platform+'.png'), (await win.webContents.capturePage()).toPNG());
+  await run('stopSshTunnel()'); assert.equal(await run('window.api.sshTunnelStatus().then(s=>s.connected)'),false);
+
+  const result = { platform: process.platform, asar: appRoot !== root, declinedBlocksStart: true, acceptedPersists: true, detectionRequests, sshDesktopForwarding: true, passwordsNotSaved: true, passed: true };
+  fs.writeFileSync(path.join(root,'.evidence','usage-'+process.platform+'.json'), JSON.stringify(result,null,2));
+  console.log('USAGE_DESKTOP_OK', JSON.stringify(result));
+})().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => { clearTimeout(timeout); for(const client of fixtureConnections)client.end(); sshServer?.close(); fixtureWeb?.closeAllConnections(); fixtureWeb?.close(); app.exit(process.exitCode || 0); });

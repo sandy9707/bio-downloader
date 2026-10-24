@@ -1,3 +1,4 @@
+const { backendGet } = require('./src/main/backend-request');
 const isElectron = Boolean(process.versions && process.versions.electron);
 let electron = {};
 try {
@@ -1266,7 +1267,49 @@ async function headRequestSize(url) {
 // --- 系统设置 ---
 ipcMain.handle('get-settings', () => getSettings());
 ipcMain.handle('save-settings', (event, data) => saveSettings(data));
+ipcMain.handle('set-usage-choice', (event, choice) => {
+  if (!['accepted', 'declined'].includes(choice)) throw new Error('无效的声明选择');
+  return saveSettings({ usageChoice: choice });
+});
 ipcMain.handle('get-backend-url', () => BACKEND_BASE_URL);
+let sshTunnel;
+function desktopTunnel() {
+  if (!isElectron) throw new Error('请在 Mac 或 Windows 桌面客户端使用 SSH 插件');
+  if (!sshTunnel) sshTunnel = new (require('./src/main/ssh-tunnel').SshTunnel)();
+  return sshTunnel;
+}
+ipcMain.handle('ssh-tunnel-status', () => desktopTunnel().status());
+ipcMain.handle('ssh-tunnel-stop', () => desktopTunnel().stop());
+ipcMain.handle('ssh-select-key', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, { title: '选择 SSH 私钥（仅本机使用）', properties: ['openFile'] });
+  return result.canceled ? null : result.filePaths[0];
+});
+ipcMain.handle('ssh-tunnel-start', async (event, options) => {
+  const tunnel = desktopTunnel();
+  const hostId = JSON.stringify([String(options.host || '').trim(), Number(options.port || 22)]);
+  const known = getSettings().sshHostKeys || {};
+  const stored = Object.prototype.hasOwnProperty.call(known, hostId) ? known[hostId] : null;
+  // New fingerprints require an explicit UI confirmation; changed known keys fail closed.
+  const expected = stored || options.confirmedFingerprint;
+  let privateKey;
+  if (options.keyPath) {
+    const stat = fs.statSync(options.keyPath);
+    if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error('请选择有效的 SSH 私钥文件');
+    privateKey = fs.readFileSync(options.keyPath);
+  }
+  try {
+    const result = await tunnel.start({ ...options, privateKey }, expected);
+    if (result.connected && !stored) saveSettings({ sshHostKeys: { ...known, [hostId]: result.fingerprint } });
+    return result;
+  } finally { if (privateKey) privateKey.fill(0); }
+});
+ipcMain.handle('ssh-tunnel-open', async () => {
+  const state = desktopTunnel().status();
+  if (!state.connected) throw new Error('请先建立 SSH 连接');
+  await shell.openExternal(state.url); return true;
+});
+app.on('before-quit', () => sshTunnel?.stop());
+
 
 ipcMain.handle('select-directory', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -1619,7 +1662,7 @@ ipcMain.handle('linux-self-update', async (event, { url, sha256 } = {}) => {
   let targetSha = sha256;
   if (!targetUrl) {
     const channel = /preview/i.test(app.getVersion()) ? 'P2' : '2';
-    const vRes = await axios.get(`${BACKEND_BASE_URL}/api/client/version?channel=${channel}&platform=linux`, { timeout: 8000 });
+    const vRes = await backendGet(`${BACKEND_BASE_URL}/api/client/version?channel=${channel}&platform=linux`);
     targetUrl = vRes.data && vRes.data.linuxUrl;
     targetSha = vRes.data && (vRes.data.linuxSha256 || vRes.data.sha256);
   }
@@ -1679,7 +1722,7 @@ ipcMain.handle('check-for-updates', async (event, { advancedMode } = {}) => {
     const major = parseInt(String(currentVersion).split('.')[0], 10) || 1;
     const versionUrl = `${BACKEND_BASE_URL}/api/client/version?channel=${major}&platform=${encodeURIComponent(process.platform)}`;
     // 后端是境内服务 → 直连(axiosProxyFor 对境内返回 false,强制直连并忽略系统代理),避免绕代理变慢
-    const res = await axios.get(versionUrl, { timeout: 6000, proxy: axiosProxyFor(versionUrl) });
+    const res = await backendGet(versionUrl);
     const latestVersion = res.data.version || currentVersion;
 
     // semver 比较:仅当服务端版本严格高于本地时才提示更新(防止被回滚/降级覆盖)
@@ -1727,7 +1770,7 @@ ipcMain.handle('check-for-updates', async (event, { advancedMode } = {}) => {
     if (advancedMode || isPreviewClient) {
       try {
         const pUrl = `${BACKEND_BASE_URL}/api/client/version?channel=P2`;
-        const pRes = await axios.get(pUrl, { timeout: 6000, proxy: axiosProxyFor(pUrl) });
+        const pRes = await backendGet(pUrl);
         const pv = pRes.data && pRes.data.version;
         if (pv) {
           preview = {
@@ -1771,7 +1814,7 @@ ipcMain.handle('check-for-updates', async (event, { advancedMode } = {}) => {
     console.error('Check for updates failed:', err.message);
     return {
       success: false,
-      message: err.message,
+      message: `无法连接版本服务（${err.code || 'NETWORK_ERROR'}）。请检查网络后重试；Linux 可执行 ./biodl doctor。`,
       currentVersion: app.getVersion()
     };
   }

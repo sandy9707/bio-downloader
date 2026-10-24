@@ -1,6 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  isElectron: true,
+  sshTunnelStatus: () => ipcRenderer.invoke('ssh-tunnel-status'),
+  sshTunnelStart: options => ipcRenderer.invoke('ssh-tunnel-start', options),
+  sshTunnelStop: () => ipcRenderer.invoke('ssh-tunnel-stop'),
+  sshTunnelOpen: () => ipcRenderer.invoke('ssh-tunnel-open'),
+  sshSelectKey: () => ipcRenderer.invoke('ssh-select-key'),
+  setUsageChoice: (choice) => ipcRenderer.invoke('set-usage-choice', choice),
   // 系统设置与文件夹选择
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),

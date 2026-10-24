@@ -7,6 +7,8 @@ const main = require('../../main');
 
 const PUBLIC_CHANNELS = new Set([
   'get-app-version',
+  'set-usage-choice',
+  'check-for-updates',
   'get-settings',
   'api-login',
   'api-register',
@@ -302,7 +304,7 @@ class BiodlServer {
       '.json': 'application/json'
     };
 
-    res.writeHead(200, { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' });
+    res.writeHead(200, { 'Content-Type': mimeTypes[ext] || 'application/octet-stream', 'Cache-Control': 'no-store' });
     fs.createReadStream(filePath).pipe(res);
   }
 }

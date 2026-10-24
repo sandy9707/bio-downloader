@@ -1,11 +1,11 @@
 {
   "name": "bio-downloader",
-  "version": "2.2.0-preview.1",
+  "version": "2.2.0-preview.2",
   "description": "Commercial Biology Raw Data Downloader Desktop Client",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node scripts/check-shared-sources.js && node scripts/check-web-bridge-contract.js && node scripts/check-linux-cli-contract.js && node scripts/check-cloud-workspace.js && node scripts/check-transfer-persistence.js && node scripts/check-transfer-resume.js && node scripts/check-partial-file.js && node scripts/check-download-integrity.js && node scripts/check-bio-transfer-guard.js && node scripts/check-aria-resume.js && node scripts/check-download-progress.js && node scripts/check-protocol-engines.js && node scripts/check-download-fallback.js && node scripts/check-process-control.js && node scripts/check-batch-start.js && node scripts/check-manual-md5.js && node scripts/sync-linux-web.js --check && node scripts/check-speedtest.js && node scripts/check-linux-web-runtime.js && node scripts/check-installer-download.js && node scripts/check-update-download.js && node scripts/check-native-transfer.js",
+    "test": "node scripts/check-ssh-tunnel.js && node scripts/check-backend-request.js && node scripts/check-shared-sources.js && node scripts/check-web-bridge-contract.js && node scripts/check-linux-cli-contract.js && node scripts/check-cloud-workspace.js && node scripts/check-transfer-persistence.js && node scripts/check-transfer-resume.js && node scripts/check-partial-file.js && node scripts/check-download-integrity.js && node scripts/check-bio-transfer-guard.js && node scripts/check-aria-resume.js && node scripts/check-download-progress.js && node scripts/check-protocol-engines.js && node scripts/check-download-fallback.js && node scripts/check-process-control.js && node scripts/check-batch-start.js && node scripts/check-manual-md5.js && node scripts/sync-linux-web.js --check && node scripts/check-speedtest.js && node scripts/check-linux-web-runtime.js && node scripts/check-installer-download.js && node scripts/check-update-download.js && node scripts/check-native-transfer.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "test:desktop": "electron scripts/check-desktop-download.js",
@@ -13,7 +13,8 @@
     "test:native:live": "node scripts/check-native-transfer-live.js",
     "native:download": "node scripts/native-download.js",
     "build:linux": "node scripts/sync-linux-web.js && node scripts/build-linux.js",
-    "test:native:app": "node scripts/check-native-app.js"
+    "test:native:app": "node scripts/check-native-app.js",
+    "test:usage": "electron scripts/check-usage-desktop.js"
   },
   "repository": {
     "type": "git",
@@ -23,12 +24,12 @@
     "axios": "^1.6.8",
     "cheerio": "^1.0.0-rc.12",
     "commander": "^12.1.0",
-    "proper-lockfile": "^4.1.2"
+    "proper-lockfile": "^4.1.2",
+    "ssh2": "^1.17.0"
   },
   "devDependencies": {
     "electron": "30.5.1",
-    "electron-builder": "^24.13.3",
-    "ssh2": "^1.17.0"
+    "electron-builder": "^24.13.3"
   },
   "build": {
     "appId": "com.biodl.downloader",

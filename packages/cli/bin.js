@@ -6,7 +6,7 @@ const path = require('path');
 const https = require('https');
 const readline = require('readline');
 
-const SERVER_VERSION = '2.0.43';
+const SERVER_VERSION = require('../../package.json').version;
 process.env.BIODL_SERVER_VERSION = SERVER_VERSION;
 const main = require('../../main');
 
@@ -43,7 +43,7 @@ async function validateAndSaveToken(input) {
   try {
     info = await main.callIpcHandler('api-get-user-info', { token });
   } catch (e) {
-    throw new Error('Token 无效或无法连接认证服务器');
+    throw new Error('暂时无法连接账号服务，已保留原登录凭证');
   }
   if (!info || !info.success || !info.username) throw new Error((info && info.error) || 'Token 无效');
   await main.callIpcHandler('save-settings', { token });
@@ -77,21 +77,6 @@ function privateIpv4Addresses() {
   return [...new Set(values)];
 }
 
-async function queryPublicIp(timeoutMs = 3000) {
-  for (const url of ['https://api.ipify.org', 'https://ipv4.icanhazip.com']) {
-    const result = await new Promise((resolve) => {
-      const req = https.get(url, { timeout: timeoutMs }, (res) => {
-        let body = '';
-        res.on('data', (chunk) => { body += chunk; });
-        res.on('end', () => resolve(body.trim()));
-      });
-      req.on('timeout', () => { req.destroy(); resolve(''); });
-      req.on('error', () => resolve(''));
-    });
-    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(result)) return result;
-  }
-  return '';
-}
 
 program
   .name('biodl')
@@ -113,7 +98,7 @@ program
     try {
       await server.start();
       const privateIps = privateIpv4Addresses();
-      const publicIp = await queryPublicIp();
+
       const port = options.port;
       const localUrls = privateIps.map((ip) => `http://${ip}:${port}`);
       console.log(`
@@ -122,7 +107,7 @@ program
 ------------------------------------------------------------
 请在 Windows / macOS / Linux 电脑的 Chrome 或 Edge 地址栏中打开：
 🏠 内网访问 : ${localUrls.length ? localUrls.join('\n             ') : '未检测到内网 IPv4，请执行 hostname -I 查看'}
-🌍 外网访问 : ${publicIp && options.host === '0.0.0.0' ? `http://${publicIp}:${port}（需云服务器安全组/防火墙放行该端口）` : '未检测到或当前仅限本机访问'}
+🌍 外网访问 : 请使用服务器提供商提供的地址，并确认安全组/防火墙放行端口（不自动查询公网 IP）
 💻 本机访问 : http://127.0.0.1:${port}
 
 IP 是服务器地址，端口是冒号后的数字 ${port}。请把完整的 http://IP:${port} 输入浏览器地址栏，不要在 Xshell/X-Share 的文件管理器中打开。
@@ -147,8 +132,7 @@ program
         const info = await validateAndSaveToken(s.token);
         console.log(`✅ 当前登录凭证有效\n${formatAccountInfo(info)}`);
       } catch (e) {
-        await main.callIpcHandler('save-settings', { token: null });
-        console.error('❌ 已保存的 Token 已失效:', e.message);
+        console.error('❌ 无法验证已保存的登录凭证（已保留）:', e.message);
         process.exitCode = 1;
       }
     } else {
@@ -156,7 +140,6 @@ program
         const info = await validateAndSaveToken(token);
         console.log(`✅ 登录验证成功\n${formatAccountInfo(info)}`);
       } catch (e) {
-        await main.callIpcHandler('save-settings', { token: null });
         console.error('❌ 登录验证失败:', e.message);
         process.exitCode = 1;
       }
@@ -194,6 +177,10 @@ program
   .option('-c, --concurrent <number>', '并发下载数', 3)
   .action(async (type, accession, options) => {
     const s = await main.callIpcHandler('get-settings');
+    if (s.usageChoice !== 'accepted') {
+      console.error('请先阅读使用声明：./biodl consent；确认后执行 ./biodl consent --accept。');
+      process.exitCode = 1; return;
+    }
     if (!s.token) {
       console.error('❌ 尚未登录，请先执行 ./biodl login -u 用户名 -p 密码，或 ./biodl auth TOKEN');
       process.exit(1);
@@ -203,7 +190,6 @@ program
       const info = await validateAndSaveToken(s.token);
       if (!info.isActive) throw new Error('账号套餐已过期或剩余流量不足');
     } catch (e) {
-      await main.callIpcHandler('save-settings', { token: null });
       console.error(`❌ ${e.message}，已阻止下载。请重新登录或检查账户状态。`);
       process.exit(1);
     }
@@ -288,11 +274,18 @@ program
 // 4. biodl update: 命令行一键安全自我更新
 program
   .command('update')
-  .description('检查并一键安全更新到最新的 Linux Server / CLI 版本')
-  .action(async () => {
+  .description('检查并更新 Linux Server / CLI；更新前请暂停任务并停止后台服务')
+  .option('--preview', '明确选择预览通道（默认保持当前通道）')
+  .option('--check', '只检查版本，不安装')
+  .action(async (options) => {
     console.log(`🔍 正在检查最新版本 (当前: v${SERVER_VERSION})...`);
     try {
-      const checkRes = await main.callIpcHandler('check-for-updates');
+      let checkRes = await main.callIpcHandler('check-for-updates', { advancedMode: !!options.preview });
+      if (options.preview && checkRes?.success) {
+        if (!checkRes.preview) throw new Error('未能读取预览通道，请稍后重试；未切换或安装其他版本');
+        const p = checkRes.preview;
+        checkRes = { ...checkRes, ...p, latestVersion: p.version };
+      }
       if (!checkRes || !checkRes.success) {
         console.error('❌ 检查更新失败:', (checkRes && checkRes.message) || '网络连接异常');
         process.exit(1);
@@ -310,6 +303,7 @@ program
         console.log('----------------');
       }
 
+      if (options.check) return;
       const linuxUrl = checkRes.linuxUrl;
       if (!linuxUrl) {
         console.error('❌ 官方更新清单中未声明 Linux 安装包地址，请前往官网手动下载。');
@@ -325,7 +319,7 @@ program
       if (updateRes && updateRes.success) {
         console.log(`\n🎉 BioDownloader 已成功更新至 v${checkRes.latestVersion}！`);
         console.log('   核心代码已完成就地升级，您的配置数据与下载历史完好保留。');
-        console.log('   如果您正在运行后台服务，请执行 pm2 restart biodl 或重新运行 ./biodl start 即可生效。\n');
+        console.log('   请重新启动已停止的服务：nohup ./biodl start </dev/null > biodl.log 2>&1 &，然后在同一终端执行 disown。使用 PM2/systemd 的请通过原进程管理器重启，勿重复启动。\n');
       }
     } catch (e) {
       console.error('❌ 更新失败:', e.message);
@@ -344,4 +338,33 @@ program
     else data.completed.slice(0, 5).forEach(c => console.log(`  - ✅ ${c.name} (${c.completedAt})`));
   });
 
-program.parse(process.argv);
+program.command('consent').description('查看使用声明并保存本机选择')
+  .option('--accept', '已知悉并确认使用').option('--decline', '不使用下载与加速')
+  .action(async options => {
+    console.log('不推荐在任何校园网环境下使用本软件。校园网使用属于高风险行为；因此产生的账号封禁等后果，目前无法提供相应售后处理。建议使用家用宽带、手机流量或热点，或允许使用本软件的网吧网络。本声明不检测网络环境。');
+    if (options.accept && options.decline) { console.error('请只选择一个选项'); process.exitCode = 1; return; }
+    if (options.accept || options.decline) {
+      await main.callIpcHandler('set-usage-choice', options.accept ? 'accepted' : 'declined');
+      console.log(options.accept ? '已保存确认，以后不再提示。' : '已选择不使用；后续下载将等待您的确认。');
+    } else console.log('确认使用：./biodl consent --accept；不使用：./biodl consent --decline');
+  });
+program.command('paths').description('显示程序、配置及默认下载目录（不显示凭据）')
+  .action(async () => {
+    const settings = await main.callIpcHandler('get-settings');
+    const data = path.resolve(process.env.BIODL_DATA_DIR || path.join(os.homedir(), '.bio-downloader'));
+    const appDir = path.resolve(__dirname, '../..');
+    console.log('程序目录: ' + appDir);
+    console.log('配置、历史与会话目录: ' + data);
+    console.log('默认下载目录: ' + (settings.defaultDir || path.join(os.homedir(), 'Downloads')));
+    console.log('下载文件和断点保存在各任务的目标目录，请一起保留。');
+    if (data === appDir || data.startsWith(appDir + path.sep)) console.log('注意：当前 BIODL_DATA_DIR 位于程序目录内。删除程序前请先备份并迁移此目录，然后更新环境变量。');
+  });
+program.command('doctor').description('检查官方服务连通性；不读取账号密码，不检测网络类型')
+  .action(async () => {
+    console.log('检查版本服务，最多等待约 30 秒...');
+    const result = await main.callIpcHandler('check-for-updates');
+    if (result?.success) console.log('官方服务连接正常。若 Web 登录仍失败，请记录页面的具体报错；不要发送密码或 Token。');
+    else { console.error(result?.message || '连接失败'); process.exitCode = 1; }
+  });
+
+program.parseAsync(process.argv).catch(error => { console.error('操作失败:', error.message); process.exitCode = 1; });

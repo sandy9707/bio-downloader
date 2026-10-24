@@ -1,6 +1,6 @@
 const fs=require('fs'),path=require('path'),os=require('os'),assert=require('assert'),http=require('http'),crypto=require('crypto');
 const root=process.cwd(),appRoot=process.env.BIODL_TEST_ASAR?path.resolve(process.env.BIODL_TEST_ASAR):root,dir=fs.mkdtempSync(path.join(os.tmpdir(),'biodl-electron-batch-'));process.env.BIODL_DATA_DIR=path.join(dir,'profile');
-fs.mkdirSync(process.env.BIODL_DATA_DIR,{recursive:true});fs.writeFileSync(path.join(process.env.BIODL_DATA_DIR,'settings.json'),JSON.stringify({loggingEnabled:true,token:null}));
+fs.mkdirSync(process.env.BIODL_DATA_DIR,{recursive:true});fs.writeFileSync(path.join(process.env.BIODL_DATA_DIR,'settings.json'),JSON.stringify({loggingEnabled:true,token:null,usageChoice:'accepted'}));
 const {app,BrowserWindow,ipcMain,session}=require('electron');app.setAppPath(appRoot);app.getVersion=()=>require(path.join(appRoot,'package.json')).version;
 if(appRoot!==root){Object.defineProperty(app,'isPackaged',{value:true});Object.defineProperty(process,'resourcesPath',{value:path.dirname(appRoot)});assert.equal(process.resourcesPath,path.dirname(appRoot));}
 const axios=require(path.join(appRoot,'node_modules/axios/dist/node/axios.cjs'));axios.get=async()=>({data:{success:false,error:'Offline test fixture'}});let charges=0;axios.post=async(url)=>{assert(url.endsWith('/api/user/consume'));charges++;return {data:{success:true}}};

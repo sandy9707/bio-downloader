@@ -133,6 +133,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Local history must be available even while authentication is offline or slow.
   let settings = {};
   try { settings = await window.api.getSettings() || {}; } catch (e) { console.warn('读取设置失败:', e.message); }
+  window.BioUsageNotice?.mount({ choice: settings.usageChoice, onChange: value => window.api.setUsageChoice(value) });
   await initTransfersAndSettings(settings);
   renderLocalDownloadSources();
   // 初始化登录/注册表单显示状态
@@ -251,6 +252,7 @@ async function updateClashUIState() {
 
 async function toggleClash() {
   const toggle = document.getElementById('clashToggle');
+  if (toggle.checked && window.campusNotice && !(await window.campusNotice.beforeUse())) { toggle.checked = false; return; }
   const dot = document.getElementById('clashDot');
   const text = document.getElementById('clashStatusText');
   if (clashToggleBusy) return;
@@ -321,6 +323,7 @@ function switchTab(tabId) {
     'cloud-tab': '云下载',
     'profile-tab': '个人中心',
     'plugins-tab': '扩展插件',
+    'ssh-tunnel-tab': '连接 Linux Web',
     'settings-tab': '全局设置',
     'download-engines-tab': '下载器配置'
   };
@@ -615,7 +618,7 @@ async function triggerCheckForUpdates() {
       const cardPreview = document.getElementById('updateCardPreview');
       if (cardPreview) {
         const pv = res.preview;
-        const showPreview = (res.isPreviewClient || advancedMode) && pv && pv.version && pv.patchUrl && pv.hasUpdate;
+        const showPreview = (res.isPreviewClient || advancedMode) && pv && pv.version && (pv.platform === 'linux' ? pv.linuxUrl : pv.patchUrl) && pv.hasUpdate;
         if (showPreview) {
           document.getElementById('updatePreviewVersion').innerText = pv.version;
           document.getElementById('updatePreviewReleaseNotes').innerText = pv.releaseNotes || '';
@@ -1083,6 +1086,7 @@ async function queryBioSample() {
 }
 
 async function checkSizes() {  const input = document.getElementById('accInput-' + currentDownloadType);
+  if (window.campusNotice && !(await window.campusNotice.beforeUse())) return;
   if (input && window.BioDownloadSources) input.value = BioDownloadSources.normalizeList(currentDownloadType, input.value).join('\n');
   const inputVal = input?.value.trim() || '';
   if (!inputVal) {
@@ -1375,6 +1379,7 @@ async function parseCurlInput() {
   const startBtn = document.getElementById('curlStartBtn'); if (startBtn) startBtn.style.display = '';
 }
 async function startCurlDownload() {
+  if (window.campusNotice && !(await window.campusNotice.beforeUse())) return;
   if (!curlParsed) { showToast('请先解析 cURL', 'warning'); return; }
   if (!curlSaveDir) { showToast('请选择保存目录', 'warning'); return; }
   const startBtn = document.getElementById('curlStartBtn'); if (startBtn) startBtn.disabled = true;
@@ -1568,7 +1573,8 @@ async function verifyToken(token, isAutoLogin = false) {
       // 如果加速器没开，则为其自动开启
       try {
         const isClashRunning = await window.api.getClashStatus();
-        if (!isClashRunning) {
+        await window.campusNotice?.ready;
+        if (!isClashRunning && !window.campusNotice?.requiresAcknowledgment()) {
           await window.api.startClash(token);
           updateClashUIState();
         }
@@ -2385,6 +2391,7 @@ function removeFromQueue(index) {
 
 // 单个文件独立加速下载
 async function downloadSingle(index) {
+  if (window.campusNotice && !(await window.campusNotice.beforeUse())) return;
   const file = currentQueue[index];
   if (!file) return;
 
@@ -2809,7 +2816,7 @@ async function runCompletedMd5(items) {
   try {
     // Metadata can use the accelerator when logged in. Local hashing still works
     // offline; without an official checksum it is never labelled verified.
-    if (currentUser?.token && !(await window.api.getClashStatus())) {
+    if (currentUser?.token && !window.campusNotice?.requiresAcknowledgment() && !(await window.api.getClashStatus())) {
       try { await window.api.startClash(currentUser.token); } catch (_) {}
     }
     for (const item of items) {
@@ -3145,6 +3152,7 @@ function allocateTransferId() {
   return nextTransferId++;
 }
 async function ensureTransferConnection() {
+  if (window.campusNotice && !(await window.campusNotice.beforeUse())) return false;
   if (!currentUser || !currentUser.token) {
     showToast('请登录账户后继续下载', 'error');
     switchTab('profile-tab');
@@ -3957,6 +3965,7 @@ function updateNodeCountUI(count) {
 
 // 优化连接/刷新通道方法
 async function optimizeConnections() {
+  if (window.campusNotice && !(await window.campusNotice.beforeUse())) return;
   if (!currentUser || !currentUser.token) {
     showToast('请先登录账户后再执行优化连接', 'error');
     switchTab('profile-tab');
@@ -4097,6 +4106,7 @@ function renderExtractionResources() {
   });
 }
 async function extractionDownloadResource(url, name) {
+  if (window.campusNotice && !(await window.campusNotice.beforeUse())) return;
   showToast('已加入下载：' + (name || url), 'info');
   try { await window.api.extractionDownload({ url, name, saveDir: defaultDir }); } catch (e) { showToast('启动下载失败: ' + e.message, 'error'); }
 }
@@ -4451,4 +4461,31 @@ async function setPrimaryDownloader(engine) {
     await refreshPluginsList();
     showToast('已切换主力下载器；新任务生效，已有断点仍由原内核恢复');
   } catch (error) { showToast('切换失败：' + error.message, 'error'); }
+}
+
+async function openSshPanel() {
+  if (!window.api.isElectron) { showToast('请在 Mac 或 Windows 桌面客户端的扩展插件中连接这台 Linux 服务器。', 'info'); return; }
+  switchTab('ssh-tunnel-tab'); await refreshSshStatus();
+}
+async function chooseSshKey() { try { document.getElementById('sshKeyPath').value = await window.api.sshSelectKey() || ''; } catch (e) { showToast(e.message,'error'); } }
+async function refreshSshStatus() {
+  try { const s = await window.api.sshTunnelStatus(); document.getElementById('sshTunnelState').textContent = s.connected ? '已连接：' + s.url : (s.error || '尚未连接'); } catch (e) { showToast(e.message,'error'); }
+}
+async function stopSshTunnel() { await window.api.sshTunnelStop(); await refreshSshStatus(); }
+async function startSshTunnel() {
+  if (window.campusNotice && !(await window.campusNotice.beforeUse())) return;
+  const button = document.getElementById('sshConnectButton'); button.disabled = true;
+  const value = id => document.getElementById(id).value;
+  const options = { host:value('sshHost'),username:value('sshUsername'),port:Number(value('sshPort')),remotePort:Number(value('sshRemotePort')),localPort:Number(value('sshLocalPort')),password:value('sshPassword'),keyPath:value('sshKeyPath'),passphrase:value('sshPassphrase') };
+  const state = document.getElementById('sshTunnelState'); state.textContent='正在连接 SSH…';
+  try {
+    let result = await window.api.sshTunnelStart(options);
+    if (result.requiresTrust) {
+      if (!confirm('首次连接 ' + result.host + ':' + result.port + '\n服务器指纹：' + result.fingerprint + '\n请与服务器管理员提供的指纹核对一致后确认。是否信任并继续？')) { state.textContent='已取消，未保存信任'; return; }
+      result = await window.api.sshTunnelStart({ ...options, confirmedFingerprint:result.fingerprint });
+    }
+    if (!result.connected) throw new Error('SSH 未建立连接');
+    await refreshSshStatus(); await window.api.sshTunnelOpen();
+  } catch(e) { state.textContent=e.message; showToast(e.message,'error'); }
+  finally { options.password='';options.passphrase='';document.getElementById('sshPassword').value='';document.getElementById('sshPassphrase').value='';button.disabled=false; }
 }
