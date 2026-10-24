@@ -1147,6 +1147,12 @@
     .engine-row:last-child { border-bottom:0; }
     .engine-row p { color:var(--text-muted); font-size:0.85rem; margin:0.4rem 0 0; line-height:1.5; }
     .engine-row select { width:100%; padding:0.65rem 0.85rem; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-input); color:var(--text-color); font:inherit; cursor:pointer; }
+    #ssh-tunnel-tab .engine-row { grid-template-columns:180px minmax(0,1fr); gap:1rem; }
+    #ssh-tunnel-tab input { box-sizing:border-box; width:100%; min-width:0; padding:.7rem .85rem; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-input); color:var(--text-color); font:inherit; }
+    #ssh-tunnel-tab input:focus-visible { outline:2px solid #6366f1; outline-offset:2px; }
+    #ssh-tunnel-tab .ssh-key-field { display:flex; gap:8px; align-items:center; min-width:0; }
+    #ssh-tunnel-tab .ssh-key-field .btn { flex-shrink:0; }
+    @media(max-width:800px) { #ssh-tunnel-tab .engine-row { grid-template-columns:1fr; gap:.5rem; } }
     .engine-row select:focus-visible, .switch input:focus-visible + .switch-slider { outline:2px solid #6366f1; outline-offset:3px; }
     @media (max-width:800px) { .engine-row { grid-template-columns:1fr; gap:0.65rem; } .settings-row { flex-wrap:wrap; } }
 
@@ -1706,11 +1712,11 @@
       <div class="card" style="max-width:780px;">
         <h3>连接 Linux Web</h3>
         <p class="settings-hint">先在服务器运行 <code>./biodl start --host 127.0.0.1</code>。连接只在当前电脑开放；关闭客户端会断开隧道，服务器下载继续运行。</p>
-        <div class="engine-row"><label for="sshHost">服务器地址</label><input id="sshHost" placeholder="服务器域名或 IP" autocomplete="off"></div>
-        <div class="engine-row"><label for="sshUsername">SSH 用户名</label><input id="sshUsername" placeholder="普通服务器账号" autocomplete="off"></div>
+        <div class="engine-row"><label for="sshHost">服务器地址</label><input type="text" id="sshHost" placeholder="服务器域名或 IP" autocomplete="off"></div>
+        <div class="engine-row"><label for="sshUsername">SSH 用户名</label><input type="text" id="sshUsername" placeholder="普通服务器账号" autocomplete="off"></div>
         <div class="engine-row"><label for="sshPort">SSH 端口</label><input id="sshPort" type="number" value="22" min="1" max="65535"></div>
         <div class="engine-row"><label for="sshPassword">SSH 密码（或使用私钥）</label><input id="sshPassword" type="password" autocomplete="new-password"></div>
-        <div class="engine-row"><label for="sshKeyPath">私钥文件（可选）</label><input id="sshKeyPath" readonly placeholder="未选择"><button class="btn btn-secondary" onclick="chooseSshKey()">选择</button></div>
+        <div class="engine-row"><label for="sshKeyPath">私钥文件（可选）</label><div class="ssh-key-field"><input type="text" id="sshKeyPath" readonly placeholder="未选择"><button class="btn btn-secondary" onclick="chooseSshKey()">选择</button></div></div>
         <div class="engine-row"><label for="sshPassphrase">私钥口令（可选）</label><input id="sshPassphrase" type="password" autocomplete="new-password"></div>
         <div class="engine-row"><label for="sshRemotePort">服务器 Web 端口</label><input id="sshRemotePort" type="number" value="43280" min="1" max="65535"></div>
         <div class="engine-row"><label for="sshLocalPort">本机端口（0 自动分配）</label><input id="sshLocalPort" type="number" value="0" min="0" max="65535"></div>

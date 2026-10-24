@@ -59,6 +59,8 @@ const timeout = setTimeout(() => { console.error('USAGE_UI_TIMEOUT'); app.exit(2
   assert.equal(await(await fetch(openedUrl)).text(),'SSH_DESKTOP_FIXTURE');
   assert.equal(await run("document.getElementById('sshPassword').value"),'');
   assert(!fs.readFileSync(path.join(dir,'settings.json'),'utf8').includes('fixture-only'));
+  await run('document.getAnimations().forEach(a=>a.finish())'); await delay();
+  assert.equal(await run("Array.from(document.querySelectorAll('#ssh-tunnel-tab input')).every(el=>el.getBoundingClientRect().height>=35)"),true);
   fs.writeFileSync(path.join(root,'.evidence','ssh-desktop-'+process.platform+'.png'), (await win.webContents.capturePage()).toPNG());
   await run('stopSshTunnel()'); assert.equal(await run('window.api.sshTunnelStatus().then(s=>s.connected)'),false);
 

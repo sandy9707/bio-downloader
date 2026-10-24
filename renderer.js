@@ -306,7 +306,7 @@ function switchTab(tabId) {
   navItems.forEach(item => item.classList.remove('active'));
   
   // 查找对应的菜单项目
-  const activeNavItem = Array.from(navItems).find(item => item.getAttribute('onclick').includes(tabId === 'download-engines-tab' ? 'settings-tab' : tabId));
+  const activeNavItem = Array.from(navItems).find(item => item.getAttribute('onclick').includes(tabId === 'download-engines-tab' ? 'settings-tab' : tabId === 'ssh-tunnel-tab' ? 'plugins-tab' : tabId));
   if (activeNavItem) activeNavItem.classList.add('active');
 
   // 切换视图显示
