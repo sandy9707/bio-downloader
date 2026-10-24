@@ -14,7 +14,8 @@ const server = http.createServer((req,res)=>{
  const range = /bytes=(\d+)-(\d*)/.exec(req.headers.range||'');
  let start=range?+range[1]:0,end=range&&range[2]?+range[2]:size-1;
  res.writeHead(range?206:200,{'Content-Length':end-start+1,'Accept-Ranges':'bytes','Content-Range':`bytes ${start}-${end}/${size}`,'Content-Type':'application/octet-stream',ETag:'"speed-fixture"'});
- function send(){if(res.destroyed)return;const n=Math.min(8192,end-start+1);if(n<=0){res.end();return;}if(req.url.includes('/axel')&&end-start>0)payloadBytes+=n;res.write(Buffer.alloc(n,42));start+=n;timer=setTimeout(send,10);}
+ if(req.method==='HEAD'){res.end();return;}
+ function send(){if(res.destroyed)return;const n=Math.min(8192,end-start+1);if(n<=0){res.end();return;}if(req.url.includes('/axel'))payloadBytes+=n;res.write(Buffer.alloc(n,42));start+=n;timer=setTimeout(send,10);}
  let timer;res.on('close',()=>clearTimeout(timer));send();
 });
 (async()=>{
@@ -30,7 +31,7 @@ const server = http.createServer((req,res)=>{
    const binary=plugins.find(p=>p.id===engine).path;
    progress=0; payloadBytes=0;
    downloaded=await measureDownloader({url:'http://unresolvable.example.invalid/axel',engine,binary,proxy:{protocol:'http',host:'127.0.0.1',port:server.address().port},timeoutMs:1100,onProgress:()=>progress++});
-   assert(downloaded.success,JSON.stringify({engine,downloaded}));assert(downloaded.bytesReceived>0);assert(downloaded.bytesReceived<size,'must not count sparse file logical length');assert(downloaded.bytesReceived<=payloadBytes,'cannot invent received bytes');assert(progress>0);
+   assert(downloaded.success,JSON.stringify({engine,downloaded}));assert(downloaded.bytesReceived>0);assert(downloaded.bytesReceived<size,'must not count sparse file logical length');assert(downloaded.bytesReceived<=payloadBytes,JSON.stringify({message:'cannot invent received bytes',engine,downloaded,payloadBytes}));assert(progress>0);
    const failing=await measureDownloader({url:base+'/file',engine,binary,proxy:{protocol:'http',host:'127.0.0.1',port:1},timeoutMs:400});assert.equal(failing.success,false,'failed proxy must not bypass acceleration');
  }
  console.log('SPEEDTEST_OK',JSON.stringify({network,downloaded,progress}));
