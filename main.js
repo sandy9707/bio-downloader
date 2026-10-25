@@ -565,6 +565,11 @@ function createWindow() {
   mainWindow.loadFile('index.html');
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    hotUpdater.acknowledge(process.env.BIODL_UPDATE_RECEIPT, app.getVersion(), path.join(process.resourcesPath, 'app.asar'));
+    if (process.env.BIODL_UPDATE_FAILURE) {
+      const reason = process.env.BIODL_UPDATE_FAILURE; delete process.env.BIODL_UPDATE_FAILURE;
+      dialog.showErrorBox('更新未完成，已恢复原版本', reason + '\n请重试或使用完整安装包更新。');
+    }
   });
 
 
@@ -574,138 +579,8 @@ function createWindow() {
   });
 }
 
-function launchWindowsPersistentRuntime() {
-  if (!isElectron || process.platform !== 'win32' || !app.isPackaged || !process.env.PORTABLE_EXECUTABLE_FILE || process.env.BIODL_FIXED_RUNTIME === '1') return false;
-
-  try {
-    const fixedDir = path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'BioDownloader', 'runtime');
-    if (path.resolve(path.dirname(process.execPath)).toLowerCase() === path.resolve(fixedDir).toLowerCase()) return false;
-
-    const fixedExe = path.join(fixedDir, path.basename(process.execPath));
-    const fixedResources = path.join(fixedDir, 'resources');
-    const persistentAsar = path.join(app.getPath('userData'), 'app.asar');
-    const sourceDir = path.dirname(process.execPath);
-
-    fs.rmSync(fixedDir, { recursive: true, force: true });
-    fs.mkdirSync(fixedDir, { recursive: true });
-    const copy = spawnSync('robocopy.exe', [sourceDir, fixedDir, '/E', '/COPY:DAT', '/R:3', '/W:1'], {
-      windowsHide: true,
-      encoding: 'utf8'
-    });
-    // Robocopy 0-7 均属于成功或仅有额外文件/属性差异。
-    if (!fs.existsSync(fixedExe) || !fs.existsSync(path.join(fixedResources, 'app.asar'))) {
-      throw new Error(`robocopy 固定运行时失败 (code=${copy.status}): ${copy.stderr || copy.stdout || '未生成运行文件'}`);
-    }
-    if (originalFs.existsSync(persistentAsar)) {
-      fs.mkdirSync(fixedResources, { recursive: true });
-      originalFs.copyFileSync(persistentAsar, path.join(fixedResources, 'app.asar'));
-    }
-    const launchScript = path.join(app.getPath('userData'), 'launch-fixed-runtime.cmd');
-    fs.writeFileSync(launchScript, [
-      '@echo off',
-      'ping 127.0.0.1 -n 4 >nul',
-      `taskkill /F /PID ${process.ppid} >nul 2>nul`,
-      'ping 127.0.0.1 -n 3 >nul',
-      'set BIODL_FIXED_RUNTIME=1',
-      `cd /d "${fixedDir}"`,
-      `start "" "${fixedExe}"`,
-      'del "%~f0"'
-    ].join('\r\n'), 'utf8');
-    spawn('cmd.exe', ['/d', '/c', launchScript], { detached: true, stdio: 'ignore' }).unref();
-    return true;
-  } catch (e) {
-    console.error('[WindowsRuntime] 固定运行目录初始化失败:', e.message);
-    return false;
-  }
-}
-
-function cleanupLegacyWindowsRuntime() {
-  if (process.platform !== 'win32' || process.env.PORTABLE_EXECUTABLE_FILE) return;
-  const userData = app.getPath('userData');
-  const legacyFiles = [
-    'install-fixed-runtime.cmd',
-    'launch-fixed-runtime.cmd',
-    'app.asar',
-    'patch_download.tmp'
-  ];
-  for (const name of legacyFiles) {
-    const filePath = path.join(userData, name);
-    try {
-      if (originalFs.existsSync(filePath)) originalFs.unlinkSync(filePath);
-    } catch (e) {
-      console.warn(`[WindowsRuntime] 清理旧便携版残留失败 ${name}:`, e.message);
-    }
-  }
-  const cleanupScript = [
-    "$names = @('install-fixed-runtime.cmd','launch-fixed-runtime.cmd')",
-    'Get-CimInstance Win32_Process | Where-Object {',
-    "  $_.Name -eq 'cmd.exe' -and $_.CommandLine -and ($names | Where-Object { $_.CommandLine -like ('*' + $_ + '*') })",
-    '} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }'
-  ].join('; ');
-  spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', cleanupScript], {
-    detached: true,
-    windowsHide: true,
-    stdio: 'ignore'
-  }).unref();
-}
-
-function checkPendingAsarUpdates() {
-  try {
-    // 检查持久化存储目录中是否存在已校验的热更新包
-    const persistentAsar = path.join(app.getPath('userData'), 'app.asar');
-    const targetAsar = path.join(process.resourcesPath, 'app.asar');
-
-    // 若持久化存储目录中有更新的 asar，自动覆盖当前临时运行目录的 app.asar
-    if (originalFs.existsSync(persistentAsar) && originalFs.existsSync(targetAsar)) {
-      try {
-        const persistStat = originalFs.statSync(persistentAsar);
-        const targetStat = originalFs.statSync(targetAsar);
-        if (persistStat.size !== targetStat.size || persistStat.mtimeMs > targetStat.mtimeMs) {
-          console.log('[HotPatch] 从用户持久化目录加载最新 app.asar 核心...');
-          const backupAsar = path.join(process.resourcesPath, 'app.asar.old');
-          try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
-          fs.renameSync(targetAsar, backupAsar);
-          originalFs.copyFileSync(persistentAsar, targetAsar);
-          try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
-        }
-      } catch (e) {
-        console.warn('[HotPatch] 同步持久化 app.asar 提示:', e.message);
-      }
-    }
-
-    const updateAsar = path.join(process.resourcesPath, 'update.asar');
-    if (fs.existsSync(updateAsar)) {
-      const manifestPath = updateAsar + '.manifest';
-      let manifest = null;
-      try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch(e){}
-      // 安全:无清单或验签不通过的暂存补丁一律丢弃,绝不应用未校验的代码
-      if (!manifest || !verifyPatchFile(updateAsar, manifest.sha256, manifest.signature)) {
-        console.warn('Pending update.asar 未通过签名校验,已丢弃。');
-        try { fs.unlinkSync(updateAsar); } catch(e){}
-        try { fs.unlinkSync(manifestPath); } catch(e){}
-        return;
-      }
-      console.log('Found verified pending update.asar, applying now on startup...');
-      const backupAsar = path.join(process.resourcesPath, 'app.asar.old');
-      try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
-      if (fs.existsSync(targetAsar)) fs.renameSync(targetAsar, backupAsar);
-      fs.renameSync(updateAsar, targetAsar);
-      try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
-      try { fs.unlinkSync(manifestPath); } catch(e){}
-    }
-  } catch (e) {
-    console.error('Error applying pending asar update on startup:', e);
-  }
-}
-
 app.whenReady().then(() => {
   if (!isElectron) return; // 无头模式下不创建原生窗口，由 Web Server / CLI 调度
-  cleanupLegacyWindowsRuntime();
-  if (launchWindowsPersistentRuntime()) {
-    setTimeout(() => process.exit(0), 100);
-    return;
-  }
-  checkPendingAsarUpdates();
   ensureBinaries();
   ensureClashDataFiles();
   createWindow();
@@ -1508,7 +1383,11 @@ function axiosProxyFor(urlStr) {
 }
 
 const { updateSources, downloadUpdate: downloadVerifiedUpdate } = require('./src/main/update-download');
+const hotUpdater = require('./src/main/hot-update');
 async function applyHotPatch(patchUrl, onProgress = () => {}) {
+  if (!isElectron || !app.isPackaged) throw new Error('请在已安装的桌面客户端中更新');
+  if (process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_FILE) throw new Error('便携版请使用完整安装包更新');
+  if (activeAxelProcesses.size || activeNativeTransfers.size || activeIntegrityChecks.size) throw new Error('请先结束当前下载和校验任务，再更新程序');
   if (!patchUrl) {
     throw new Error('未提供有效热更新补丁地址');
   }
@@ -1556,46 +1435,21 @@ async function applyHotPatch(patchUrl, onProgress = () => {}) {
   }
   console.log('[HotPatch] 补丁签名校验通过');
 
-    // 5) 替换 app.asar 并写入持久化挂载目录(确保便携版与热更新均永久生效)
-    const targetAsar = path.join(process.resourcesPath, 'app.asar');
-    let successDirect = false;
-
-    // 优先写入永久数据目录中的 app.asar，实现便携单文件 EXE 任意重解压均可优先挂载
-    const persistentAsar = path.join(app.getPath('userData'), 'app.asar');
-    try {
-      originalFs.copyFileSync(tempPatchPath, persistentAsar);
-      console.log('[HotPatch] 补丁已持久化写入用户数据目录:', persistentAsar);
-    } catch (persistErr) {
-      console.warn('[HotPatch] 写入用户目录 asar 提示:', persistErr.message);
-    }
-
-    try {
-      if (fs.existsSync(targetAsar)) {
-        const backupAsar = path.join(process.resourcesPath, 'app.asar.old');
-        try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
-        fs.renameSync(targetAsar, backupAsar);
-        fs.renameSync(tempPatchPath, targetAsar);
-        try { if (fs.existsSync(backupAsar)) fs.unlinkSync(backupAsar); } catch(e){}
-        successDirect = true;
-      }
-    } catch (err) {
-      console.warn('Direct replace app.asar failed, staging update.asar for next launch:', err.message);
-      const updateAsar = path.join(process.resourcesPath, 'update.asar');
-      try { originalFs.copyFileSync(persistentAsar, updateAsar); } catch(e) {}
-      try {
-        fs.writeFileSync(updateAsar + '.manifest', JSON.stringify({ sha256: manifest.sha256, signature: manifest.signature }));
-      } catch(e){}
-    }
-    try { if (fs.existsSync(tempPatchPath)) fs.unlinkSync(tempPatchPath); } catch(e){}
-
-  return { success: true, direct: successDirect, message: '代码热更新补丁已就绪！应用即将重启...' };
+  // Prepare and verify a separate updater before asking the app to quit.
+  const prepared = hotUpdater.prepare({ patch: tempPatchPath, manifest,
+    resources: process.resourcesPath, userData: app.getPath('userData'), executable: process.execPath });
+  await hotUpdater.launchHelper(prepared);
+  try { originalFs.unlinkSync(tempPatchPath); } catch (e) {}
+  return { success: true, restartPending: true, message: '补丁已验证，程序退出后将安装并重新启动。' };
 }
 
 // 执行 Linux 自更新流程（下载新 tar.gz -> 校验 sha256 -> 就地安全解压覆盖代码 -> 保留用户数据）
-async function performLinuxSelfUpdate(tarballUrl, expectedSha256, onProgress = () => {}) {
+async function performLinuxSelfUpdate(tarballUrl, expectedSha256, version, onProgress = () => {}) {
   if (process.platform !== 'linux') throw new Error('仅支持在 Linux 系统执行此更新');
   const fullUrl = tarballUrl.startsWith('http') ? tarballUrl : `${BACKEND_BASE_URL}${tarballUrl}`;
   const appRoot = path.resolve(__dirname);
+  const linuxUpdater = require('./src/main/linux-update');
+  linuxUpdater.assertNoOtherServer(appRoot);
   const tempDir = path.join(os.tmpdir(), `biodl_update_${Date.now()}`);
   fs.mkdirSync(tempDir, { recursive: true });
   const downloadPath = path.join(tempDir, 'update.tar.gz');
@@ -1617,6 +1471,8 @@ async function performLinuxSelfUpdate(tarballUrl, expectedSha256, onProgress = (
     // 解压到临时目录
     const extractDir = path.join(tempDir, 'extracted');
     fs.mkdirSync(extractDir, { recursive: true });
+    const listing = spawnSync('tar', ['-tzf', downloadPath], { encoding: 'utf8', timeout: 30000, maxBuffer: 16 * 1024 * 1024 });
+    if (listing.status !== 0 || listing.stdout.trim().split('\n').some(name => name.startsWith('/') || name.split('/').includes('..'))) throw new Error('Linux 更新包路径无效');
     const tarRes = spawnSync('tar', ['-xzf', downloadPath, '-C', extractDir], { timeout: 30000 });
     if (tarRes.status !== 0) {
       throw new Error('解压更新包失败: ' + (tarRes.stderr || tarRes.stdout || '未知错误'));
@@ -1627,53 +1483,40 @@ async function performLinuxSelfUpdate(tarballUrl, expectedSha256, onProgress = (
     const rootName = entries.find(e => fs.statSync(path.join(extractDir, e)).isDirectory()) || '';
     const newSourceDir = rootName ? path.join(extractDir, rootName) : extractDir;
 
-    // 核心代码与静态资源增量安全替换（排除用户私有数据和 runtime）
-    const safeOverwrite = ['main.js', 'renderer.js', 'preload.js', 'package.json', 'package-lock.json', 'THIRD_PARTY_NOTICES.md', 'speedtest.html', 'biodl'];
-    for (const file of safeOverwrite) {
-      const src = path.join(newSourceDir, file);
-      const dest = path.join(appRoot, file);
-      if (fs.existsSync(src)) {
-        fs.copyFileSync(src, dest);
-      }
-    }
-
-    const safeDirs = ['packages', 'shared', 'img', 'icons', 'bin', 'src', 'node_modules'];
-    for (const dir of safeDirs) {
-      const src = path.join(newSourceDir, dir);
-      const dest = path.join(appRoot, dir);
-      if (fs.existsSync(src)) {
-        fs.mkdirSync(dest, { recursive: true });
-        fs.cpSync(src, dest, { recursive: true });
-      }
-    }
-
-    const biodlBin = path.join(appRoot, 'biodl');
-    if (fs.existsSync(biodlBin)) ensureExecutable(biodlBin);
-
-    console.log('[LinuxUpdate] 核心代码更新完成！');
-    return { success: true, message: '程序已成功更新就绪！' };
+    const installed = linuxUpdater.install({ source: newSourceDir, root: appRoot, version,
+      userData: app.getPath('userData') });
+    console.log('[LinuxUpdate] 程序文件已更新，旧版备份:', installed.backup);
+    return { success: true, installedVersion: version, restartRequired: true,
+      message: `程序文件已更新至 ${version}，请重新启动 Linux 服务以加载新版。` };
   } finally {
     try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
   }
 }
 
-ipcMain.handle('linux-self-update', async (event, { url, sha256 } = {}) => {
-  let targetUrl = url;
-  let targetSha = sha256;
-  if (!targetUrl) {
-    const channel = /preview/i.test(app.getVersion()) ? 'P2' : '2';
-    const vRes = await backendGet(`${BACKEND_BASE_URL}/api/client/version?channel=${channel}&platform=linux`);
-    targetUrl = vRes.data && vRes.data.linuxUrl;
-    targetSha = vRes.data && (vRes.data.linuxSha256 || vRes.data.sha256);
-  }
-  if (!targetUrl) throw new Error('未获取到 Linux 更新包下载地址');
-
-  const res = await performLinuxSelfUpdate(targetUrl, targetSha, updateProgress(event));
-  setTimeout(() => {
-    console.log('[LinuxUpdate] 服务重启加载新版本中...');
-    process.exit(0);
-  }, 1200);
-  return res;
+let linuxUpdateBusy = false;
+ipcMain.handle('linux-self-update', async (event, { url, channel } = {}) => {
+  if (linuxUpdateBusy) throw new Error('更新正在进行，请勿重复启动');
+  if (process.platform !== 'linux') throw new Error('仅支持在 Linux 系统执行此更新');
+  if (activeAxelProcesses.size || activeNativeTransfers.size || activeIntegrityChecks.size) throw new Error('请先结束当前下载和校验任务，再更新程序');
+  linuxUpdateBusy = true;
+  try {
+    // Always obtain the digest from the official manifest, never from the renderer.
+    const selected = channel === 'P2' || /preview/i.test(url || app.getVersion()) ? 'P2' : '2';
+    const vRes = await backendGet(`${BACKEND_BASE_URL}/api/client/version?channel=${selected}&platform=linux`);
+    const manifest = vRes.data || {};
+    // The older stable platform=linux endpoint returns its tarball digest as
+    // sha256; preview manifests carry the distinct linuxSha256 field.
+    const digest = manifest.linuxSha256 || manifest.sha256;
+    if (!manifest.linuxUrl || !digest || !manifest.version) throw new Error('官方清单缺少 Linux 版本、下载地址或 SHA256');
+    const targetUrl = new URL(manifest.linuxUrl, BACKEND_BASE_URL).href;
+    if (url && new URL(url, BACKEND_BASE_URL).pathname !== new URL(targetUrl).pathname) throw new Error('更新清单已变化，请重新检查更新');
+    const res = await performLinuxSelfUpdate(targetUrl, digest, manifest.version, updateProgress(event));
+    setTimeout(() => {
+      console.log('[LinuxUpdate] 程序文件已更新；退出旧进程，请按原启动方式重新启动服务。');
+      process.exit(0);
+    }, 1200);
+    return res;
+  } catch (e) { linuxUpdateBusy = false; throw e; }
 });
 
 function updateProgress(event) {
@@ -1687,27 +1530,9 @@ ipcMain.handle('apply-hot-patch', async (event, { patchUrl }) => {
   try { res = await applyHotPatch(patchUrl, updateProgress(event)); }
   catch (e) { hotPatchBusy = false; throw e; }
   setTimeout(() => {
-    if (process.platform === 'win32' && process.env.BIODL_FIXED_RUNTIME === '1') {
-      spawn(process.execPath, [], {
-        detached: true,
-        stdio: 'ignore',
-        cwd: path.dirname(process.execPath),
-        env: process.env
-      }).unref();
-      app.exit(0);
-      return;
-    }
-    // 针对便携版 Windows: 如果存在 PORTABLE_EXECUTABLE_FILE 则精准唤醒原便携 EXE
-    if (process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_FILE && fs.existsSync(process.env.PORTABLE_EXECUTABLE_FILE)) {
-      try {
-        const { spawn } = require('child_process');
-        spawn(process.env.PORTABLE_EXECUTABLE_FILE, [], { detached: true, stdio: 'ignore' }).unref();
-        app.exit(0);
-        return;
-      } catch (e) {}
-    }
-    app.relaunch();
-    app.exit(0);
+    // The independent helper waits for this process to exit, then replaces
+    // app.asar and launches the same installed executable. No early relaunch.
+    app.quit();
   }, 1200);
   return res;
 });

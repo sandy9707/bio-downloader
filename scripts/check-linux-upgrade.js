@@ -8,12 +8,14 @@ fs.writeFileSync(path.join(profile,'settings.json'),JSON.stringify({defaultDir:p
 fs.writeFileSync(path.join(profile,'keep-history.json'),'persistent marker');fs.mkdirSync(path.join(app,'my-downloads'));fs.writeFileSync(path.join(app,'my-downloads/keep.fastq'),'user data');
 const node=path.join(app,'runtime/node'),sha=crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
 const runtimeSha=crypto.createHash('sha256').update(fs.readFileSync(node)).digest('hex');
-const server=http.createServer((req,res)=>{res.writeHead(200,{'Content-Length':fs.statSync(archive).size});fs.createReadStream(archive).pipe(res);});
-function run(code){return new Promise((resolve,reject)=>{const child=cp.spawn(node,['-e',code],{cwd:app,env:{...process.env,BIODL_DATA_DIR:profile},stdio:['ignore','pipe','pipe']});let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);child.once('error',reject);child.once('close',status=>status===0?resolve(output):reject(new Error(output)));});}
+let manifestHits=0;
+const server=http.createServer((req,res)=>{if(req.url.startsWith('/api/client/version')){manifestHits++;res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({version:require('../package.json').version,linuxUrl:`http://127.0.0.1:${server.address().port}/update.tar.gz`,...(req.url.includes('channel=2')?{sha256:sha}:{linuxSha256:sha,sha256:'asar-digest-must-not-be-used'})}));return;}res.writeHead(200,{'Content-Length':fs.statSync(archive).size});fs.createReadStream(archive).pipe(res);});
+function run(code){return new Promise((resolve,reject)=>{const child=cp.spawn(node,['-e',code],{cwd:app,env:{...process.env,BIODL_DATA_DIR:profile,BACKEND_BASE_URL:`http://127.0.0.1:${server.address().port}`},stdio:['ignore','pipe','pipe']});let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);child.once('error',reject);child.once('close',status=>status===0?resolve(output):reject(new Error(output)));});}
 (async()=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
  const update=`require('./main').callIpcHandler('linux-self-update',{url:${JSON.stringify(`http://127.0.0.1:${server.address().port}/update.tar.gz`)},sha256:${JSON.stringify(sha)}}).then(r=>{if(!r.success)process.exit(1)}).catch(e=>{console.error(e);process.exit(1)})`;
- for(const stage of ['legacy-2.0.41','current']){
+ for(const stage of ['baseline','current']){
+  if(stage==='current'){await run("require('./main').callIpcHandler('linux-self-update',{url:'https://invalid.example/wrong.tar.gz',sha256:'forged'}).then(()=>process.exit(1)).catch(e=>{if(!e.message.includes('清单已变化'))process.exit(1)})");}
   await run(update);
   const output=await run(`const main=require('./main');main.ensureBinaries();Promise.all([main.callIpcHandler('get-app-version'),main.callIpcHandler('plugin-get-status')]).then(([version,plugins])=>{console.log(JSON.stringify({version,plugins}));if(version!==${JSON.stringify(require('../package.json').version)})process.exit(1)}).catch(e=>{console.error(e);process.exit(1)})`);
   assert(output.includes(require('../package.json').version));
@@ -25,6 +27,7 @@ function run(code){return new Promise((resolve,reject)=>{const child=cp.spawn(no
   cp.execFileSync(path.join(app,'bin/linux/aria2/aria2c'),['--version']);
   console.log('LINUX_UPGRADE_OK',stage,require('../package.json').version);
  }
+ assert(manifestHits>=2,'new updater must fetch the trusted manifest even with renderer-supplied digest');
  // Replacing the entire application folder must still read the SAME external profile.
  fs.rmSync(app,{recursive:true,force:true});
  cp.execFileSync('tar',['-xzf',archive,'-C',temp]);

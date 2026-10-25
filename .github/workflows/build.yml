@@ -85,6 +85,16 @@ jobs:
           # 跳过代码签名（无开发者证书时）
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
+      - name: 验证成品热更新及二次启动
+        run: node scripts/check-packaged-update.js dist/mac-arm64/BioDownloader.app
+
+      - name: 上传 Mac 更新验收
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-macos
+          path: .evidence/packaged-update-darwin.json
+          include-hidden-files: true
+
       - name: 上传 Mac 构建产物
         uses: actions/upload-artifact@v4
         with:
@@ -168,6 +178,16 @@ jobs:
         run: npm run test:usage
         env:
           BIODL_TEST_ASAR: dist/win-unpacked/resources/app.asar
+
+      - name: 验证成品热更新及二次启动
+        run: node scripts/check-packaged-update.js dist/win-unpacked
+
+      - name: 上传 Windows 更新验收
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-windows
+          path: .evidence/packaged-update-win32.json
+          include-hidden-files: true
 
       - name: 上传 Windows 安装包
         uses: actions/upload-artifact@v4

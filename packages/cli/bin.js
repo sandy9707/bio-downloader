@@ -317,7 +317,7 @@ program
       });
 
       if (updateRes && updateRes.success) {
-        console.log(`\n🎉 BioDownloader 已成功更新至 v${checkRes.latestVersion}！`);
+        console.log(`\n🎉 BioDownloader 程序文件已更新至 v${updateRes.installedVersion || checkRes.latestVersion}，重启后生效。`);
         console.log('   核心代码已完成就地升级，您的配置数据与下载历史完好保留。');
         console.log('   请重新启动已停止的服务：nohup ./biodl start </dev/null > biodl.log 2>&1 &，然后在同一终端执行 disown。使用 PM2/systemd 的请通过原进程管理器重启，勿重复启动。\n');
       }

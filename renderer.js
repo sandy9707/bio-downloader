@@ -665,7 +665,7 @@ async function startHotPatchUpdate() {
   try {
     const res = await window.api.applyHotPatch(updateInfoGlobal.patchUrl);
     if (res.success) {
-      showToast(res.message || '热更新成功！应用即将重启...', 'success');
+      showToast(res.message || '补丁已准备，退出后安装并重新启动…', 'success');
     }
   } catch (err) {
     showToast('热更新应用失败: ' + err.message, 'error');
@@ -765,7 +765,7 @@ async function startPreviewUpdate() {
     showToast('正在更新中，请勿重复点击', 'warning');
     return;
   }
-  if (!previewInfoGlobal || !previewInfoGlobal.patchUrl) return;
+  if (!previewInfoGlobal || !(previewInfoGlobal.platform === 'linux' ? previewInfoGlobal.linuxUrl : previewInfoGlobal.patchUrl)) return;
   const btn = document.getElementById('btnUpdatePreview');
   if (btn) { btn.disabled = true; btn.innerText = '⏳ 正在升级到预览版...'; }
   isUpdating = true;
@@ -774,7 +774,7 @@ async function startPreviewUpdate() {
     const res = previewInfoGlobal.platform === 'linux'
       ? await window.api.linuxSelfUpdate({ url: previewInfoGlobal.linuxUrl, sha256: previewInfoGlobal.sha256 })
       : await window.api.applyHotPatch(previewInfoGlobal.patchUrl);
-    if (res.success) showToast(res.message || '预览版升级成功！应用即将重启...', 'success');
+    if (res.success) showToast(res.message || '更新已准备，请按提示完成重启。', 'success');
   } catch (err) {
     showToast('升级到预览版失败: ' + err.message, 'error');
     if (btn) { btn.disabled = false; btn.innerText = '⚡ 热更新到预览版'; }
@@ -1526,13 +1526,6 @@ async function verifyToken(token, isAutoLogin = false) {
       const maxDevicesEl = document.getElementById('profMaxDevices');
       if (maxDevicesEl) maxDevicesEl.innerText = res.maxDevices || 2;
 
-      // 更新订阅链接
-      const subLinkEl = document.getElementById('profSubLink');
-      if (subLinkEl) {
-        const backendUrl = await window.api.getBackendUrl().catch(() => 'https://biodown.ye.aimeals.cn');
-        subLinkEl.value = `${backendUrl}/speedup?token=${res.token}`;
-      }
-
       // 更新钱包余额 (账号可用余额)
       const walletBalanceEl = document.getElementById('profWalletBalance');
       if (walletBalanceEl) walletBalanceEl.innerText = (res.balance || 0).toFixed(2);
@@ -2090,20 +2083,6 @@ async function handleResetToken() {
   }
 }
 
-// 复制订阅链接
-async function copySubLink() {
-  const el = document.getElementById('profSubLink');
-  if (!el || !el.value) {
-    showToast('暂无订阅链接', 'error');
-    return;
-  }
-  const ok = copyText(el.value);
-  showToast(ok ? '订阅链接已复制！' : '复制失败', ok ? 'success' : 'error');
-  if (currentUser && currentUser.token) {
-    window.api.recordInviteCopy(currentUser.token).catch(() => {});
-  }
-}
-
 window.handleCheckin = handleCheckin;
 window.closeCheckinModal = closeCheckinModal;
 window.openRechargeModal = openRechargeModal;
@@ -2117,7 +2096,6 @@ window.reopenOrderPayment = reopenOrderPayment;
 window.openDevicesModal = openDevicesModal;
 window.closeDevicesModal = closeDevicesModal;
 window.handleResetToken = handleResetToken;
-window.copySubLink = copySubLink;
 
 // ==========================================
 // 【系统设置管理】
