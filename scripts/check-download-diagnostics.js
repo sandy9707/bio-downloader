@@ -50,6 +50,7 @@ async function run(name,engine,loggingEnabled=true){
   assert(fs.existsSync(path.join(temp,'short.bin.aria2')),'preserve actual aria2 checkpoint');
   mode='range';const range=await run('range.bin','aria2');assert(range.records.some(r=>r.type==='fatal'&&r.error.httpStatus===206));
   mode='503';const prepare=await run('probe.bin','aria2');assert(prepare.records.some(r=>r.type==='request-error'&&r.attempt===3));assert(prepare.records.some(r=>r.type==='task-failed'&&r.error.httpStatus===503));
+  assert.equal(prepare.files.length,1,'preparation cause and final result belong in the same uploadable log');
   const nativeRetries=[];
   const {NativeTransfer}=require('../src/main/native-transfer');
   const retryTask=new NativeTransfer({url:`http://127.0.0.1:${server.address().port}/retry`,filename:path.join(temp,'retry-native.bin'),proxy:false,retryBaseMs:5,retryMaxMs:5,retryBudgetMs:60,onEvent:e=>nativeRetries.push(e)});

@@ -2901,8 +2901,8 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       const wasCancelled = cancelled || cancelledFiles.has(fileIndex) || error.message === 'Cancelled';
       if (getSettings().loggingEnabled && !wasCancelled) {
         try {
-          const filename = diagnosticLogPath || path.join(LOG_DIR, `download_guard_${safeName.replace(/[^a-zA-Z0-9._-]/g, '_')}_${Date.now()}.log`);
-          fs.appendFileSync(filename, pendingDiagnostics.splice(0).join('') + formatDiagnostic({ type: 'task-failed', version: app.getVersion(), fileName: file.name, error: errorDetails(error) }));
+          diagnosticLogPath ||= path.join(LOG_DIR, `download_guard_${safeName.replace(/[^a-zA-Z0-9._-]/g, '_')}_${Date.now()}.log`);
+          fs.appendFileSync(diagnosticLogPath, pendingDiagnostics.splice(0).join('') + formatDiagnostic({ type: 'task-failed', version: app.getVersion(), fileName: file.name, error: errorDetails(error) }));
         } catch (_) {}
       }
       sendStatus({ index: fileIndex, fileName: file.name, status: wasCancelled ? 'cancelled' : 'failed', speed: wasCancelled ? '已取消' : error.message, savePath, verification: { status: 'failed', reason: error.message }, size: file.size, md5: file.md5 || null, backupPath, engine: engineForFile, redownloadPrepared: Boolean(backupPath) });
