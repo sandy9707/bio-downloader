@@ -17,6 +17,7 @@ const EventEmitter = require('events');
 const { createEnaResolver, verifyFile } = require('./src/main/download-integrity');
 const { bioSource, createBioTransferGuard } = require('./src/main/bio-transfer-guard');
 const downloadFiles = require('./src/main/download-files');
+const { errorDetails, formatDiagnostic, redact: redactDiagnostic } = require('./src/main/download-diagnostics');
 const { selectEngine, runAria, ariaEnvironment, migrateEngineSettings, storeEngineSettings } = require('./src/main/download-engines');
 const enaIntegrity = createEnaResolver(async (accession) => {
   const url = `https://www.ebi.ac.uk/ena/portal/api/filereport?accession=${encodeURIComponent(accession)}&result=read_run&fields=run_accession,fastq_ftp,fastq_md5,fastq_bytes&format=json`;
@@ -2140,6 +2141,16 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
 
     let bioGuard = null;
     let nativeResult = null;
+    let diagnosticLogPath = null, activeDiagnosticStream = null;
+    const pendingDiagnostics = [];
+    const recordDiagnostic = record => {
+      if (!getSettings().loggingEnabled) return;
+      try {
+        const line = formatDiagnostic(record);
+        if (activeDiagnosticStream && !activeDiagnosticStream.writableEnded && !activeDiagnosticStream.destroyed) activeDiagnosticStream.write(line);
+        else { pendingDiagnostics.push(line); if (pendingDiagnostics.length > 128) pendingDiagnostics.shift(); }
+      } catch (_) { /* Diagnostics must not change the download result. */ }
+    };
     let verification = null, releaseFile = null, backupPath = file.backupPath || null;
     let engineForFile, axelBin, deepForFile = deepIntegrityCheck || Boolean(file.redownloadMismatch || file.backupPath);
     try {
@@ -2154,7 +2165,6 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     sendStatus({ index: fileIndex, status: 'downloading', phase: 'preparing', savePath, engine: engineForFile, backupPath, redownloadPrepared: Boolean(backupPath), speed: backupPath ? '原文件已保留，正在重新下载…' : '正在准备下载…' });
     // Fetch metadata alongside the transfer, including old saved tasks/direct ENA links.
     const referencePromise = enaIntegrity.reference(file, { deep: deepForFile });
-    let diagnosticLogPath = null;
     const checkControl = async () => {
       if (cancelled || cancelledFiles.has(fileIndex)) throw new Error('Cancelled');
       // Keep the same task alive while hashing is paused, as with a suspended Axel.
@@ -2226,6 +2236,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
           proxy: clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false,
           checkControl,
           isPaused: () => pausedAxelFiles.has(fileIndex),
+          onDiagnostic: recordDiagnostic,
           onFatal: () => { const proc = activeAxelProcesses.get(fileIndex); if (proc) killProcess(proc); }
         });
         file.size = bioGuard.size;
@@ -2532,12 +2543,15 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           logStream.write(`版本: ${app.getVersion()}\n`);
           logStream.write(`预期字节数: ${file.size || '未知'}\n预期 MD5: ${file.md5 || '待获取'}\n`);
           logStream.write(`文件名: ${file.name}\n`);
-          logStream.write(`URL: ${String(file.url).replace(/(\w+:\/\/)[^/]*@/, '$1[redacted]@').split('?')[0]}\n`);
+          logStream.write(`URL: ${redactDiagnostic(file.url)}\n`);
           logStream.write(`目标保存路径: ${savePath}\n`);
           logStream.write(`尝试次数: ${attempt}\n`);
           logStream.write(`线程数: ${threads}\n`);
-          logStream.write(`代理环境: ${JSON.stringify(Object.fromEntries(['http_proxy', 'https_proxy', 'all_proxy'].filter(key => env[key]).map(key => [key, env[key]])))}\n`);
+          logStream.write(`代理环境: ${JSON.stringify(Object.fromEntries(['http_proxy', 'https_proxy', 'all_proxy'].filter(key => env[key]).map(key => [key, redactDiagnostic(env[key])])))}\n`);
           logStream.write(`引擎: ${engineForFile}\n\n`);
+          activeDiagnosticStream = logStream;
+          for (const line of pendingDiagnostics.splice(0)) logStream.write(line);
+          recordDiagnostic({ type: 'attempt-start', engine: engineForFile, attempt, requestedConnections: threads, actualConnectionLimit: engineForFile === 'aria2' ? Math.min(16, threads) : engineForFile === 'native' ? Math.min(4, threads) : threads });
         } catch (logErr) {
           console.error('Failed to create download log stream:', logErr);
         }
@@ -2555,7 +2569,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
             if (data.type === 'state' && data.phase !== 'paused') sendStatus({ index: fileIndex, status: 'downloading', phase: data.phase === 'checking-local' ? 'verifying' : 'connecting', savePath,
               speed: data.phase === 'checking-local' ? '正在核对本地断点分块…' : data.phase === 'waiting-lock' ? '正在等待上次下载释放文件锁…' : '正在连接下载源…' });
             if (data.type === 'retry') sendStatus({ index: fileIndex, status: 'downloading', phase: 'connecting', savePath, speed: `连接中断，保留已完成分块，${Math.ceil(data.waitMs / 1000)} 秒后重试…` });
-            if (logStream && !logStream.writableEnded && data.type !== 'progress') logStream.write('[native] ' + JSON.stringify(data) + '\n');
+            if (data.type !== 'progress') recordDiagnostic({ source: 'native', engine: 'native', ...data });
           });
           activeNativeTransfers.set(fileIndex, task);
           cancelTokens.set(fileIndex, () => task.cancel());
@@ -2570,7 +2584,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           let lastAriaProgressLog = 0;
           await runAria({ binary, url: bioGuard ? bioGuard.url : file.url, filename: savePath, threads, env: ariaEnv,
             proxy: bioGuard || isFtpProtocol || isSftpProtocol ? '' : env.http_proxy || '',
-            log: line => { if (logStream && !logStream.writableEnded) logStream.write(line); },
+            log: line => { if (logStream && !logStream.writableEnded) logStream.write(redactDiagnostic(line)); },
             onProcess: proc => {
               activeAxelProcesses.set(fileIndex, proc);
               cancelTokens.set(fileIndex, () => { killProcess(proc); });
@@ -2749,8 +2763,10 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         }
 
         downloadSuccess = true;
+        recordDiagnostic({ type: 'attempt-completed', engine: engineForFile, attempt });
       } catch (err) {
         lastErrorMsg = bioGuard?.error?.message || err.message;
+        recordDiagnostic({ type: 'attempt-failed', engine: engineForFile, attempt, error: errorDetails(bioGuard?.error || err), engineError: errorDetails(err), nativeError: err.diagnostic || null, guardStopped: Boolean(bioGuard?.error), paused: pausedAxelFiles.has(fileIndex), cancelled: cancelled || cancelledFiles.has(fileIndex) });
         activeAxelProcesses.delete(fileIndex);
         console.warn(`Attempt ${attempt} for ${file.name} failed: ${lastErrorMsg}`);
         if (engineForFile === 'native') {
@@ -2772,6 +2788,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           if (!logStream.writableEnded) logStream.end();
           await require('stream/promises').finished(logStream).catch(() => {});
         }
+        activeDiagnosticStream = null;
       }
     }
 
@@ -2883,11 +2900,23 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
     } catch (error) {
       const wasCancelled = cancelled || cancelledFiles.has(fileIndex) || error.message === 'Cancelled';
       if (getSettings().loggingEnabled && !wasCancelled) {
-        try { fs.appendFileSync(path.join(LOG_DIR, `download_guard_${safeName.replace(/[^a-zA-Z0-9._-]/g, '_')}_${Date.now()}.log`), `版本: ${app.getVersion()}\n时间: ${new Date().toISOString()}\n文件名: ${file.name}\n预期字节数: ${file.size || '未知'}\n分段/断点保护: ${error.message}\n`); } catch (_) {}
+        try {
+          const filename = diagnosticLogPath || path.join(LOG_DIR, `download_guard_${safeName.replace(/[^a-zA-Z0-9._-]/g, '_')}_${Date.now()}.log`);
+          fs.appendFileSync(filename, pendingDiagnostics.splice(0).join('') + formatDiagnostic({ type: 'task-failed', version: app.getVersion(), fileName: file.name, error: errorDetails(error) }));
+        } catch (_) {}
       }
       sendStatus({ index: fileIndex, fileName: file.name, status: wasCancelled ? 'cancelled' : 'failed', speed: wasCancelled ? '已取消' : error.message, savePath, verification: { status: 'failed', reason: error.message }, size: file.size, md5: file.md5 || null, backupPath, engine: engineForFile, redownloadPrepared: Boolean(backupPath) });
     } finally {
       if (bioGuard) await bioGuard.close().catch(error => console.warn('关闭分段保护失败:', error.message));
+      if (getSettings().loggingEnabled) {
+        try {
+          const outcome = outcomes.get(fileIndex);
+          if (outcome) {
+            const filename = diagnosticLogPath || path.join(LOG_DIR, `download_${safeName.replace(/[^a-zA-Z0-9._-]/g, '_')}_${Date.now()}.log`);
+            fs.appendFileSync(filename, pendingDiagnostics.splice(0).join('') + formatDiagnostic({ type: 'task-result', version: app.getVersion(), engine: engineForFile, fileName: file.name, status: outcome.status, reason: outcome.speed }));
+          }
+        } catch (_) {}
+      }
       activeNativeTransfers.delete(fileIndex);
       activeIntegrityChecks.delete(fileIndex);
       activeAxelProcesses.delete(fileIndex);

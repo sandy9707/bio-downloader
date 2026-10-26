@@ -5,6 +5,7 @@ const http = require('http');
 const crypto = require('crypto');
 const path = require('path');
 const axios = require('axios');
+const { errorDetails } = require('./download-diagnostics');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const positive = n => Number.isSafeInteger(n) && n > 0;
 const SAMPLE_BYTES = 4096, SAMPLE_COUNT = 32;
@@ -116,7 +117,7 @@ function validateResponse(response, start, end, size, identity) {
   return +m[3];
 }
 
-async function createBioTransferGuard({ url, filename, expectedSize, proxy = false, onFatal = () => {}, isPaused = () => false, checkControl = async () => {}, timeout = 20000, onBytes = () => {}, engine = 'axel' }) {
+async function createBioTransferGuard({ url, filename, expectedSize, proxy = false, onFatal = () => {}, onDiagnostic = () => {}, isPaused = () => false, checkControl = async () => {}, timeout = 20000, onBytes = () => {}, engine = 'axel' }) {
   let lockKey = path.resolve(filename);
   if (process.platform === 'win32') lockKey = lockKey.toLowerCase();
   if (activeFiles.has(lockKey)) throw new Error('同一目标文件已有下载任务，请等待或暂停原任务');
@@ -133,6 +134,9 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
   let size, identity, windows, checkpointStamp = null;
   const receipts = new Map();
   const fail = message => new Error(`${message}；原文件和断点已保留`);
+  const diagnostic = (type, details) => {
+    try { onDiagnostic({ time: new Date().toISOString(), source: 'bio-guard', engine, type, ...details }); } catch (_) { /* Logging must never change transfer outcomes. */ }
+  };
   const save = () => {
     const snapshot = JSON.stringify(state);
     saveChain = saveChain.then(() => atomicWrite(sidecar, snapshot));
@@ -141,6 +145,9 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
   const reportFatal = error => {
     if (closed || fatal) return;
     fatal = fail(error.message);
+    fatal.code = error.code || 'BIO_GUARD_STOPPED';
+    fatal.cause = error;
+    diagnostic('fatal', { error: errorDetails(error), preserved: true, outerRetry: false });
     for (const controller of controllers) controller.abort();
     onFatal(fatal);
   };
@@ -157,7 +164,7 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
       const total = validateResponse(response, start, end, size, identity);
       if (!stream && response.data.length !== end - start + 1) throw new Error('服务器提前结束分段响应');
       return { response, total };
-    } catch (error) { if (stream) response.data.destroy(); throw error; }
+    } catch (error) { error.status = response.status; if (stream) response.data.destroy(); throw error; }
   }
   async function request(start, end, stream = false, signal) {
     for (let attempt = 0; ; attempt++) {
@@ -165,6 +172,8 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
       if (closed || signal?.aborted) throw new Error('Cancelled');
       try { return await requestOnce(start, end, stream, signal); }
       catch (error) {
+        error.range = { start, end };
+        diagnostic('request-error', { stage: stream ? 'response-headers' : 'probe-or-sample', range: { start, end }, attempt: attempt + 1, maxAttempts: 3, retryable: Boolean(retryable(error)), error: errorDetails(error) });
         if (attempt >= 2 || !retryable(error) || closed || signal?.aborted) throw error;
         interruptedResponses++;
         await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 250));
@@ -270,10 +279,10 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
       const controller = new AbortController(); controllers.add(controller);
       let clientGone = false;
       res.on('close', () => { clientGone = true; controller.abort(); });
+      let offset = start;
       try {
         const { response } = await request(start, end, true, controller.signal);
         res.writeHead(match ? 206 : 200, { 'Content-Length': end - start + 1, 'Content-Range': `bytes ${start}-${end}/${size}`, 'Accept-Ranges': 'bytes', 'Content-Type': 'application/octet-stream' });
-        let offset = start;
         const collectors = windows.filter(w => w.offset >= start && w.offset + w.length <= end + 1).map(w => ({ ...w, bytes: Buffer.alloc(w.length), received: 0 }));
         for await (const bytes of response.data) {
           if (offset + bytes.length > end + 1) throw new Error('服务器返回了超出分段范围的数据');
@@ -310,6 +319,8 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
           interruptedResponses++;
           const failures = (segmentFailures.get(end) || 0) + 1;
           segmentFailures.set(end, failures);
+          error.range = { start, end }; error.receivedBytes = offset - start;
+          diagnostic('segment-error', { stage: 'transfer', range: { start, end }, receivedBytes: offset - start, failures, maxFailures: 3, retryable: Boolean(retryable(error)), error: errorDetails(error) });
           if (!retryable(error) || failures >= 3) reportFatal(error);
         }
         res.destroy();
@@ -338,7 +349,7 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
         state.completed = true; state.verification = verification; delete state.resume; await save();
       }
     };
-  } catch (error) { await close().catch(() => {}); throw error; }
+  } catch (error) { diagnostic('prepare-failed', { stage: 'source-or-checkpoint', error: errorDetails(error), preserved: true }); await close().catch(() => {}); throw error; }
 }
 
 module.exports = { bioSource, createBioTransferGuard, parseAxelState, parseAriaState, sampleWindows, validateResponse };

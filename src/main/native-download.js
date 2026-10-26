@@ -49,6 +49,7 @@ function startNativeDownload(options, onEvent = () => {}) {
       if (message?.result?.status === 'completed') return finish(null, message.result);
       if (message?.result?.status === 'paused') return paused();
       const error = Object.assign(new Error(message?.error?.message || `下载内核异常退出 (${code})；断点保留`), { code: message?.error?.code || 'WORKER_EXIT' });
+      error.diagnostic = message?.error?.diagnostic;
       // A freshly restarted application can encounter its previous stale lock.
       // Wait for the lock library to expire it; never delete a live writer's lock.
       if (error.code === 'ELOCKED' && Date.now() - started < 20000) {

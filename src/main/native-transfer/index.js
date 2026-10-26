@@ -7,6 +7,7 @@ const http = require('http');
 const https = require('https');
 const axios = require('axios');
 const lockfile = require('proper-lockfile');
+const { errorDetails } = require('../download-diagnostics');
 const { Journal, TransferError, digest, writeAll, fingerprint, syncDirectory } = require('./journal');
 const { setTimeout: delay } = require('timers/promises');
 const transientCodes = new Set(['ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE']);
@@ -62,8 +63,8 @@ class NativeTransfer {
         this.limit = Math.max(1, Math.floor(this.limit / 2)); this.goodBlocks = 0;
         const backoff = Math.min(this.options.retryMaxMs, this.options.retryBaseMs * 2 ** Math.min(attempt, 10));
         const waitMs = Math.max(Math.round(backoff * (0.8 + Math.random() * 0.4)), error.retryAfterMs || 0);
-        if (Date.now() - started + waitMs > this.options.retryBudgetMs) throw new TransferError('NETWORK_WAIT', '连接持续不可用，已保留断点；网络恢复后可继续', { resumable: true });
-        this.event('retry', { block, attempt: attempt + 1, code: error.code || 'HTTP_RETRY', waitMs, elapsedMs: Date.now() - started, connections: this.limit });
+        if (Date.now() - started + waitMs > this.options.retryBudgetMs) throw new TransferError('NETWORK_WAIT', '连接持续不可用，已保留断点；网络恢复后可继续', { resumable: true, cause: error });
+        this.event('retry', { block, attempt: attempt + 1, code: error.code || 'HTTP_RETRY', error: errorDetails(error), waitMs, elapsedMs: Date.now() - started, connections: this.limit });
         try { await delay(waitMs, undefined, { signal: this.stop.signal }); } catch (_) { this.check(); }
       }
     }
@@ -105,6 +106,9 @@ class NativeTransfer {
       }
       if (offset !== bytes.length) throw new TransferError('SHORT_BODY', '分段响应提前结束', { retryable: true });
       return { bytes, meta: { size: +m[3], etag: h.etag } };
+    } catch (error) {
+      error.range = { start, end }; if (response) error.status = response.status;
+      throw error;
     } finally { response?.data.destroy(); this.controllers.delete(controller); }
   }
   blockLength(index) { return Math.min(this.meta.blockSize, this.meta.size - index * this.meta.blockSize); }
@@ -277,7 +281,7 @@ class NativeTransfer {
       // Error paths deliberately do not create a clean seal. On restart all
       // committed blocks are checked, including after disk/lock failures.
       const e = this.fatal || error;
-      this.event('failure', { code: e.code || 'UNKNOWN', phase: published ? 'published-cleanup' : 'transfer', preserved: true }); throw e;
+      this.event('failure', { code: e.code || 'UNKNOWN', error: errorDetails(e), phase: published ? 'published-cleanup' : 'transfer', preserved: true }); throw e;
     } finally {
       clearInterval(timer); for (const c of this.controllers) c.abort();
       const cleanup = await Promise.allSettled([this.data?.close(), this.journal?.close()]);

@@ -59,6 +59,7 @@ jobs:
           name: live-ebi-macos
           path: |
             .evidence/live-ebi-*.json
+            .evidence/download-diagnostics-*.json
             .evidence/download-progress-*.json
             .evidence/progress-*.png
             .evidence/settings-*.png
@@ -142,6 +143,7 @@ jobs:
           name: live-ebi-windows
           path: |
             .evidence/live-ebi-*.json
+            .evidence/download-diagnostics-*.json
             .evidence/download-progress-*.json
             .evidence/progress-*.png
             .evidence/settings-*.png
@@ -227,6 +229,7 @@ jobs:
           name: live-ebi-linux
           path: |
             .evidence/live-ebi-*.json
+            .evidence/download-diagnostics-*.json
             .evidence/download-progress-*.json
             .evidence/progress-*.png
             .evidence/settings-*.png
