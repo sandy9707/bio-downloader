@@ -564,9 +564,9 @@ function createWindow() {
   });
 
   mainWindow.loadFile('index.html');
+  hotUpdater.acknowledge(process.env.BIODL_UPDATE_RECEIPT, app.getVersion(), path.join(process.resourcesPath, 'app.asar'));
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    hotUpdater.acknowledge(process.env.BIODL_UPDATE_RECEIPT, app.getVersion(), path.join(process.resourcesPath, 'app.asar'));
     if (process.env.BIODL_UPDATE_FAILURE) {
       const reason = process.env.BIODL_UPDATE_FAILURE; delete process.env.BIODL_UPDATE_FAILURE;
       dialog.showErrorBox('更新未完成，已恢复原版本', reason + '\n请重试或使用完整安装包更新。');

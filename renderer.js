@@ -39,6 +39,16 @@ function updateEmptyQueueHint() {
 // 传输列表状态
 let activeDownloads = [];
 let completedDownloads = [];
+let failedDownloads = [];
+var extractionJobs = {};
+let currentTransferSubTab = 'downloading';
+let transferSearchQuery = ''; // 传输列表搜索关键字(按任务名过滤,三个子页签通用)
+const TRANSFER_PAGE_SIZE = 50; // 超过大批量（如上千条）时进行分页按需渲染，杜绝DOM过载卡死
+let transferPages = {
+  downloading: 1,
+  completed: 1,
+  failed: 1
+};
 let maxConcurrentDownloadsSetting = 3;
 let lowPowerModeSetting = false;
 let stableModeSetting = false;
@@ -2454,9 +2464,69 @@ async function downloadSingle(index) {
 // ==========================================
 // 【传输列表与排队管理控制器】
 // ==========================================
-let currentTransferSubTab = 'downloading';
-let failedDownloads = [];
-let transferSearchQuery = ''; // 传输列表搜索关键字(按任务名过滤,三个子页签通用)
+function getTransferCurrentPage(tab) {
+  return transferPages[tab || currentTransferSubTab] || 1;
+}
+
+function setTransferCurrentPage(tab, page) {
+  transferPages[tab] = Math.max(1, page);
+}
+
+function updateTransferPaginationUI(totalItems) {
+  const paginationEl = document.getElementById('transferPagination');
+  if (!paginationEl) return;
+  const totalPages = Math.max(1, Math.ceil(totalItems / TRANSFER_PAGE_SIZE));
+  const currentPage = Math.min(getTransferCurrentPage(currentTransferSubTab), totalPages);
+  transferPages[currentTransferSubTab] = currentPage;
+
+  if (totalItems <= TRANSFER_PAGE_SIZE) {
+    paginationEl.style.display = 'none';
+    return;
+  }
+  paginationEl.style.display = 'flex';
+
+  const infoEl = document.getElementById('transferPageInfo');
+  if (infoEl) {
+    const start = (currentPage - 1) * TRANSFER_PAGE_SIZE + 1;
+    const end = Math.min(currentPage * TRANSFER_PAGE_SIZE, totalItems);
+    infoEl.innerText = `第 ${currentPage} / ${totalPages} 页 · 显示第 ${start}-${end} 项 (共 ${totalItems} 项)`;
+  }
+
+  const btnFirst = document.getElementById('tpBtnFirst');
+  const btnPrev = document.getElementById('tpBtnPrev');
+  const btnNext = document.getElementById('tpBtnNext');
+  const btnLast = document.getElementById('tpBtnLast');
+
+  if (btnFirst) btnFirst.disabled = (currentPage <= 1);
+  if (btnPrev) btnPrev.disabled = (currentPage <= 1);
+  if (btnNext) btnNext.disabled = (currentPage >= totalPages);
+  if (btnLast) btnLast.disabled = (currentPage >= totalPages);
+}
+
+function changeTransferPage(action) {
+  const currentTab = currentTransferSubTab;
+  let itemsCount = 0;
+  if (currentTab === 'downloading') {
+    itemsCount = activeDownloads.filter((f) => matchesTransferSearch(f.name)).length + Object.keys(extractionJobs).length;
+  } else if (currentTab === 'completed') {
+    itemsCount = completedDownloads.filter((f) => matchesTransferSearch(f.name)).length;
+  } else if (currentTab === 'failed') {
+    itemsCount = failedDownloads.filter((f) => matchesTransferSearch(f.name)).length;
+  }
+  const totalPages = Math.max(1, Math.ceil(itemsCount / TRANSFER_PAGE_SIZE));
+  let cur = getTransferCurrentPage(currentTab);
+
+  if (action === 'first') cur = 1;
+  else if (action === 'prev') cur = Math.max(1, cur - 1);
+  else if (action === 'next') cur = Math.min(totalPages, cur + 1);
+  else if (action === 'last') cur = totalPages;
+  else if (typeof action === 'number') cur = Math.max(1, Math.min(totalPages, action));
+
+  transferPages[currentTab] = cur;
+  if (currentTab === 'downloading') renderDownloadingList();
+  else if (currentTab === 'completed') renderCompletedList();
+  else if (currentTab === 'failed') renderFailedList();
+}
 
 function parseSpeedToBytes(speedStr) {
   if (!speedStr || typeof speedStr !== 'string') return 0;
@@ -2551,6 +2621,9 @@ function switchTransferSubTab(subTab) {
   }
   // 页签切换后刷新工具栏可见性(全部暂停/恢复/取消只在下载页签出现)与统计行
   updateTransferCounts();
+  if (subTab === 'downloading') updateTransferPaginationUI(activeDownloads.filter(f => matchesTransferSearch(f.name)).length + Object.keys(extractionJobs).length);
+  else if (subTab === 'completed') updateTransferPaginationUI(completedDownloads.filter(f => matchesTransferSearch(f.name)).length);
+  else if (subTab === 'failed') updateTransferPaginationUI(failedDownloads.filter(f => matchesTransferSearch(f.name)).length);
 }
 
 function updateTransferCounts() {
@@ -2669,13 +2742,23 @@ function renderDownloadingList() {
   const cards = container.querySelectorAll('.transfer-item:not(.transfer-item-ex)');
   cards.forEach(c => c.remove());
 
+  const matched = activeDownloads.filter((f) => matchesTransferSearch(f.name));
+  const totalCount = matched.length + Object.keys(extractionJobs).length;
+
   if (activeDownloads.length === 0 && Object.keys(extractionJobs).length === 0) {
     if (emptyState) emptyState.style.display = 'flex';
+    if (typeof updateTransferPaginationUI === 'function') updateTransferPaginationUI(0);
     return;
   }
   if (emptyState) emptyState.style.display = 'none';
 
-  activeDownloads.filter((f) => matchesTransferSearch(f.name)).forEach((file) => {
+  if (typeof updateTransferPaginationUI === 'function') updateTransferPaginationUI(totalCount);
+  const page = typeof getTransferCurrentPage === 'function' ? getTransferCurrentPage('downloading') : 1;
+  const pageSize = typeof TRANSFER_PAGE_SIZE !== 'undefined' ? TRANSFER_PAGE_SIZE : 50;
+  const startIdx = (page - 1) * pageSize;
+  const pageItems = matched.slice(startIdx, startIdx + pageSize);
+
+  pageItems.forEach((file) => {
     const fileId = file.originalIndex;
     const paused = file.status === 'paused';
     const { percentage, total: totalSize, received: receivedSize, approximate } = transferProgressView(file);
@@ -2763,7 +2846,7 @@ async function queueMismatches(items) {
 }
 
 // Manual MD5 checks operate on a stable snapshot even if download history changes.
-let manualMd5Run = null;
+var manualMd5Run = null;
 async function verifyCompletedMd5(index) {
   const item = completedDownloads[index];
   if (item) await runCompletedMd5([item]);
@@ -2837,14 +2920,22 @@ function renderCompletedList() {
   const cards = container.querySelectorAll('.transfer-item');
   cards.forEach(c => c.remove());
 
+  const matched = completedDownloads.map((item, index) => ({ item, index })).filter(({ item }) => matchesTransferSearch(item.name));
+
   if (completedDownloads.length === 0) {
     if (emptyState) emptyState.style.display = 'flex';
+    if (typeof updateTransferPaginationUI === 'function') updateTransferPaginationUI(0);
     return;
   }
   if (emptyState) emptyState.style.display = 'none';
 
-  completedDownloads.forEach((item, index) => {
-    if (!matchesTransferSearch(item.name)) return;
+  if (typeof updateTransferPaginationUI === 'function') updateTransferPaginationUI(matched.length);
+  const page = typeof getTransferCurrentPage === 'function' ? getTransferCurrentPage('completed') : 1;
+  const pageSize = typeof TRANSFER_PAGE_SIZE !== 'undefined' ? TRANSFER_PAGE_SIZE : 50;
+  const startIdx = (page - 1) * pageSize;
+  const pageItems = matched.slice(startIdx, startIdx + pageSize);
+
+  pageItems.forEach(({ item, index }) => {
     const itemEl = document.createElement('div');
     itemEl.className = 'transfer-item tl-card completed';
     itemEl.dataset.url = item.url || '';
@@ -2886,14 +2977,22 @@ function renderFailedList() {
   const cards = container.querySelectorAll('.transfer-item');
   cards.forEach(c => c.remove());
 
+  const matched = failedDownloads.map((item, index) => ({ item, index })).filter(({ item }) => matchesTransferSearch(item.name));
+
   if (failedDownloads.length === 0) {
     if (emptyState) emptyState.style.display = 'flex';
+    if (typeof updateTransferPaginationUI === 'function') updateTransferPaginationUI(0);
     return;
   }
   if (emptyState) emptyState.style.display = 'none';
 
-  failedDownloads.forEach((item, index) => {
-    if (!matchesTransferSearch(item.name)) return;
+  if (typeof updateTransferPaginationUI === 'function') updateTransferPaginationUI(matched.length);
+  const page = typeof getTransferCurrentPage === 'function' ? getTransferCurrentPage('failed') : 1;
+  const pageSize = typeof TRANSFER_PAGE_SIZE !== 'undefined' ? TRANSFER_PAGE_SIZE : 50;
+  const startIdx = (page - 1) * pageSize;
+  const pageItems = matched.slice(startIdx, startIdx + pageSize);
+
+  pageItems.forEach(({ item, index }) => {
     const itemEl = document.createElement('div');
     itemEl.className = 'transfer-item tl-card failed';
     itemEl.dataset.url = item.url || '';
@@ -3341,10 +3440,10 @@ async function changeMaxConcurrent(val) {
 }
 
 // Persist every transfer category, independently of the current login/network state.
-let transfersReady = false;
-let transferSaveTimer = null;
-let lastTransferSnapshot = '';
-let transferSaveErrorShown = false;
+var transfersReady = false;
+var transferSaveTimer = null;
+var lastTransferSnapshot = '';
+var transferSaveErrorShown = false;
 
 function transferSnapshot() {
   return {
@@ -3660,6 +3759,8 @@ window.resumeSingleDownload = resumeSingleDownload;
 window.pauseAllDownloads = pauseAllDownloads;
 window.resumeAllDownloads = resumeAllDownloads;
 window.cancelAllDownloads = cancelAllDownloads;
+window.cancelDownload = cancelDownload;
+window.changeTransferPage = changeTransferPage;
 window.onTransferSearch = onTransferSearch;
 window.initTransfersAndSettings = initTransfersAndSettings;
 
@@ -3997,7 +4098,6 @@ const EXTRACTION_SITES = [
   }
 ];
 let extractionResources = [];
-let extractionJobs = {};
 let extractionInited = false;
 
 function getExtractionWebview() { return document.getElementById('extractionWebview'); }

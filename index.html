@@ -1086,6 +1086,51 @@
       border-color: #ef4444;
     }
 
+    /* 传输列表分页条 */
+    .transfer-pagination {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.75rem 0.25rem 0.25rem;
+      margin-top: 0.5rem;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border-color);
+      flex-wrap: wrap;
+    }
+
+    .tp-controls {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .tp-btn {
+      padding: 0.3rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      background: var(--surface-subtle);
+      color: var(--text-color);
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .tp-btn:hover:not(:disabled) {
+      border-color: var(--primary-color);
+      color: var(--primary-light, #818cf8);
+    }
+
+    .tp-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .tp-info {
+      font-variant-numeric: tabular-nums;
+    }
+
     .empty-state {
       display: flex;
       flex-direction: column;
@@ -1455,6 +1500,17 @@
           <div class="empty-state" id="emptyFailedState">
             <div class="empty-icon">❌</div>
             <p>暂无下载失败的任务</p>
+          </div>
+        </div>
+
+        <!-- 传输列表分页组件 -->
+        <div class="transfer-pagination" id="transferPagination" style="display: none;">
+          <span class="tp-info" id="transferPageInfo">第 1 / 1 页 (共 0 项)</span>
+          <div class="tp-controls">
+            <button class="tp-btn" id="tpBtnFirst" onclick="changeTransferPage('first')" title="首页">« 首页</button>
+            <button class="tp-btn" id="tpBtnPrev" onclick="changeTransferPage('prev')" title="上一页">‹ 上一页</button>
+            <button class="tp-btn" id="tpBtnNext" onclick="changeTransferPage('next')" title="下一页">下一页 ›</button>
+            <button class="tp-btn" id="tpBtnLast" onclick="changeTransferPage('last')" title="末页">末页 »</button>
           </div>
         </div>
       </div>
