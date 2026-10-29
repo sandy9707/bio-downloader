@@ -11,6 +11,7 @@
     curlProgress: [],
     speedtestProgress: [],
     updateDownloadProgress: [],
+    clashValidationProgress: [],
     extractionEvent: [],
     menuAddLink: [],
     extractionNav: []
@@ -31,6 +32,9 @@
     });
     sse.addEventListener('md5-verification-progress', (e) => {
       try { listeners.md5Progress.forEach(fn => fn(JSON.parse(e.data))); } catch (_) {}
+    });
+    sse.addEventListener('clash-validation-progress', (e) => {
+      try { listeners.clashValidationProgress.forEach(fn => fn(JSON.parse(e.data))); } catch (_) {}
     });
     sse.addEventListener('download-status', (e) => {
       try {
@@ -177,6 +181,7 @@
       if (prop === 'isElectron') return false;
       // 监听器
       if (prop === 'onMd5VerificationProgress') return (cb) => listeners.md5Progress.push(cb);
+      if (prop === 'onClashValidationProgress') return (cb) => { listeners.clashValidationProgress = [cb]; };
       if (prop === 'onDownloadStatus') return (cb) => listeners.downloadStatus.push(cb);
       if (prop === 'onDownloadProgress') return (cb) => listeners.downloadProgress.push(cb);
       if (prop === 'onUpdateProgress') return (cb) => listeners.updateProgress.push(cb);
