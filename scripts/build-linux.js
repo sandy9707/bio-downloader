@@ -19,6 +19,12 @@ fs.copyFileSync(path.join(root,'logo.png'),path.join(bundle,'packages/web/logo.p
 for(const file of ['runtime/node','biodl','bin/linux/axel','bin/linux/mihomo_linux_amd64','bin/linux/aria2/aria2c'])fs.chmodSync(path.join(bundle,file),0o755);
 
 cp.execFileSync('npm',['ci','--omit=dev','--ignore-scripts','--no-audit'],{cwd:bundle,stdio:'inherit'});
+// Keep js-yaml reachable after 2.0.41 in-place upgrades that sync packages/ but omit new deps.
+const vendorMods = path.join(bundle, 'packages/vendor/node_modules');
+fs.mkdirSync(vendorMods, { recursive: true });
+for (const name of ['js-yaml', 'argparse']) {
+  fs.cpSync(path.join(bundle, 'node_modules', name), path.join(vendorMods, name), { recursive: true });
+}
 cp.execFileSync(path.join(bundle,'runtime/node'),['--version'],{stdio:'inherit'});
 cp.execFileSync(path.join(bundle,'bin/linux/axel'),['--version'],{stdio:'inherit'});
 cp.execFileSync(path.join(bundle,'bin/linux/aria2/aria2c'),['--version'],{stdio:'inherit'});

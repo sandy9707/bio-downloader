@@ -11,7 +11,13 @@ const originalFs = isElectron ? require('original-fs') : fs;
 const { spawn, spawnSync, exec } = require('child_process');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const yaml = require('js-yaml');
+function loadJsYaml() {
+  try { return require('js-yaml'); } catch (_) {}
+  // 2.0.41 原地升级只同步 packages/，不保证带上新增的 node_modules 依赖。
+  try { return require('./packages/vendor/node_modules/js-yaml'); } catch (_) {}
+  throw new Error("Cannot find module 'js-yaml'");
+}
+const yaml = loadJsYaml();
 const os = require('os');
 const crypto = require('crypto');
 const EventEmitter = require('events');
