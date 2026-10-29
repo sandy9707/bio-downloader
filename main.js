@@ -523,20 +523,33 @@ function cleanOldLogs() {
 }
 cleanOldLogs();
 
+function resolveDefaultDownloadDir() {
+  try {
+    if (process.platform === 'win32') return app.getPath('desktop');
+    return app.getPath('downloads');
+  } catch (_) {
+    return path.join(os.homedir(), process.platform === 'win32' ? 'Desktop' : 'Downloads');
+  }
+}
+
 function getSettings() {
+  let settings = {};
   if (fs.existsSync(SETTINGS_FILE)) {
     try {
-      return migrateEngineSettings(JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')));
+      settings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
     } catch (e) {
-      return migrateEngineSettings({});
+      settings = {};
     }
   }
-  return migrateEngineSettings({});
+  settings = migrateEngineSettings(settings);
+  if (!settings.defaultDir) settings.suggestedDefaultDir = resolveDefaultDownloadDir();
+  return settings;
 }
 
 function saveSettings(settings) {
   const current = getSettings();
   const updated = { ...current, ...settings };
+  delete updated.suggestedDefaultDir;
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(storeEngineSettings(updated), null, 2), 'utf8');
   return updated;
 }
@@ -2180,7 +2193,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     event.sender.send('download-status', data);
   }
   const MAX_RETRIES = 3;
-  const maxConcurrentCount = Math.max(1, Math.min(16, parseInt(maxConcurrent, 10) || 3));
+  const maxConcurrentCount = Math.max(1, parseInt(maxConcurrent, 10) || 3);
   const actualConcurrentCount = Math.max(1, Math.min(maxConcurrentCount, files.length));
   const lowPowerMode = Boolean(getSettings().lowPowerMode);
   const stableMode = Boolean(getSettings().stableMode);
@@ -3800,7 +3813,7 @@ function setupExtractionBrowser() {
     // 不 preventDefault —— 让原生下载继续,但我们接管保存路径与状态上报
     const id = 'ex' + (extractionJobSeq++);
     const saved = getSettings() || {};
-    const saveDir = saved.defaultDir || app.getPath('downloads');
+    const saveDir = saved.defaultDir || resolveDefaultDownloadDir();
     const savePath = path.join(saveDir, sanitizePathSegment(name) || ('download_' + Date.now()));
     try { item.setSavePath(savePath); } catch (e) { writeClashLog('[will-download] setSavePath err: ' + e.message); }
     sendExtraction({ type: 'download', id, status: 'started', url, name, size, saveDir, title: '网页拦截' });

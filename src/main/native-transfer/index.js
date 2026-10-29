@@ -298,7 +298,7 @@ async function checkPublicationSupport(directory) {
     const handle = await fs.open(from, 'wx'); await handle.close();
     try { await fs.link(from, to); }
     catch (error) {
-      if (['ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'EXDEV', 'ENOSYS'].includes(error.code)) throw new TransferError('FILESYSTEM_UNSUPPORTED', '此磁盘不支持专属内核的安全文件发布');
+      if (['ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'EXDEV', 'ENOSYS', 'EISDIR'].includes(error.code)) throw new TransferError('FILESYSTEM_UNSUPPORTED', '此磁盘不支持专属内核的安全文件发布');
       throw error;
     }
   } finally { await fs.unlink(to).catch(() => {}); await fs.unlink(from).catch(() => {}); }

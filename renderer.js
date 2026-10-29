@@ -179,15 +179,18 @@ window.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('themeLabel').innerText = '亮色模式';
   }
 
-  // 1. 获取本地设置
+  // 1. 获取本地设置（无自定义路径时用平台默认：Windows 桌面 / Mac Downloads）
   if (settings.defaultDir) {
     defaultDir = settings.defaultDir;
+  } else if (settings.suggestedDefaultDir) {
+    defaultDir = settings.suggestedDefaultDir;
+  }
+  if (defaultDir) {
     document.getElementById('targetDirInput').value = defaultDir;
-    // 同步到设置页面
     const settingsInput = document.getElementById('settingsDefaultDirInput');
     if (settingsInput) settingsInput.value = defaultDir;
   }
-  
+
   // 2. 检查是否有本地 Token 并自动登录验证
   if (settings.token) {
     await verifyToken(settings.token, true); // true = 来自自动登录，失败不强制退出
@@ -205,6 +208,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   // 5. 定时更新加速器状态
   updateClashUIState();
   setInterval(updateClashUIState, 3000);
+
+  if (window.api && typeof window.api.onClashValidationProgress === 'function') {
+    window.api.onClashValidationProgress(setClashValidationProgress);
+  }
 });
 
 // ==========================================
@@ -278,8 +285,12 @@ async function toggleClash() {
         return;
       }
       showToast('正在初始化下载加速器...');
+      resetClashValidationProgress();
+      const progressWrap = document.getElementById('clashValidationProgress');
+      if (progressWrap) progressWrap.style.display = 'block';
       try {
-        await window.api.startClash(currentUser.token);
+        const startRes = await window.api.startClash(currentUser.token);
+        if (startRes && startRes.nodeCount) updateNodeCountUI(startRes.nodeCount);
         showToast('下载加速器启动成功', 'success');
       } catch (err) {
         const msg = (err && err.message) || '未知错误';
@@ -289,6 +300,7 @@ async function toggleClash() {
         toggle.checked = false;
         dot.className = 'dot';
         text.innerText = '加速器已关闭';
+        resetClashValidationProgress();
         return;
       }
     } else {
@@ -2549,7 +2561,10 @@ function formatBytesSpeed(bytesPerSec) {
   return (bytesPerSec / (1024 * 1024 * 1024)).toFixed(2) + ' GB/s';
 }
 
-function updateGlobalTotalSpeed() {
+let lastGlobalSpeedPaintAt = 0;
+let globalSpeedPaintTimer = null;
+
+function paintGlobalTotalSpeed() {
   let totalBytes = 0;
   activeDownloads.forEach(item => {
     if (item.speed && item.status !== 'completed' && item.status !== 'failed' && item.status !== 'paused') {
@@ -2566,6 +2581,25 @@ function updateGlobalTotalSpeed() {
   const speedEl = document.getElementById('globalTotalSpeed');
   if (speedEl) {
     speedEl.innerText = formatBytesSpeed(totalBytes);
+  }
+  lastGlobalSpeedPaintAt = Date.now();
+}
+
+function updateGlobalTotalSpeed() {
+  const elapsed = Date.now() - lastGlobalSpeedPaintAt;
+  if (elapsed >= 1000 || lastGlobalSpeedPaintAt === 0) {
+    if (globalSpeedPaintTimer) {
+      clearTimeout(globalSpeedPaintTimer);
+      globalSpeedPaintTimer = null;
+    }
+    paintGlobalTotalSpeed();
+    return;
+  }
+  if (!globalSpeedPaintTimer) {
+    globalSpeedPaintTimer = setTimeout(() => {
+      globalSpeedPaintTimer = null;
+      paintGlobalTotalSpeed();
+    }, 1000 - elapsed);
   }
 }
 
@@ -3427,8 +3461,30 @@ async function cancelAllDownloads() {
   showToast('已取消全部任务', 'info');
 }
 
-async function changeMaxConcurrent(val) {
-  maxConcurrentDownloadsSetting = parseInt(val, 10) || 3;
+function syncMaxConcurrentControls(value) {
+  const select = document.getElementById('settingsMaxConcurrent');
+  const customInput = document.getElementById('settingsMaxConcurrentCustom');
+  const n = Math.max(1, parseInt(value, 10) || 3);
+  maxConcurrentDownloadsSetting = n;
+  if (!select) return;
+  const preset = ['1', '2', '3', '4', '5'].includes(String(n));
+  if (preset) {
+    select.value = String(n);
+    if (customInput) {
+      customInput.style.display = 'none';
+      customInput.value = '';
+    }
+  } else {
+    select.value = 'custom';
+    if (customInput) {
+      customInput.style.display = 'inline-block';
+      customInput.value = String(n);
+    }
+  }
+}
+
+async function persistMaxConcurrent(n) {
+  maxConcurrentDownloadsSetting = Math.max(1, parseInt(n, 10) || 3);
   try {
     const settings = await window.api.getSettings();
     settings.maxConcurrent = maxConcurrentDownloadsSetting;
@@ -3438,6 +3494,31 @@ async function changeMaxConcurrent(val) {
     console.error('保存并发设置失败:', err);
   }
 }
+
+async function changeMaxConcurrent(val) {
+  const customInput = document.getElementById('settingsMaxConcurrentCustom');
+  if (val === 'custom') {
+    if (customInput) {
+      customInput.style.display = 'inline-block';
+      customInput.focus();
+      if (!customInput.value) customInput.value = String(maxConcurrentDownloadsSetting || 3);
+    }
+    return;
+  }
+  if (customInput) customInput.style.display = 'none';
+  await persistMaxConcurrent(val);
+}
+
+async function changeMaxConcurrentCustom(val) {
+  const n = parseInt(val, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    showToast('请输入大于等于 1 的正整数', 'error');
+    return;
+  }
+  syncMaxConcurrentControls(n);
+  await persistMaxConcurrent(n);
+}
+window.changeMaxConcurrentCustom = changeMaxConcurrentCustom;
 
 // Persist every transfer category, independently of the current login/network state.
 var transfersReady = false;
@@ -3527,9 +3608,7 @@ async function initTransfersAndSettings(settings) {
 
   // 2. 载入并发数量设置
   if (settings && settings.maxConcurrent) {
-    maxConcurrentDownloadsSetting = parseInt(settings.maxConcurrent, 10) || 3;
-    const select = document.getElementById('settingsMaxConcurrent');
-    if (select) select.value = maxConcurrentDownloadsSetting;
+    syncMaxConcurrentControls(settings.maxConcurrent);
   }
 
   lowPowerModeSetting = Boolean(settings && settings.lowPowerMode);
@@ -4042,6 +4121,31 @@ function updateNodeCountUI(count) {
   }
 }
 
+function setClashValidationProgress(data) {
+  const wrap = document.getElementById('clashValidationProgress');
+  const fill = document.getElementById('clashValidationProgressFill');
+  if (!wrap || !fill) return;
+  const total = Number(data && data.total) || 0;
+  const completed = Number(data && data.completed) || 0;
+  const pct = total > 0 ? Math.min(100, Math.round(completed * 100 / total)) : 0;
+  wrap.style.display = 'block';
+  fill.style.width = pct + '%';
+  if (typeof data?.passed === 'number' && data.passed > 0) updateNodeCountUI(data.passed);
+  if (data && data.done) {
+    setTimeout(() => {
+      wrap.style.display = 'none';
+      fill.style.width = '0%';
+    }, 350);
+  }
+}
+
+function resetClashValidationProgress() {
+  const wrap = document.getElementById('clashValidationProgress');
+  const fill = document.getElementById('clashValidationProgressFill');
+  if (fill) fill.style.width = '0%';
+  if (wrap) wrap.style.display = 'none';
+}
+
 // 优化连接/刷新通道方法
 async function optimizeConnections() {
   if (window.campusNotice && !(await window.campusNotice.beforeUse())) return;
@@ -4057,6 +4161,9 @@ async function optimizeConnections() {
     btn.disabled = true;
     if (textEl) textEl.innerText = '⏳ 正在优化网络通道...';
   }
+  resetClashValidationProgress();
+  const progressWrap = document.getElementById('clashValidationProgress');
+  if (progressWrap) progressWrap.style.display = 'block';
 
   try {
     const res = await window.api.optimizeClash(currentUser.token);
@@ -4066,6 +4173,7 @@ async function optimizeConnections() {
     }
   } catch (err) {
     showToast('连接优化失败: ' + (err.message || '未知错误'), 'error');
+    resetClashValidationProgress();
   } finally {
     if (btn) {
       btn.disabled = false;

@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - 'v*'
-      - '!v*-preview*' # Preview publishes the already-validated workflow_dispatch artifacts.
   workflow_dispatch:
     inputs:
       platform:

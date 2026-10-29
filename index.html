@@ -1335,6 +1335,11 @@
     <button class="btn btn-secondary" id="btnOptimizeConn" onclick="optimizeConnections()" style="width: 100%; margin-top: 0.5rem; font-size: 0.8rem; padding: 0.45rem 0.6rem; display: flex; align-items: center; justify-content: center; gap: 0.3rem; border-radius: 8px; background: rgba(99, 102, 241, 0.12); border: 1px solid rgba(99, 102, 241, 0.25); color: #818cf8; cursor: pointer; white-space: nowrap; overflow: hidden;">
       <span id="btnOptimizeConnText">⚡ 优化连接</span>
     </button>
+    <div id="clashValidationProgress" style="display:none; margin-top:0.45rem;">
+      <div class="progress-bar-bg" style="height:4px;">
+        <div class="progress-bar-fill" id="clashValidationProgressFill" style="width:0%; transition:width 0.2s ease;"></div>
+      </div>
+    </div>
   </div>
 
   <!-- 右侧主体区域 -->
@@ -1890,7 +1895,9 @@
               <option value="3" selected>3</option>
               <option value="4">4</option>
               <option value="5">5</option>
+              <option value="custom">自定义</option>
             </select>
+            <input type="number" id="settingsMaxConcurrentCustom" min="1" step="1" placeholder="正整数" style="display:none; width:5.5rem; background:var(--bg-input); color:var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:0.4rem 0.6rem; font-size:0.9rem; outline:none;" onchange="changeMaxConcurrentCustom(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();changeMaxConcurrentCustom(this.value);}">
           </div>
           <div style="font-size:0.8rem; color:var(--text-muted); margin-top:0.25rem;">设置同时下载的最大文件个数。并发过高可能会导致宽带饱和。</div>
         </div>

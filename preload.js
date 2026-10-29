@@ -43,6 +43,10 @@ contextBridge.exposeInMainWorld('api', {
   getClashStatus: () => ipcRenderer.invoke('clash-status'),
   optimizeClash: (token) => ipcRenderer.invoke('clash-optimize', { token }),
   getNodeCount: () => ipcRenderer.invoke('clash-get-node-count'),
+  onClashValidationProgress: (callback) => {
+    ipcRenderer.removeAllListeners('clash-validation-progress');
+    ipcRenderer.on('clash-validation-progress', (_event, data) => callback(data));
+  },
 
   // 下载管理
   checkSize: (type, inputVal) => ipcRenderer.invoke('check-download-size', { type, inputVal }),
