@@ -11,6 +11,7 @@ const originalFs = isElectron ? require('original-fs') : fs;
 const { spawn, spawnSync, exec } = require('child_process');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const yaml = require('js-yaml');
 const os = require('os');
 const crypto = require('crypto');
 const EventEmitter = require('events');
@@ -210,6 +211,11 @@ if (!isElectron) {
 let extractionWindow = null; // 引导式提取独立弹出窗口
 let clashProcess = null;
 let currentRealNodeCount = 0;
+const CLASH_CONTROL_URL = 'http://127.0.0.1:43299';
+const LOCAL_NODE_TEST_URL = 'http://captive.apple.com/hotspot-detect.html';
+const LOCAL_NODE_TEST_TIMEOUT_MS = 5000;
+const LOCAL_NODE_TEST_CONCURRENCY = 8;
+const ACCOUNT_AIRPORTS = { 1: '一分机场', 2: '一分机场', 3: '一元机场', 4: '一元机场', 5: '一元机场', 6: 'iKuuu' };
 let currentAxelProcess = null;
 const activeAxelProcesses = new Map();
 const activeNativeTransfers = new Map();
@@ -679,7 +685,74 @@ function writeClashLog(msg) {
     console.log(msg);
   } catch (e) {}
 }
-async function startClash(token) {
+function getLocalNodePhysicalKey(name) {
+  const value = String(name || '');
+  const match = value.match(/\[账号(\d+)\]\s*$/);
+  const airport = ACCOUNT_AIRPORTS[Number(match?.[1])] || `账号${match?.[1] || 0}`;
+  return `${airport}@@${value.replace(/\s*\[账号\d+\]\s*$/, '').trim()}`;
+}
+
+function emitClashValidationProgress(sender, data) {
+  if (sender && !sender.isDestroyed?.()) sender.send('clash-validation-progress', data);
+}
+
+async function validateLocalClashNodes(configPath, sender) {
+  const config = yaml.load(fs.readFileSync(configPath, 'utf8')) || {};
+  const groups = Array.isArray(config['proxy-groups']) ? config['proxy-groups'] : [];
+  const downloadPool = groups.find(group => group?.name === '⚡ 多账号并发下载池');
+  const candidateNames = [...new Set((downloadPool?.proxies || []).filter(Boolean))];
+  if (!candidateNames.length) throw new Error('本地配置中没有可校验的高速节点');
+
+  const physicalGroups = new Map();
+  candidateNames.forEach(name => {
+    const key = getLocalNodePhysicalKey(name);
+    if (!physicalGroups.has(key)) physicalGroups.set(key, []);
+    physicalGroups.get(key).push(name);
+  });
+
+  const entries = [...physicalGroups.values()];
+  let completed = 0;
+  let passedGroups = 0;
+  const passedNames = new Set();
+  emitClashValidationProgress(sender, { completed, total: entries.length, passed: 0 });
+
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(LOCAL_NODE_TEST_CONCURRENCY, entries.length) }, async () => {
+    while (cursor < entries.length) {
+      const groupNames = entries[cursor++];
+      const representative = groupNames[0];
+      let passed = false;
+      try {
+        const response = await axios.get(`${CLASH_CONTROL_URL}/proxies/${encodeURIComponent(representative)}/delay`, {
+          params: { url: LOCAL_NODE_TEST_URL, timeout: LOCAL_NODE_TEST_TIMEOUT_MS },
+          timeout: LOCAL_NODE_TEST_TIMEOUT_MS + 2000
+        });
+        passed = Number(response.data?.delay) > 0;
+      } catch (_) {}
+      if (passed) {
+        passedGroups++;
+        groupNames.forEach(name => passedNames.add(name));
+      }
+      completed++;
+      emitClashValidationProgress(sender, { completed, total: entries.length, passed: passedNames.size });
+    }
+  });
+  await Promise.all(workers);
+
+  if (!passedNames.size) throw new Error('当前网络未找到可用高速节点，请检查网络后重试');
+  downloadPool.proxies = candidateNames.filter(name => passedNames.has(name));
+  groups.forEach(group => {
+    if (!Array.isArray(group.proxies) || group === downloadPool) return;
+    group.proxies = group.proxies.filter(name => !candidateNames.includes(name) || passedNames.has(name));
+  });
+  fs.writeFileSync(configPath, yaml.dump(config, { lineWidth: -1, noRefs: true }), 'utf8');
+  currentRealNodeCount = passedNames.size;
+  writeClashLog(`[local-validation] ${passedGroups}/${entries.length} physical nodes passed, ${passedNames.size}/${candidateNames.length} account nodes retained`);
+  emitClashValidationProgress(sender, { completed, total: entries.length, passed: passedNames.size, done: true });
+  return currentRealNodeCount;
+}
+
+async function startClash(token, sender) {
   writeClashLog(`[startClash] begin token=${token ? token.slice(0, 8) + '…' : '(空)'}`);
   if (clashProcess) {
     writeClashLog('[startClash] already running, return true');
@@ -830,10 +903,14 @@ async function startClash(token) {
           }
         });
     });
+    await validateLocalClashNodes(configPath, sender);
+    await axios.put(`${CLASH_CONTROL_URL}/configs`, { path: configPath }, { timeout: 5000 });
+    await axios.delete(`${CLASH_CONTROL_URL}/connections`, { timeout: 3000 });
     return true;
   } catch (err) {
     console.error('Failed to start Clash:', err.message);
     writeClashLog('[startClash] FAIL: ' + err.message);
+    stopClash();
     throw new Error('下载加速器启动失败: ' + err.message);
   }
 }
@@ -848,7 +925,7 @@ function stopClash() {
   }
 }
 
-async function optimizeClash(token) {
+async function optimizeClash(token, sender) {
   if (!token) {
     throw new Error('未检测到有效账户 Token，请注册登录后再试。');
   }
@@ -891,16 +968,19 @@ async function optimizeClash(token) {
     // 如果加速器在运行中，关断所有连接池，强制客户端/Axel重设最佳连接流
     if (clashProcess) {
       try {
-        await axios.put('http://127.0.0.1:43299/configs', { path: configPath }, { timeout: 3000 });
-        await axios.delete('http://127.0.0.1:43299/connections', { timeout: 3000 });
-        console.log('Successfully reloaded config and closed all Mihomo connections via REST API.');
+        await axios.put(`${CLASH_CONTROL_URL}/configs`, { path: configPath }, { timeout: 3000 });
       } catch (restErr) {
         console.log('Mihomo REST API call failed, gracefully restarting Clash process:', restErr.message);
         await stopClash();
-        await startClash(token);
+        await startClash(token, sender);
+        return { success: true, message: '网络通道优化成功，已重新拉取配置并刷新网络通道！' };
       }
+      await validateLocalClashNodes(configPath, sender);
+      await axios.put(`${CLASH_CONTROL_URL}/configs`, { path: configPath }, { timeout: 5000 });
+      await axios.delete(`${CLASH_CONTROL_URL}/connections`, { timeout: 3000 });
+      console.log('Successfully reloaded config and closed all Mihomo connections via REST API.');
     } else {
-      await startClash(token);
+      await startClash(token, sender);
     }
 
     return { success: true, message: '网络通道优化成功，已重新拉取配置并刷新网络通道！' };
@@ -1285,7 +1365,7 @@ ipcMain.handle('plugin-set-path', async (event, { pluginId, binaryPath }) => {
 
 // --- Clash 控制 ---
 ipcMain.handle('clash-start', async (event, { token }) => {
-  await startClash(token);
+  await startClash(token, event.sender);
   setExtractionProxy();
   return { success: true, nodeCount: currentRealNodeCount };
 });
@@ -1297,7 +1377,7 @@ ipcMain.handle('clash-stop', () => {
 });
 
 ipcMain.handle('clash-optimize', async (event, { token }) => {
-  const res = await optimizeClash(token);
+  const res = await optimizeClash(token, event.sender);
   return { ...res, nodeCount: currentRealNodeCount };
 });
 
@@ -2770,8 +2850,9 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         activeAxelProcesses.delete(fileIndex);
         console.warn(`Attempt ${attempt} for ${file.name} failed: ${lastErrorMsg}`);
         if (engineForFile === 'native') {
-          const hasNativeData = ['.biodl-part', '.biodl-journal', ''].some(suffix => fs.existsSync(savePath + suffix));
-          if (!hasNativeData && ['VALIDATOR_REQUIRED', 'RANGE_INVALID', 'UNSUPPORTED_URL', 'FILESYSTEM_UNSUPPORTED'].includes(err.code) && !cancelledFiles.has(fileIndex) && !pausedAxelFiles.has(fileIndex)) {
+          const hasNativeData = ['.biodl-part', '.biodl-journal'].some(suffix => fs.existsSync(savePath + suffix));
+          const nativeErrCode = err.code || err.diagnostic?.code;
+          if (!hasNativeData && ['VALIDATOR_REQUIRED', 'RANGE_INVALID', 'UNSUPPORTED_URL', 'FILESYSTEM_UNSUPPORTED'].includes(nativeErrCode) && !cancelledFiles.has(fileIndex) && !pausedAxelFiles.has(fileIndex)) {
             engineForFile = 'aria2';
             sendStatus({ index: fileIndex, status: 'downloading', engine: 'aria2', savePath, speed: '源站或磁盘不支持专属内核，使用 aria2c 兼容下载…' });
             await prepareGuard(); attempt = 0;

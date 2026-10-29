@@ -16,7 +16,8 @@ fs.mkdirSync(path.join(bundle,'runtime'),{recursive:true});
 fs.copyFileSync(process.env.BIODL_NODE_RUNTIME || process.execPath,path.join(bundle,'runtime/node'));
 fs.copyFileSync(path.join(root,'packages/cli/biodl'),path.join(bundle,'biodl'));
 fs.copyFileSync(path.join(root,'logo.png'),path.join(bundle,'packages/web/logo.png'));
-for(const file of ['runtime/node','biodl','bin/linux/axel','bin/linux/mihomo_linux_amd64','bin/linux/aria2/aria2c','bin/linux/aria2/aria2c.bin','bin/linux/aria2/lib/ld-musl-x86_64.so.1'])fs.chmodSync(path.join(bundle,file),0o755);
+for(const file of ['runtime/node','biodl','bin/linux/axel','bin/linux/mihomo_linux_amd64','bin/linux/aria2/aria2c'])fs.chmodSync(path.join(bundle,file),0o755);
+
 cp.execFileSync('npm',['ci','--omit=dev','--ignore-scripts','--no-audit'],{cwd:bundle,stdio:'inherit'});
 cp.execFileSync(path.join(bundle,'runtime/node'),['--version'],{stdio:'inherit'});
 cp.execFileSync(path.join(bundle,'bin/linux/axel'),['--version'],{stdio:'inherit'});

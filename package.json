@@ -1,6 +1,6 @@
 {
   "name": "bio-downloader",
-  "version": "2.2.2",
+  "version": "2.2.3-preview",
   "description": "Commercial Biology Raw Data Downloader Desktop Client",
   "main": "main.js",
   "scripts": {
@@ -24,6 +24,7 @@
     "axios": "^1.6.8",
     "cheerio": "^1.0.0-rc.12",
     "commander": "^12.1.0",
+    "js-yaml": "^4.1.0",
     "proper-lockfile": "^4.1.2",
     "ssh2": "^1.17.0"
   },
