@@ -716,10 +716,10 @@ function emitClashValidationProgress(sender, data) {
 }
 
 async function reloadClashConfig(configPath) {
-  // Prefer raw body reload: Windows userData paths often make Mihomo `{path}` reload return 400.
-  const body = fs.readFileSync(configPath);
-  const bodyRes = await axios.put(`${CLASH_CONTROL_URL}/configs?force=true`, body, {
-    headers: { 'Content-Type': 'text/yaml' },
+  // Mihomo's config API accepts JSON with a YAML payload, not a raw YAML body.
+  const body = fs.readFileSync(configPath, 'utf8');
+  const bodyRes = await axios.put(`${CLASH_CONTROL_URL}/configs?force=true`, { payload: body }, {
+    proxy: false,
     timeout: 8000,
     maxBodyLength: Infinity,
     maxContentLength: Infinity,
@@ -728,6 +728,7 @@ async function reloadClashConfig(configPath) {
   if (bodyRes.status < 400) return;
   writeClashLog(`[reloadClashConfig] body reload HTTP ${bodyRes.status}, fallback to path`);
   const pathRes = await axios.put(`${CLASH_CONTROL_URL}/configs?force=true`, { path: configPath }, {
+    proxy: false,
     timeout: 8000,
     validateStatus: () => true
   });
@@ -787,10 +788,8 @@ async function validateLocalClashNodes(configPath, sender) {
 
   if (!passedNames.size) throw new Error('当前网络未找到可用高速节点，请检查网络后重试');
   downloadPool.proxies = candidateNames.filter(name => passedNames.has(name));
-  groups.forEach(group => {
-    if (!Array.isArray(group.proxies) || group === downloadPool) return;
-    group.proxies = group.proxies.filter(name => !candidateNames.includes(name) || passedNames.has(name));
-  });
+  // Only narrow the download pool. Other groups may otherwise become empty,
+  // which Mihomo rejects with HTTP 400 during config reload.
   fs.writeFileSync(configPath, yaml.dump(config, { lineWidth: -1, noRefs: true }), 'utf8');
   try {
     await reloadClashConfig(configPath);
