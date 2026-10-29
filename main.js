@@ -715,12 +715,39 @@ function emitClashValidationProgress(sender, data) {
   if (sender && !sender.isDestroyed?.()) sender.send('clash-validation-progress', data);
 }
 
+async function reloadClashConfig(configPath) {
+  // Prefer raw body reload: Windows userData paths often make Mihomo `{path}` reload return 400.
+  const body = fs.readFileSync(configPath);
+  const bodyRes = await axios.put(`${CLASH_CONTROL_URL}/configs?force=true`, body, {
+    headers: { 'Content-Type': 'text/yaml' },
+    timeout: 8000,
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity,
+    validateStatus: () => true
+  });
+  if (bodyRes.status < 400) return;
+  writeClashLog(`[reloadClashConfig] body reload HTTP ${bodyRes.status}, fallback to path`);
+  const pathRes = await axios.put(`${CLASH_CONTROL_URL}/configs?force=true`, { path: configPath }, {
+    timeout: 8000,
+    validateStatus: () => true
+  });
+  if (pathRes.status >= 400) {
+    const detail = typeof pathRes.data === 'string' ? pathRes.data.slice(0, 120) : `body=${bodyRes.status}`;
+    throw new Error(`配置重载失败(HTTP ${pathRes.status})：${detail}`);
+  }
+}
+
 async function validateLocalClashNodes(configPath, sender) {
-  const config = yaml.load(fs.readFileSync(configPath, 'utf8')) || {};
+  const originalYaml = fs.readFileSync(configPath, 'utf8');
+  const config = yaml.load(originalYaml) || {};
   const groups = Array.isArray(config['proxy-groups']) ? config['proxy-groups'] : [];
   const downloadPool = groups.find(group => group?.name === '⚡ 多账号并发下载池');
   const candidateNames = [...new Set((downloadPool?.proxies || []).filter(Boolean))];
-  if (!candidateNames.length) throw new Error('本地配置中没有可校验的高速节点');
+  if (!candidateNames.length) {
+    writeClashLog('[local-validation] skip: download pool missing or empty');
+    emitClashValidationProgress(sender, { completed: 0, total: 0, passed: 0, done: true });
+    return currentRealNodeCount;
+  }
 
   const physicalGroups = new Map();
   candidateNames.forEach(name => {
@@ -765,6 +792,16 @@ async function validateLocalClashNodes(configPath, sender) {
     group.proxies = group.proxies.filter(name => !candidateNames.includes(name) || passedNames.has(name));
   });
   fs.writeFileSync(configPath, yaml.dump(config, { lineWidth: -1, noRefs: true }), 'utf8');
+  try {
+    await reloadClashConfig(configPath);
+  } catch (reloadErr) {
+    // Keep accelerator usable: restore cloud config if filtered yaml cannot be reloaded.
+    writeClashLog('[local-validation] reload failed, restoring original config: ' + reloadErr.message);
+    fs.writeFileSync(configPath, originalYaml, 'utf8');
+    try { await reloadClashConfig(configPath); } catch (_) {}
+    emitClashValidationProgress(sender, { completed, total: entries.length, passed: candidateNames.length, done: true });
+    return currentRealNodeCount;
+  }
   currentRealNodeCount = passedNames.size;
   writeClashLog(`[local-validation] ${passedGroups}/${entries.length} physical nodes passed, ${passedNames.size}/${candidateNames.length} account nodes retained`);
   emitClashValidationProgress(sender, { completed, total: entries.length, passed: passedNames.size, done: true });
@@ -923,8 +960,7 @@ async function startClash(token, sender) {
         });
     });
     await validateLocalClashNodes(configPath, sender);
-    await axios.put(`${CLASH_CONTROL_URL}/configs`, { path: configPath }, { timeout: 5000 });
-    await axios.delete(`${CLASH_CONTROL_URL}/connections`, { timeout: 3000 });
+    try { await axios.delete(`${CLASH_CONTROL_URL}/connections`, { timeout: 3000 }); } catch (_) {}
     return true;
   } catch (err) {
     console.error('Failed to start Clash:', err.message);
@@ -952,7 +988,15 @@ async function optimizeClash(token, sender) {
   try {
     console.log('Optimizing Clash connections for token:', token);
     const subUrl = `${BACKEND_BASE_URL}/speedup?token=${token}`;
-    const response = await axios.get(subUrl, { timeout: 10000 });
+    const response = await axios.get(subUrl, { timeout: 10000, validateStatus: () => true });
+    if (response.status >= 400) {
+      const body = typeof response.data === 'string' ? response.data.slice(0, 200) : '';
+      const friendly = body.includes('Token 不存在') ? 'Token 不存在，请退出重新登录。'
+        : body.includes('流量已用完') ? '高速流量已用完，请到流量商店购买。'
+        : body.includes('已过期') ? '加速服务已过期，请到流量商店续费。'
+        : ('订阅服务器返回 ' + response.status);
+      throw new Error(friendly);
+    }
 
     let yamlContent = response.data;
     yamlContent = yamlContent.replace(/^mixed-port:\s*\d+/gm, 'mixed-port: 43289');
@@ -987,7 +1031,7 @@ async function optimizeClash(token, sender) {
     // 如果加速器在运行中，关断所有连接池，强制客户端/Axel重设最佳连接流
     if (clashProcess) {
       try {
-        await axios.put(`${CLASH_CONTROL_URL}/configs`, { path: configPath }, { timeout: 3000 });
+        await reloadClashConfig(configPath);
       } catch (restErr) {
         console.log('Mihomo REST API call failed, gracefully restarting Clash process:', restErr.message);
         await stopClash();
@@ -995,8 +1039,7 @@ async function optimizeClash(token, sender) {
         return { success: true, message: '网络通道优化成功，已重新拉取配置并刷新网络通道！' };
       }
       await validateLocalClashNodes(configPath, sender);
-      await axios.put(`${CLASH_CONTROL_URL}/configs`, { path: configPath }, { timeout: 5000 });
-      await axios.delete(`${CLASH_CONTROL_URL}/connections`, { timeout: 3000 });
+      try { await axios.delete(`${CLASH_CONTROL_URL}/connections`, { timeout: 3000 }); } catch (_) {}
       console.log('Successfully reloaded config and closed all Mihomo connections via REST API.');
     } else {
       await startClash(token, sender);
