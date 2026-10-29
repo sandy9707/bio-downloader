@@ -2639,7 +2639,7 @@ function switchTransferSubTab(subTab) {
     if (listDownloading) listDownloading.style.display = 'none';
     if (listCompleted) listCompleted.style.display = 'flex';
     if (listFailed) listFailed.style.display = 'none';
-    if (btnClearCompleted) btnClearCompleted.style.display = 'block';
+    if (btnClearCompleted) btnClearCompleted.style.display = 'inline-block';
     if (btnClearFailed) btnClearFailed.style.display = 'none';
     if (btnRetryAllFailed) btnRetryAllFailed.style.display = 'none';
   } else if (subTab === 'failed') {
@@ -2650,11 +2650,12 @@ function switchTransferSubTab(subTab) {
     if (listCompleted) listCompleted.style.display = 'none';
     if (listFailed) listFailed.style.display = 'flex';
     if (btnClearCompleted) btnClearCompleted.style.display = 'none';
-    if (btnClearFailed) btnClearFailed.style.display = failedDownloads.length > 0 ? 'block' : 'none';
-    if (btnRetryAllFailed) btnRetryAllFailed.style.display = failedDownloads.length > 0 ? 'block' : 'none';
+    if (btnClearFailed) btnClearFailed.style.display = failedDownloads.length > 0 ? 'inline-block' : 'none';
+    if (btnRetryAllFailed) btnRetryAllFailed.style.display = failedDownloads.length > 0 ? 'inline-block' : 'none';
   }
   // 页签切换后刷新工具栏可见性(全部暂停/恢复/取消只在下载页签出现)与统计行
   updateTransferCounts();
+  if (typeof syncTransferSelectionUI === 'function') syncTransferSelectionUI();
   if (subTab === 'downloading') updateTransferPaginationUI(activeDownloads.filter(f => matchesTransferSearch(f.name)).length + Object.keys(extractionJobs).length);
   else if (subTab === 'completed') updateTransferPaginationUI(completedDownloads.filter(f => matchesTransferSearch(f.name)).length);
   else if (subTab === 'failed') updateTransferPaginationUI(failedDownloads.filter(f => matchesTransferSearch(f.name)).length);
@@ -2683,8 +2684,8 @@ function updateTransferCounts() {
   const btnClearFailed = document.getElementById('btnClearFailed');
   const btnRetryAllFailed = document.getElementById('btnRetryAllFailed');
   if (currentTransferSubTab === 'failed') {
-    if (btnClearFailed) btnClearFailed.style.display = failedDownloads.length > 0 ? 'block' : 'none';
-    if (btnRetryAllFailed) btnRetryAllFailed.style.display = failedDownloads.length > 0 ? 'block' : 'none';
+    if (btnClearFailed) btnClearFailed.style.display = failedDownloads.length > 0 ? 'inline-block' : 'none';
+    if (btnRetryAllFailed) btnRetryAllFailed.style.display = failedDownloads.length > 0 ? 'inline-block' : 'none';
   }
 
   // 正在下载工具栏(全部暂停/恢复/取消):仅在下载页签且有任务时显示
@@ -2695,6 +2696,7 @@ function updateTransferCounts() {
   if (btnPauseAll) btnPauseAll.style.display = showDlToolbar ? 'inline-block' : 'none';
   if (btnResumeAll) btnResumeAll.style.display = showDlToolbar ? 'inline-block' : 'none';
   if (btnCancelAll) btnCancelAll.style.display = showDlToolbar ? 'inline-block' : 'none';
+  if (typeof syncTransferSelectionUI === 'function') syncTransferSelectionUI();
 
   updateGlobalTotalSpeed();
 
@@ -2782,6 +2784,7 @@ function renderDownloadingList() {
   if (activeDownloads.length === 0 && Object.keys(extractionJobs).length === 0) {
     if (emptyState) emptyState.style.display = 'flex';
     if (typeof updateTransferPaginationUI === 'function') updateTransferPaginationUI(0);
+    if (typeof syncTransferSelectionUI === 'function') syncTransferSelectionUI();
     return;
   }
   if (emptyState) emptyState.style.display = 'none';
@@ -2807,6 +2810,7 @@ function renderDownloadingList() {
     itemEl.dataset.status = paused ? 'paused' : 'downloading';
 
     itemEl.innerHTML = `
+      <input type="checkbox" class="tl-select-checkbox" ${typeof selectedTransferKeys !== 'undefined' && selectedTransferKeys.downloading.has(String(fileId)) ? 'checked' : ''} onchange="toggleTransferItemSelection('downloading', '${fileId}', this.checked)" title="勾选此任务">
       <div class="tl-icon">${getFileTypeIcon(file.name, file.url)}</div>
       <div class="tl-body">
         <div class="transfer-item-name-row">
@@ -2835,9 +2839,8 @@ function renderDownloadingList() {
     `;
     container.appendChild(itemEl);
   });
+  if (typeof syncTransferSelectionUI === 'function') syncTransferSelectionUI();
 }
-
-// Redownload only confirmed mismatches; preserve all old bytes in the backend.
 let mismatchQueueBusy = false;
 const transferPathKey = value => { const key = String(value || '').replace(/\\/g, '/').replace(/\/$/, ''); return /^[a-z]:\/|^\/\//i.test(key) ? key.toLowerCase() : key; };
 async function redownloadMismatch(index) { const item = completedDownloads[index]; if (item) await queueMismatches([item]); }
@@ -2959,6 +2962,7 @@ function renderCompletedList() {
   if (completedDownloads.length === 0) {
     if (emptyState) emptyState.style.display = 'flex';
     if (typeof updateTransferPaginationUI === 'function') updateTransferPaginationUI(0);
+    if (typeof syncTransferSelectionUI === 'function') syncTransferSelectionUI();
     return;
   }
   if (emptyState) emptyState.style.display = 'none';
@@ -2977,6 +2981,7 @@ function renderCompletedList() {
     itemEl.dataset.savepath = item.savePath || '';
     itemEl.dataset.index = String(index);
     itemEl.innerHTML = `
+      <input type="checkbox" class="tl-select-checkbox" ${typeof selectedTransferKeys !== 'undefined' && selectedTransferKeys.completed.has(item) ? 'checked' : ''} onchange="toggleTransferItemSelection('completed', ${index}, this.checked)" title="勾选此任务">
       <div class="tl-icon">${getFileTypeIcon(item.name, item.url)}</div>
       <div class="tl-body">
         <div class="transfer-item-name-row">
@@ -3001,6 +3006,7 @@ function renderCompletedList() {
     `;
     container.appendChild(itemEl);
   });
+  if (typeof syncTransferSelectionUI === 'function') syncTransferSelectionUI();
 }
 
 function renderFailedList() {
@@ -3016,6 +3022,7 @@ function renderFailedList() {
   if (failedDownloads.length === 0) {
     if (emptyState) emptyState.style.display = 'flex';
     if (typeof updateTransferPaginationUI === 'function') updateTransferPaginationUI(0);
+    if (typeof syncTransferSelectionUI === 'function') syncTransferSelectionUI();
     return;
   }
   if (emptyState) emptyState.style.display = 'none';
@@ -3033,6 +3040,7 @@ function renderFailedList() {
     itemEl.dataset.status = 'failed';
     itemEl.dataset.index = String(index);
     itemEl.innerHTML = `
+      <input type="checkbox" class="tl-select-checkbox" ${typeof selectedTransferKeys !== 'undefined' && selectedTransferKeys.failed.has(item) ? 'checked' : ''} onchange="toggleTransferItemSelection('failed', ${index}, this.checked)" title="勾选此任务">
       <div class="tl-icon">${getFileTypeIcon(item.name, item.url)}</div>
       <div class="tl-body">
         <div class="transfer-item-name-row">
@@ -3052,6 +3060,7 @@ function renderFailedList() {
     `;
     container.appendChild(itemEl);
   });
+  if (typeof syncTransferSelectionUI === 'function') syncTransferSelectionUI();
 }
 
 // 点击定位文件夹时，不再通过 innerHTML 拼接未转义反斜杠，避免 Windows 路径被 JS 字符串吞噬
@@ -3115,10 +3124,18 @@ function openDeleteTransferModal(target) {
     title = '清空全部已完成任务';
     name = `全部已完成任务 (${completedDownloads.length} 项)`;
     savePath = '将对所有已完成任务执行操作';
+  } else if (target.category === 'selected_completed') {
+    title = '删除选中的已完成任务';
+    name = `已选已完成任务 (${selectedTransferKeys.completed.size} 项)`;
+    savePath = '将对所有勾选的已完成任务执行操作';
   } else if (target.category === 'all_failed') {
     title = '清空全部失败任务';
     name = `全部失败任务 (${failedDownloads.length} 项)`;
     savePath = '将对所有失败任务执行操作';
+  } else if (target.category === 'selected_failed') {
+    title = '删除选中的失败任务';
+    name = `已选失败任务 (${selectedTransferKeys.failed.size} 项)`;
+    savePath = '将对所有勾选的失败任务执行操作';
   }
 
   currentDeleteTarget = { ...target, name, savePath };
@@ -3145,9 +3162,16 @@ async function confirmDeleteTransfer(deleteFiles) {
   closeDeleteTransferModal();
   if (!target) return;
 
-  if (target.category === 'all_completed') {
-    const toDelete = [...completedDownloads];
-    completedDownloads = [];
+  if (target.category === 'all_completed' || target.category === 'selected_completed') {
+    const isSelected = target.category === 'selected_completed';
+    const toDelete = isSelected ? [...selectedTransferKeys.completed].filter(item => completedDownloads.includes(item)) : [...completedDownloads];
+    if (isSelected) {
+      completedDownloads = completedDownloads.filter(item => !selectedTransferKeys.completed.has(item));
+      selectedTransferKeys.completed.clear();
+    } else {
+      completedDownloads = [];
+      selectedTransferKeys.completed.clear();
+    }
     syncTransfersToStorage();
     renderCompletedList();
     updateTransferCounts();
@@ -3158,13 +3182,20 @@ async function confirmDeleteTransfer(deleteFiles) {
         }
       }
     }
-    showToast(deleteFiles ? '已清空完成记录并删除对应本地文件' : '已清空完成记录', 'success');
+    showToast(deleteFiles ? (isSelected ? '已删除选中完成记录及本地文件' : '已清空完成记录并删除对应本地文件') : (isSelected ? '已删除选中完成记录' : '已清空完成记录'), 'success');
     return;
   }
 
-  if (target.category === 'all_failed') {
-    const toDelete = [...failedDownloads];
-    failedDownloads = [];
+  if (target.category === 'all_failed' || target.category === 'selected_failed') {
+    const isSelected = target.category === 'selected_failed';
+    const toDelete = isSelected ? [...selectedTransferKeys.failed].filter(item => failedDownloads.includes(item)) : [...failedDownloads];
+    if (isSelected) {
+      failedDownloads = failedDownloads.filter(item => !selectedTransferKeys.failed.has(item));
+      selectedTransferKeys.failed.clear();
+    } else {
+      failedDownloads = [];
+      selectedTransferKeys.failed.clear();
+    }
     syncTransfersToStorage();
     renderFailedList();
     updateTransferCounts();
@@ -3175,7 +3206,7 @@ async function confirmDeleteTransfer(deleteFiles) {
         }
       }
     }
-    showToast(deleteFiles ? '已清空失败记录并删除残留文件' : '已清空失败记录', 'success');
+    showToast(deleteFiles ? (isSelected ? '已删除选中失败记录及残留文件' : '已清空失败记录并删除残留文件') : (isSelected ? '已删除选中失败记录' : '已清空失败记录'), 'success');
     return;
   }
 
@@ -3246,11 +3277,13 @@ function deleteFailedRecord(index) {
 
 function clearCompletedDownloads() {
   if (!completedDownloads.length) return showToast('暂无已完成任务', 'info');
+  if (selectedTransferKeys.completed.size > 0) return openDeleteTransferModal({ category: 'selected_completed' });
   openDeleteTransferModal({ category: 'all_completed' });
 }
 
 function clearFailedDownloads() {
   if (!failedDownloads.length) return showToast('暂无失败任务', 'info');
+  if (selectedTransferKeys.failed.size > 0) return openDeleteTransferModal({ category: 'selected_failed' });
   openDeleteTransferModal({ category: 'all_failed' });
 }
 
@@ -3258,6 +3291,116 @@ let transferConnectionPromise = null;
 let nextTransferId = Date.now();
 const resumingTransferIds = new Set();
 const resumingExtractionIds = new Set();
+const selectedTransferKeys = {
+  downloading: new Set(),
+  completed: new Set(),
+  failed: new Set()
+};
+
+function getTransferSelectSet(tab = currentTransferSubTab) {
+  return selectedTransferKeys[tab] || selectedTransferKeys.downloading;
+}
+
+function getVisibleTransferItems(tab = currentTransferSubTab) {
+  if (tab === 'downloading') {
+    const page = typeof getTransferCurrentPage === 'function' ? getTransferCurrentPage('downloading') : 1;
+    const pageSize = typeof TRANSFER_PAGE_SIZE !== 'undefined' ? TRANSFER_PAGE_SIZE : 50;
+    const startIdx = (page - 1) * pageSize;
+    const matched = activeDownloads.filter(f => matchesTransferSearch(f.name)).slice(startIdx, startIdx + pageSize);
+    const exKeys = Object.keys(extractionJobs).filter(id => extractionJobs[id] && matchesTransferSearch(extractionJobs[id].name)).map(id => 'ex:' + id);
+    return [...matched.map(f => String(f.originalIndex)), ...exKeys];
+  }
+  if (tab === 'completed') {
+    const page = typeof getTransferCurrentPage === 'function' ? getTransferCurrentPage('completed') : 1;
+    const pageSize = typeof TRANSFER_PAGE_SIZE !== 'undefined' ? TRANSFER_PAGE_SIZE : 50;
+    const startIdx = (page - 1) * pageSize;
+    return completedDownloads.map((item, idx) => ({ item, idx })).filter(({ item }) => matchesTransferSearch(item.name)).slice(startIdx, startIdx + pageSize).map(({ item }) => item);
+  }
+  if (tab === 'failed') {
+    const page = typeof getTransferCurrentPage === 'function' ? getTransferCurrentPage('failed') : 1;
+    const pageSize = typeof TRANSFER_PAGE_SIZE !== 'undefined' ? TRANSFER_PAGE_SIZE : 50;
+    const startIdx = (page - 1) * pageSize;
+    return failedDownloads.map((item, idx) => ({ item, idx })).filter(({ item }) => matchesTransferSearch(item.name)).slice(startIdx, startIdx + pageSize).map(({ item }) => item);
+  }
+  return [];
+}
+
+function pruneTransferSelections() {
+  const validDl = new Set([
+    ...activeDownloads.map(d => String(d.originalIndex)),
+    ...Object.keys(extractionJobs).map(id => 'ex:' + id)
+  ]);
+  for (const k of [...selectedTransferKeys.downloading]) {
+    if (!validDl.has(k)) selectedTransferKeys.downloading.delete(k);
+  }
+  for (const item of [...selectedTransferKeys.completed]) {
+    if (!completedDownloads.includes(item)) selectedTransferKeys.completed.delete(item);
+  }
+  for (const item of [...selectedTransferKeys.failed]) {
+    if (!failedDownloads.includes(item)) selectedTransferKeys.failed.delete(item);
+  }
+}
+
+function syncTransferSelectionUI() {
+  pruneTransferSelections();
+  const tab = currentTransferSubTab;
+  const visible = getVisibleTransferItems(tab);
+  const set = getTransferSelectSet(tab);
+  const selectedCount = set.size;
+  const wrap = document.getElementById('transferSelectAllWrap');
+  const cb = document.getElementById('transferSelectAllCheckbox');
+  const txt = document.getElementById('transferSelectAllText');
+  if (wrap) wrap.style.display = visible.length > 0 ? 'inline-flex' : 'none';
+  if (cb) {
+    const allVisibleSelected = visible.length > 0 && visible.every(v => set.has(v));
+    const someVisibleSelected = visible.some(v => set.has(v));
+    cb.checked = allVisibleSelected;
+    cb.indeterminate = !allVisibleSelected && someVisibleSelected;
+  }
+  if (txt) txt.textContent = selectedCount > 0 ? `已选 ${selectedCount}` : '全选';
+
+  const btnPauseAll = document.getElementById('btnPauseAll');
+  const btnResumeAll = document.getElementById('btnResumeAll');
+  const btnCancelAll = document.getElementById('btnCancelAll');
+  const btnRetryAllFailed = document.getElementById('btnRetryAllFailed');
+  const btnClearCompleted = document.getElementById('btnClearCompleted');
+  const btnClearFailed = document.getElementById('btnClearFailed');
+
+  if (tab === 'downloading') {
+    const n = selectedTransferKeys.downloading.size;
+    if (btnPauseAll) btnPauseAll.textContent = n > 0 ? `⏸ 暂停选中 (${n})` : '⏸ 全部暂停';
+    if (btnResumeAll) btnResumeAll.textContent = n > 0 ? `▶ 恢复选中 (${n})` : '▶ 全部恢复';
+    if (btnCancelAll) btnCancelAll.textContent = n > 0 ? `✕ 取消选中 (${n})` : '✕ 全部取消';
+  } else if (tab === 'completed') {
+    const n = selectedTransferKeys.completed.size;
+    if (btnClearCompleted) btnClearCompleted.textContent = n > 0 ? `🗑️ 删除选中 (${n})` : '🗑️ 清空已完成';
+  } else if (tab === 'failed') {
+    const n = selectedTransferKeys.failed.size;
+    if (btnRetryAllFailed) btnRetryAllFailed.textContent = n > 0 ? `🔄 重试选中 (${n})` : '🔄 一键重试全部';
+    if (btnClearFailed) btnClearFailed.textContent = n > 0 ? `🗑️ 删除选中 (${n})` : '🗑️ 清空失败记录';
+  }
+}
+
+function toggleTransferItemSelection(tab, keyOrIndex, checked) {
+  const set = getTransferSelectSet(tab);
+  const item = tab === 'downloading' ? String(keyOrIndex) : (tab === 'completed' ? completedDownloads[keyOrIndex] : failedDownloads[keyOrIndex]);
+  if (!item) return;
+  if (checked) set.add(item);
+  else set.delete(item);
+  syncTransferSelectionUI();
+}
+
+function toggleSelectAllTransfers(checked) {
+  const tab = currentTransferSubTab;
+  const set = getTransferSelectSet(tab);
+  const visible = getVisibleTransferItems(tab);
+  if (checked) visible.forEach(v => set.add(v));
+  else visible.forEach(v => set.delete(v));
+  if (tab === 'downloading') { renderDownloadingList(); renderExtractionTransferCards(); }
+  else if (tab === 'completed') renderCompletedList();
+  else if (tab === 'failed') renderFailedList();
+  syncTransferSelectionUI();
+}
 function allocateTransferId() {
   while (activeDownloads.some(t => t.originalIndex === nextTransferId)) nextTransferId++;
   return nextTransferId++;
@@ -3314,7 +3457,9 @@ async function retryFailedDownload(index) {
 
 async function retryAllFailedDownloads() {
   if (!failedDownloads.length || !(await ensureTransferConnection())) return;
-  const queue = [...failedDownloads];
+  const selected = [...selectedTransferKeys.failed].filter(item => failedDownloads.includes(item));
+  const queue = selected.length > 0 ? selected : [...failedDownloads];
+  selectedTransferKeys.failed.clear();
   async function worker() {
     while (queue.length) {
       const item=queue.shift(), index=failedDownloads.indexOf(item);
@@ -3401,10 +3546,13 @@ async function resumeTransferFile(fileId) {
   }
 }
 
-// ---- 全部任务操作(参考成熟下载器:全部暂停/全部恢复/全部取消) ----
+// ---- 全部任务操作(参考成熟下载器:全部暂停/全部恢复/全部取消，支持仅操作勾选项) ----
 async function pauseAllDownloads() {
   let acted = false;
+  const sel = selectedTransferKeys.downloading;
+  const hasSelection = sel.size > 0;
   for (const t of activeDownloads) {
+    if (hasSelection && !sel.has(String(t.originalIndex))) continue;
     if (t.status === 'paused' || t.status === 'completed' || t.status === 'failed') continue;
     try {
       const r = await window.api.pauseDownload(t.originalIndex);
@@ -3415,6 +3563,7 @@ async function pauseAllDownloads() {
     } catch (e) {}
   }
   for (const id of Object.keys(extractionJobs)) {
+    if (hasSelection && !sel.has('ex:' + id)) continue;
     const j = extractionJobs[id];
     if (!j || j.paused) continue;
     try {
@@ -3425,12 +3574,14 @@ async function pauseAllDownloads() {
   renderDownloadingList();
   renderExtractionTransferCards();
   updateTransferCounts();
-  showToast(acted ? '已暂停全部任务' : '没有可暂停的任务', acted ? 'success' : 'info');
+  showToast(acted ? (hasSelection ? '已暂停选中任务' : '已暂停全部任务') : '没有可暂停的任务', acted ? 'success' : 'info');
 }
 
 async function resumeAllDownloads() {
-  const pausedAxel = activeDownloads.filter(d => d.status === 'paused');
-  const pausedEx = Object.keys(extractionJobs).filter((id) => extractionJobs[id] && extractionJobs[id].paused);
+  const sel = selectedTransferKeys.downloading;
+  const hasSelection = sel.size > 0;
+  const pausedAxel = activeDownloads.filter(d => d.status === 'paused' && (!hasSelection || sel.has(String(d.originalIndex))));
+  const pausedEx = Object.keys(extractionJobs).filter((id) => extractionJobs[id] && extractionJobs[id].paused && (!hasSelection || sel.has('ex:' + id)));
   if (!pausedAxel.length && !pausedEx.length) {
     showToast('没有已暂停的任务', 'info');
     return;
@@ -3440,25 +3591,37 @@ async function resumeAllDownloads() {
 }
 
 async function cancelAllDownloads() {
-  const hasAxel = activeDownloads.length > 0;
-  const exIds = Object.keys(extractionJobs);
-  if (!hasAxel && !exIds.length) {
+  const sel = selectedTransferKeys.downloading;
+  const hasSelection = sel.size > 0;
+  const targetAxel = hasSelection ? activeDownloads.filter(d => sel.has(String(d.originalIndex))) : [...activeDownloads];
+  const targetExIds = hasSelection ? Object.keys(extractionJobs).filter(id => sel.has('ex:' + id)) : Object.keys(extractionJobs);
+  if (!targetAxel.length && !targetExIds.length) {
     showToast('没有可取消的任务', 'info');
     return;
   }
-  if (hasAxel) {
-    // 逐个标记取消(覆盖排队/重试间隙的任务),再发全量终止信号
-    activeDownloads.forEach((d) => { try { window.api.cancelDownload(d.originalIndex); } catch (e) {} });
-    try { window.api.cancelAllDownloadsSignal(); } catch (e) {}
+  if (targetAxel.length) {
+    const cancelSet = new Set(targetAxel.map(d => d.originalIndex));
+    targetAxel.forEach((d) => { try { window.api.cancelDownload(d.originalIndex); } catch (e) {} });
+    if (!hasSelection) {
+      try { window.api.cancelAllDownloadsSignal(); } catch (e) {}
+    }
+    // 立即清理本地已暂停/未启动/排队中的任务卡片，确保点击全部取消立刻生效
+    activeDownloads = activeDownloads.filter(d => !cancelSet.has(d.originalIndex));
   }
-  for (const id of exIds) {
+  for (const id of targetExIds) {
     try { await window.api.extractionCancel(id); } catch (e) {}
     delete extractionJobs[id];
+  }
+  sel.clear();
+  const errorBox = document.getElementById('transferBatchError');
+  if (errorBox && activeDownloads.length === 0) {
+    errorBox.hidden = true;
+    errorBox.textContent = '';
   }
   renderDownloadingList();
   renderExtractionTransferCards();
   updateTransferCounts();
-  showToast('已取消全部任务', 'info');
+  showToast(hasSelection ? '已取消选中任务' : '已取消全部任务', 'info');
 }
 
 function syncMaxConcurrentControls(value) {
@@ -4406,6 +4569,7 @@ function renderExtractionTransferCards() {
     el.dataset.ex = '1';
     el.dataset.jobid = id;
     el.innerHTML = `
+      <input type="checkbox" class="tl-select-checkbox" ${typeof selectedTransferKeys !== 'undefined' && selectedTransferKeys.downloading.has('ex:' + id) ? 'checked' : ''} onchange="toggleTransferItemSelection('downloading', 'ex:${escapeJsArg(id)}', this.checked)" title="勾选此任务">
       <div class="tl-icon">${getFileTypeIcon(j.name, j.url)}</div>
       <div class="tl-body">
         <div class="transfer-item-name-row">
@@ -4431,6 +4595,7 @@ function renderExtractionTransferCards() {
       </div>`;
     container.appendChild(el);
   });
+  if (typeof syncTransferSelectionUI === 'function') syncTransferSelectionUI();
 }
 async function pauseExtractionDownload(id) {
   const j = extractionJobs[id];
@@ -4631,6 +4796,8 @@ async function handleSetPluginPath(pluginId, btnEl) {
 window.openDeleteTransferModal = openDeleteTransferModal;
 window.closeDeleteTransferModal = closeDeleteTransferModal;
 window.confirmDeleteTransfer = confirmDeleteTransfer;
+window.toggleTransferItemSelection = toggleTransferItemSelection;
+window.toggleSelectAllTransfers = toggleSelectAllTransfers;
 window.refreshPluginsList = refreshPluginsList;
 window.handleInstallPlugin = handleInstallPlugin;
 window.handleSetPluginPath = handleSetPluginPath;

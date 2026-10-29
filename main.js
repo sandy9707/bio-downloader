@@ -219,7 +219,8 @@ let clashProcess = null;
 let currentRealNodeCount = 0;
 const CLASH_CONTROL_URL = 'http://127.0.0.1:43299';
 const LOCAL_NODE_TEST_URL = 'http://captive.apple.com/hotspot-detect.html';
-const LOCAL_NODE_TEST_TIMEOUT_MS = 5000;
+const LOCAL_NODE_TEST_TIMEOUT_MS = 2500;
+const LOCAL_NODE_MAX_DELAY_MS = 900;
 const LOCAL_NODE_TEST_CONCURRENCY = 8;
 const ACCOUNT_AIRPORTS = { 1: '一分机场', 2: '一分机场', 3: '一元机场', 4: '一元机场', 5: '一元机场', 6: 'iKuuu' };
 let currentAxelProcess = null;
@@ -761,24 +762,30 @@ async function validateLocalClashNodes(configPath, sender) {
   let completed = 0;
   let passedGroups = 0;
   const passedNames = new Set();
+  const aliveDelays = [];
   emitClashValidationProgress(sender, { completed, total: entries.length, passed: 0 });
 
   let cursor = 0;
+  const maxDelayMs = typeof LOCAL_NODE_MAX_DELAY_MS === 'number' ? LOCAL_NODE_MAX_DELAY_MS : 900;
   const workers = Array.from({ length: Math.min(LOCAL_NODE_TEST_CONCURRENCY, entries.length) }, async () => {
     while (cursor < entries.length) {
       const groupNames = entries[cursor++];
       const representative = groupNames[0];
-      let passed = false;
+      let delayMs = 0;
       try {
         const response = await axios.get(`${CLASH_CONTROL_URL}/proxies/${encodeURIComponent(representative)}/delay`, {
           params: { url: LOCAL_NODE_TEST_URL, timeout: LOCAL_NODE_TEST_TIMEOUT_MS },
+          proxy: false,
           timeout: LOCAL_NODE_TEST_TIMEOUT_MS + 2000
         });
-        passed = Number(response.data?.delay) > 0;
+        delayMs = Number(response.data?.delay) || 0;
       } catch (_) {}
-      if (passed) {
-        passedGroups++;
-        groupNames.forEach(name => passedNames.add(name));
+      if (delayMs > 0) {
+        aliveDelays.push({ delayMs, groupNames });
+        if (delayMs <= maxDelayMs) {
+          passedGroups++;
+          groupNames.forEach(name => passedNames.add(name));
+        }
       }
       completed++;
       emitClashValidationProgress(sender, { completed, total: entries.length, passed: passedNames.size });
@@ -786,10 +793,22 @@ async function validateLocalClashNodes(configPath, sender) {
   });
   await Promise.all(workers);
 
+  if (!passedNames.size && aliveDelays.length) {
+    aliveDelays.sort((a, b) => a.delayMs - b.delayMs);
+    for (const item of aliveDelays.slice(0, 6)) {
+      passedGroups++;
+      item.groupNames.forEach(name => passedNames.add(name));
+    }
+  }
   if (!passedNames.size) throw new Error('当前网络未找到可用高速节点，请检查网络后重试');
   downloadPool.proxies = candidateNames.filter(name => passedNames.has(name));
-  // Only narrow the download pool. Other groups may otherwise become empty,
-  // which Mihomo rejects with HTTP 400 during config reload.
+  // Remove dead/unverified candidate nodes from other groups unless doing so
+  // would empty that group (which Mihomo rejects with HTTP 400).
+  groups.forEach(group => {
+    if (!Array.isArray(group?.proxies) || group === downloadPool) return;
+    const filtered = group.proxies.filter(name => !candidateNames.includes(name) || passedNames.has(name));
+    if (filtered.length > 0) group.proxies = filtered;
+  });
   fs.writeFileSync(configPath, yaml.dump(config, { lineWidth: -1, noRefs: true }), 'utf8');
   try {
     await reloadClashConfig(configPath);

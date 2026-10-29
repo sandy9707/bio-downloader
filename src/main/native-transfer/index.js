@@ -10,7 +10,7 @@ const lockfile = require('proper-lockfile');
 const { errorDetails } = require('../download-diagnostics');
 const { Journal, TransferError, digest, writeAll, fingerprint, syncDirectory } = require('./journal');
 const { setTimeout: delay } = require('timers/promises');
-const transientCodes = new Set(['ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE']);
+const transientCodes = new Set(['ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE', 'EPROTO', 'ERR_STREAM_PREMATURE_CLOSE']);
 const exists = async name => { try { await fs.lstat(name); return true; } catch (e) { if (e.code === 'ENOENT') return false; throw e; } };
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 function integer(value, min, max, name) {

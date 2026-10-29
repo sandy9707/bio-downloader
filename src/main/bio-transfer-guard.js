@@ -129,7 +129,7 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
   let saveChain = Promise.resolve(), sampledBytes = 0, networkSampleBytes = 0;
   let interruptedResponses = 0;
   const segmentFailures = new Map();
-  const retryable = error => error.retryable || ['ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE'].includes(error.code);
+  const retryable = error => error.retryable || ['ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE', 'EPROTO', 'ERR_STREAM_PREMATURE_CLOSE'].includes(error.code);
   let state = { version: 1, engine, sourceKey, completed: false, samples: {} };
   let size, identity, windows, checkpointStamp = null;
   const receipts = new Map();

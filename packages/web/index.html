@@ -948,16 +948,47 @@
     .transfer-toolbar-right {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
-      flex-wrap: wrap;
+      gap: 0.45rem;
+      flex-wrap: nowrap;
       justify-content: flex-end;
+      overflow-x: auto;
+    }
+
+    .transfer-toolbar-right .btn {
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+
+    .transfer-select-all-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.82rem;
+      color: var(--text-color);
+      cursor: pointer;
+      padding: 0.3rem 0.55rem;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      background: var(--surface-subtle);
+      user-select: none;
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+
+    .transfer-select-all-label input,
+    .tl-select-checkbox {
+      width: 15px;
+      height: 15px;
+      accent-color: var(--primary-color, #6366f1);
+      cursor: pointer;
+      flex: 0 0 auto;
     }
 
     .transfer-search {
       height: 34px;
-      min-width: 160px;
-      max-width: 220px;
-      padding: 0 0.75rem;
+      min-width: 135px;
+      max-width: 185px;
+      padding: 0 0.7rem;
       border-radius: 8px;
       border: 1px solid var(--border-color);
       background: var(--bg-input, var(--surface-subtle));
@@ -1468,17 +1499,21 @@
             <button class="sub-tab-btn" id="tabBtnFailed" onclick="switchTransferSubTab('failed')">下载失败 (<span id="failedCount">0</span>)</button>
           </div>
           <div class="transfer-actions transfer-toolbar-right">
+            <label class="transfer-select-all-label" id="transferSelectAllWrap" style="display: none;" title="全选/取消全选当前列表">
+              <input type="checkbox" id="transferSelectAllCheckbox" onchange="toggleSelectAllTransfers(this.checked)">
+              <span id="transferSelectAllText">全选</span>
+            </label>
             <input type="text" class="transfer-search" id="transferSearchInput" placeholder="🔍 搜索任务名称…" oninput="onTransferSearch(event)">
-            <button class="btn btn-secondary" id="btnPauseAll" onclick="pauseAllDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">⏸ 全部暂停</button>
-            <button class="btn btn-secondary" id="btnResumeAll" onclick="resumeAllDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">▶ 全部恢复</button>
-            <button class="btn btn-secondary" id="btnCancelAll" onclick="cancelAllDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">✕ 全部取消</button>
-            <button class="btn btn-secondary" onclick="openDownloadsDirectory()" style="font-size: 0.85rem; padding: 0.45rem 1rem;">📂 打开下载目录</button>
-            <button class="btn btn-primary" id="btnRetryAllFailed" onclick="retryAllFailedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🔄 一键重试全部</button>
-            <button class="btn btn-secondary" id="btnVerifyCompleted" onclick="verifyAllCompletedMd5()" style="display:none;">校验未核验文件 MD5</button>
-            <button class="btn btn-primary" id="btnRedownloadMismatched" onclick="redownloadAllMismatched()" style="display:none;">一键重下 MD5 不一致文件</button>
-            <button class="btn btn-secondary" id="btnStopMd5" onclick="stopCompletedMd5()" style="display:none;">停止校验</button>
-            <button class="btn btn-danger" id="btnClearCompleted" onclick="clearCompletedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空已完成</button>
-            <button class="btn btn-danger" id="btnClearFailed" onclick="clearFailedDownloads()" style="display: none; font-size: 0.85rem; padding: 0.45rem 1rem;">🗑️ 清空失败记录</button>
+            <button class="btn btn-secondary" id="btnPauseAll" onclick="pauseAllDownloads()" style="display: none; font-size: 0.82rem; padding: 0.4rem 0.8rem;">⏸ 全部暂停</button>
+            <button class="btn btn-secondary" id="btnResumeAll" onclick="resumeAllDownloads()" style="display: none; font-size: 0.82rem; padding: 0.4rem 0.8rem;">▶ 全部恢复</button>
+            <button class="btn btn-secondary" id="btnCancelAll" onclick="cancelAllDownloads()" style="display: none; font-size: 0.82rem; padding: 0.4rem 0.8rem;">✕ 全部取消</button>
+            <button class="btn btn-secondary" onclick="openDownloadsDirectory()" style="font-size: 0.82rem; padding: 0.4rem 0.8rem;">📂 打开下载目录</button>
+            <button class="btn btn-primary" id="btnRetryAllFailed" onclick="retryAllFailedDownloads()" style="display: none; font-size: 0.82rem; padding: 0.4rem 0.8rem;">🔄 一键重试全部</button>
+            <button class="btn btn-secondary" id="btnVerifyCompleted" onclick="verifyAllCompletedMd5()" style="display:none; font-size: 0.82rem; padding: 0.4rem 0.8rem;">校验未核验文件 MD5</button>
+            <button class="btn btn-primary" id="btnRedownloadMismatched" onclick="redownloadAllMismatched()" style="display:none; font-size: 0.82rem; padding: 0.4rem 0.8rem;">一键重下 MD5 不一致文件</button>
+            <button class="btn btn-secondary" id="btnStopMd5" onclick="stopCompletedMd5()" style="display:none; font-size: 0.82rem; padding: 0.4rem 0.8rem;">停止校验</button>
+            <button class="btn btn-danger" id="btnClearCompleted" onclick="clearCompletedDownloads()" style="display: none; font-size: 0.82rem; padding: 0.4rem 0.8rem;">🗑️ 清空已完成</button>
+            <button class="btn btn-danger" id="btnClearFailed" onclick="clearFailedDownloads()" style="display: none; font-size: 0.82rem; padding: 0.4rem 0.8rem;">🗑️ 清空失败记录</button>
           </div>
         </div>
 
