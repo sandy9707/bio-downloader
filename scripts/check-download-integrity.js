@@ -174,6 +174,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   // Default fast mode must not read/hash the full file or wait on MD5 metadata.
   await engine.callIpcHandler('save-settings', { deepIntegrityCheck: false });
+  await check('known-md5-switch-off.fastq.gz', { status: 'completed', verification: 'quick-checked', charged: 1 });
   const originalStream = fs.createReadStream;
   let fullReads = 0;
   fs.createReadStream = (...args) => { fullReads++; return originalStream(...args); };

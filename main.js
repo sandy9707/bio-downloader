@@ -227,7 +227,7 @@ const LOCAL_NODE_TEST_TIMEOUT_MS = 20000;
 const LOCAL_NODE_TIER1_MBPS = 6.0;
 const LOCAL_NODE_TIER2_MBPS = 2.0;
 const LOCAL_NODE_MIN_POOL_SIZE = 6;
-const LOCAL_NODE_TEST_CONCURRENCY = 2;
+const LOCAL_NODE_TEST_CONCURRENCY = 5;
 const LOCAL_NODE_BENCH_BASE_PORT = 43310;
 const ACCOUNT_AIRPORTS = { 1: '一分机场', 2: '一分机场', 3: '一元机场', 4: '一元机场', 5: '一元机场', 6: 'iKuuu' };
 let currentAxelProcess = null;
@@ -842,43 +842,13 @@ async function validateLocalClashNodes(configPath, sender) {
   const testUrl = typeof LOCAL_NODE_SPEED_TEST_URL === 'string' ? LOCAL_NODE_SPEED_TEST_URL : 'https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR390728/SRR390728';
   const sampleBytes = typeof LOCAL_NODE_SPEED_SAMPLE_BYTES === 'number' ? LOCAL_NODE_SPEED_SAMPLE_BYTES : 1024 * 1024;
   const basePort = typeof LOCAL_NODE_BENCH_BASE_PORT === 'number' ? LOCAL_NODE_BENCH_BASE_PORT : 43310;
-  const prefilterTimeout = typeof LOCAL_NODE_PREFILTER_TIMEOUT_MS === 'number' ? LOCAL_NODE_PREFILTER_TIMEOUT_MS : 2500;
 
   let completed = 0;
   let fastCountSoFar = 0;
   const measuredGroups = [];
   emitClashValidationProgress(sender, { completed, total: entries.length, passed: 0 });
 
-  // 阶段 A（2.5 秒快筛 TCP 死节点）：并行探活各机场物理代表节点，淘汰完全连不上代理服务器的离线节点；
-  // 凡有响应的节点进入阶段 B 真实 HTTPS 生信吞吐测速（测速才是决定淘汰伪装 EPROTO 节点与分级的唯一标准）
-  const reachableEntries = [];
-  let preCursor = 0;
-  const preWorkers = Array.from({ length: Math.min(12, entries.length) }, async () => {
-    while (preCursor < entries.length) {
-      const groupNames = entries[preCursor++];
-      const representative = groupNames[0];
-      let reachable = false;
-      try {
-        const res = await axios.get(`${CLASH_CONTROL_URL}/proxies/${encodeURIComponent(representative)}/delay`, {
-          params: { url: 'http://captive.apple.com/hotspot-detect.html', timeout: prefilterTimeout },
-          proxy: false,
-          timeout: prefilterTimeout + 1000
-        });
-        reachable = Number(res.data?.delay) > 0;
-      } catch (_) {}
-      if (reachable) {
-        reachableEntries.push(groupNames);
-      } else {
-        completed++;
-        emitClashValidationProgress(sender, { completed, total: entries.length, passed: fastCountSoFar });
-      }
-    }
-  });
-  await Promise.all(preWorkers);
-
-  // 若本地防火墙拦截了快筛 URL 导致 0 个响应，则全部进入阶段 B 真实 HTTPS 测速
-  // HTTP reachability is not evidence of HTTPS throughput. Probe all candidates;
-  // the lightweight preflight must never exclude a working download route.
+  // Every physical candidate receives a real HTTPS sample; no HTTP-only gate.
   const benchTargets = entries;
   completed = 0;
 
@@ -919,7 +889,7 @@ async function validateLocalClashNodes(configPath, sender) {
           proxy: false,
           timeout: 3000
         });
-        mbps = await measureProxyThroughputMbps(proxyPort, testUrl, sampleBytes, LOCAL_NODE_TEST_TIMEOUT_MS);
+        mbps = await measureProxyThroughputMbps(proxyPort, testUrl, Math.min(sampleBytes, 4 * 1024 * 1024), 6000);
       } catch (_) {}
       if (mbps > 0) {
         measuredGroups.push({ mbps, groupNames, representative });
@@ -930,6 +900,24 @@ async function validateLocalClashNodes(configPath, sender) {
     }
   });
   await Promise.all(workers);
+
+  // Refine up to five leaders/near-threshold routes without repeating every slow
+  // candidate. Two lower-contention workers, conservative mean across both rounds.
+  measuredGroups.sort((a, b) => b.mbps - a.mbps);
+  const finalists = measuredGroups.slice(0, 5);
+  let finalCursor = 0;
+  await Promise.all(Array.from({ length: Math.min(2, workerCount, finalists.length) }, async (_, w) => {
+    while (finalCursor < finalists.length) {
+      const item = finalists[finalCursor++];
+      await axios.put(`${CLASH_CONTROL_URL}/proxies/${encodeURIComponent(`__BIODL_BENCH_${w}`)}`, { name: item.representative }, { proxy: false, timeout: 3000 });
+      const speed = await measureProxyThroughputMbps(benchPorts[w], testUrl, sampleBytes, 12000);
+      item.firstMbps = item.mbps;
+      item.mbps = Number(((item.mbps + speed) / 2).toFixed(2));
+      item.refined = true;
+      if (!speed) item.mbps = 0;
+    }
+  }));
+  for (let i = measuredGroups.length - 1; i >= 0; i--) if (!measuredGroups[i].mbps) measuredGroups.splice(i, 1);
 
   // 按真实 HTTPS 下载速度从高到低排序（EPROTO / 断流 / 死节点 mbps=0 已被天然淘汰）
   measuredGroups.sort((a, b) => b.mbps - a.mbps);
@@ -966,7 +954,56 @@ async function validateLocalClashNodes(configPath, sender) {
   }
 
   // 基于干净的原始配置回写筛选结果（自动清除所有临时 __BIODL_BENCH 监听端口与组）
-  downloadPool.proxies = candidateNames.filter(name => passedNames.has(name));
+  // Ordered, throughput-ranked failover: all connections prefer the fastest
+  // physical route. Slower candidates remain backups, never equal round-robin peers.
+  downloadPool.type = 'fallback';
+  delete downloadPool.strategy;
+  downloadPool.proxies = selectedGroups.flatMap(item => item.groupNames);
+  downloadPool.url = testUrl;
+  downloadPool['expected-status'] = '200/299';
+  downloadPool.interval = 60;
+  downloadPool.lazy = true;
+  // A fast LAN can benefit from independent upstream quotas; a slower LAN can
+  // suffer from equal round-robin. Compare locally rather than assuming either.
+  const comparable = selectedGroups.filter(item => item.mbps >= selectedGroups[0].mbps * 0.65).slice(0, 3);
+  if (comparable.length > 1) {
+    const trial = yaml.load(originalYaml);
+    trial['proxy-groups'] = trial['proxy-groups'].concat([
+      { name: '__BIODL_SINGLE', type: 'select', proxies: [selectedGroups[0].representative] },
+      { name: '__BIODL_COMBINED', type: 'load-balance', strategy: 'round-robin', proxies: comparable.map(item => item.representative), url: 'https://www.gstatic.com/generate_204', interval: 60, lazy: true },
+      { name: '__BIODL_COMPARE', type: 'select', proxies: ['__BIODL_SINGLE', '__BIODL_COMBINED'] }
+    ]);
+    trial.listeners = [...(trial.listeners || []), { name: '__biodl_compare', type: 'mixed', listen: '127.0.0.1', port: benchPorts[0], proxy: '__BIODL_COMPARE' }];
+    fs.writeFileSync(configPath, yaml.dump(trial, { lineWidth: -1, noRefs: true }));
+    try {
+      await reloadClashConfig(configPath);
+      const aggregate = async name => {
+        await axios.put(`${CLASH_CONTROL_URL}/proxies/__BIODL_COMPARE`, { name }, { proxy: false, timeout: 3000 });
+        const started = Date.now();
+        const counts = await Promise.all(Array.from({ length: 4 }, async (_, i) => {
+          try {
+            const begin = i * 4194304;
+            const response = await axios({ url: testUrl, responseType: 'arraybuffer',
+              proxy: { protocol: 'http', host: '127.0.0.1', port: benchPorts[0] }, timeout: 6000,
+              maxContentLength: 4194304, headers: { Range: `bytes=${begin}-${begin + 4194303}`, 'Accept-Encoding': 'identity' } });
+            if (response.status !== 206 || !String(response.headers['content-range']).startsWith(`bytes ${begin}-${begin + 4194303}/`)) return 0;
+            return response.data.length === 4194304 ? response.data.length : 0;
+          } catch (_) { return 0; }
+        }));
+        return counts.every(count => count > 0) ? counts.reduce((sum, count) => sum + count, 0) * 8 / 1e6 / Math.max(0.001, (Date.now() - started) / 1000) : 0;
+      };
+      const single = await aggregate('__BIODL_SINGLE');
+      const combined = await aggregate('__BIODL_COMBINED');
+      const combinedAgain = combined > single * 1.2 ? await aggregate('__BIODL_COMBINED') : 0;
+      const singleAgain = combinedAgain ? await aggregate('__BIODL_SINGLE') : single;
+      if (single > 0 && singleAgain > 0 && Math.min(combined, combinedAgain) > Math.max(single, singleAgain) * 1.2) {
+        const combinedName = 'BioDownloader 吞吐增益线路';
+        groups.push({ name: combinedName, type: 'load-balance', strategy: 'round-robin', proxies: comparable.map(item => item.representative), url: 'https://www.gstatic.com/generate_204', interval: 60, lazy: true });
+        downloadPool.proxies = [combinedName, ...downloadPool.proxies];
+        writeClashLog(`[route-mode] measured-aggregate single=${single}/${singleAgain} combined=${combined}/${combinedAgain}`);
+      } else writeClashLog(`[route-mode] fastest-first single=${single}/${singleAgain} combined=${combined}/${combinedAgain}`);
+    } catch (error) { writeClashLog('[route-mode] comparison unavailable; fastest-first: ' + error.message); }
+  }
   groups.forEach(group => {
     if (!Array.isArray(group?.proxies) || group === downloadPool) return;
     const filtered = group.proxies.filter(name => !candidateNames.includes(name) || passedNames.has(name));
@@ -1751,7 +1788,6 @@ const hotUpdater = require('./src/main/hot-update');
 async function applyHotPatch(patchUrl, onProgress = () => {}) {
   if (!isElectron || !app.isPackaged) throw new Error('请在已安装的桌面客户端中更新');
   if (process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_FILE) throw new Error('便携版请使用完整安装包更新');
-  if (activeAxelProcesses.size || activeNativeTransfers.size || activeIntegrityChecks.size) throw new Error('请先结束当前下载和校验任务，再更新程序');
   if (!patchUrl) {
     throw new Error('未提供有效热更新补丁地址');
   }
@@ -1802,6 +1838,10 @@ async function applyHotPatch(patchUrl, onProgress = () => {}) {
   // Prepare and verify a separate updater before asking the app to quit.
   const prepared = hotUpdater.prepare({ patch: tempPatchPath, manifest,
     resources: process.resourcesPath, userData: app.getPath('userData'), executable: process.execPath });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    await mainWindow.webContents.executeJavaScript('prepareTransfersForUpdate()');
+  }
+  await Promise.all([...activeNativeTransfers.values()].map(task => task.pause()));
   await hotUpdater.launchHelper(prepared);
   try { originalFs.unlinkSync(tempPatchPath); } catch (e) {}
   return { success: true, restartPending: true, message: '补丁已验证，程序退出后将安装并重新启动。' };
@@ -2515,7 +2555,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       } catch (_) { /* Diagnostics must not change the download result. */ }
     };
     let verification = null, releaseFile = null, backupPath = file.backupPath || null;
-    let engineForFile, axelBin, deepForFile = deepIntegrityCheck || Boolean(file.redownloadMismatch || file.backupPath) || /^[a-f0-9]{32}$/i.test(file.md5 || '');
+    let engineForFile, axelBin, deepForFile = deepIntegrityCheck || Boolean(file.redownloadMismatch || file.backupPath);
     try {
     releaseFile = downloadFiles.claimFile(savePath);
     const knownMismatch = await downloadFiles.priorMismatch(savePath, file.url);

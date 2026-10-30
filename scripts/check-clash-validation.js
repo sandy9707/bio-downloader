@@ -110,11 +110,13 @@ vm.runInContext(source.slice(source.indexOf('function getLocalNodePhysicalKey(')
     assert.equal(await context.validateLocalClashNodes(file), 6);
     assert.equal(context.currentNodeTier, 1);
     // 6 个物理组各测 1 次（EPROTO 明确协议故障不重测，同机场多账号绝不重复测） = 6 次
-    assert.equal(speedProbes.length, 6, 'same-airport aliases must be speed-tested once and EPROTO fails fast');
+    assert.equal(speedProbes.length, 11, 'six physical samples plus five refinements; aliases never separately sampled');
     let filtered = yaml.load(fs.readFileSync(file, 'utf8'));
     assert.equal(filtered.listeners, undefined, 'temporary bench listeners must be cleaned from final config');
     assert.equal(filtered['proxy-groups'].some(g => g.name.startsWith('__BIODL_BENCH_')), false);
     assert.deepEqual(filtered['proxy-groups'][0].proxies, [n1a, n1b, n2a, n2b, n3a, n3b]);
+    assert.equal(filtered['proxy-groups'][0].type, 'fallback');
+    assert.equal(filtered['proxy-groups'][0].strategy, undefined);
     assert.deepEqual(filtered['proxy-groups'][1].proxies, [n1a]);
     assert.deepEqual(filtered['proxy-groups'][2].proxies, [eprotoBad], 'preserve group if filtering would make it empty');
 

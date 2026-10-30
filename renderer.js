@@ -3580,6 +3580,22 @@ async function resumeTransferFile(fileId) {
 }
 
 // ---- 全部任务操作(参考成熟下载器:全部暂停/全部恢复/全部取消，支持仅操作勾选项) ----
+async function prepareTransfersForUpdate() {
+  const selected = new Set(selectedTransferKeys.downloading);
+  selectedTransferKeys.downloading.clear();
+  try {
+    await pauseAllDownloads();
+    if (activeDownloads.some(item => !['paused', 'completed', 'failed'].includes(item.status))) {
+      throw new Error('部分任务尚未安全暂停，请稍后重试更新');
+    }
+    syncTransfersToStorage();
+    const saved = window.api.flushTransfersHistory(transferSnapshot());
+    if (saved && typeof saved.then === 'function') await saved;
+  } finally {
+    selected.forEach(id => selectedTransferKeys.downloading.add(id));
+  }
+}
+
 async function pauseAllDownloads() {
   let acted = false;
   const sel = selectedTransferKeys.downloading;
