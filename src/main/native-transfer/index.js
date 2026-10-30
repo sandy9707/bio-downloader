@@ -32,7 +32,7 @@ class NativeTransfer {
     integer(this.options.lockStaleMs, 2000, 60000, '锁超时');
     this.url = u.href; this.destination = path.resolve(options.filename);
     this.sourceKey = digest(this.url); this.completed = new Map(); this.anchors = new Map(); this.active = new Map(); this.controllers = new Set();
-    this.stop = new AbortController(); this.running = false; this.limit = this.options.connections;
+    this.stop = new AbortController(); this.running = false; this.limit = Math.min(4, this.options.connections);
     this.confirmedBytes = 0; this.networkBytes = 0; this.lastNetworkBytes = 0; this.lastTick = Date.now(); this.goodBlocks = 0;
     this.httpAgent = new http.Agent({ keepAlive: true, maxSockets: this.options.connections });
     this.httpsAgent = new https.Agent({ keepAlive: true, maxSockets: this.options.connections });
@@ -179,7 +179,7 @@ class NativeTransfer {
         this.check(); await writeAll(this.data, bytes, start); await this.data.sync();
         await this.journal.append({ type: 'piece', index, hash, ...anchors });
         this.completed.set(index, hash); this.confirmedBytes += bytes.length;
-        if (++this.goodBlocks >= 8 && this.limit < this.options.connections) { this.limit++; this.goodBlocks = 0; }
+        if (++this.goodBlocks >= 2 && this.limit < this.options.connections) { this.limit = Math.min(this.options.connections, this.limit + 4); this.goodBlocks = 0; }
         this.event('piece', { index, committedBytes: this.confirmedBytes });
       } finally { this.active.delete(index); }
     }, index);
