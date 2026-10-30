@@ -140,7 +140,9 @@ class NativeTransfer {
     const last = this.publishedFile ? records.filter(record => record.type === 'published').at(-1) : records[records.length - 1];
     const clean = ['seal', 'published'].includes(last?.type) && same(last.file, fingerprint(stat));
     let verified = 0;
-    if (!clean) {
+    // Metadata fingerprints are not content checks: a damaged block can retain
+    // the same length and mtime. Always verify journaled bytes before reuse.
+    {
       this.event('state', { phase: 'checking-local', blocks: this.completed.size });
       for (const [index, hash] of this.completed) {
         this.check();
@@ -156,7 +158,7 @@ class NativeTransfer {
       }
     }
     this.confirmedBytes = [...this.completed.keys()].reduce((n, i) => n + this.blockLength(i), 0);
-    this.event('resume', { committedBytes: this.confirmedBytes, fast: clean, verifiedBytes: verified });
+    this.event('resume', { committedBytes: this.confirmedBytes, fast: false, verifiedBytes: verified });
   }
   checkBoundary(index, anchors) {
     const previous = this.anchors.get(index - 1), next = this.anchors.get(index + 1);

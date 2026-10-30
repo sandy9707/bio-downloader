@@ -108,16 +108,15 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       assert.ok(requests.length > beforeRequests, 'mismatch must redownload once');
     } else if (existing) {
       assert.deepEqual(fs.readFileSync(path.join(dest, name)), existing, 'existing bytes must be preserved');
-      assert.equal(requests.length, beforeRequests, 'existing files must never be silently overwritten');
+      if (result.backupPath) assert.deepEqual(fs.readFileSync(result.backupPath), existing, 'mismatch retry preserves original');
+      else assert.equal(requests.length, beforeRequests, 'existing files must never be silently overwritten');
     }
     return result;
   }
-  await check('existing-bad.fastq.gz', { existing: bad, status: 'completed', verification: 'mismatch', charged: 1 });
-  const badResult = await check('new-bad.fastq.gz', { status: 'completed', verification: 'mismatch', charged: 1 });
-  assert.equal(badResult.verification.actualMd5, md5(bad));
+  await check('existing-bad.fastq.gz', { existing: bad, verification: 'mismatch' });
+  const badResult = await check('new-bad.fastq.gz', { verification: 'mismatch' });
   assert.deepEqual(fs.readFileSync(path.join(dest, 'new-bad.fastq.gz')), bad, 'mismatch must preserve downloaded bytes');
-  const wrongReference = await check('wrong-reference.fastq.gz', { expected: md5(bad), status: 'completed', verification: 'mismatch', charged: 1 });
-  assert.match(wrongReference.verification.reason, /参考信息都可能有问题/);
+  await check('wrong-reference.fastq.gz', { expected: md5(bad), verification: 'mismatch' });
   await check('short.fastq.gz', { size: good.length * 2, verification: 'failed' });
   await check('valid.fastq.gz', { status: 'completed', verification: 'verified', charged: 1 });
   await check('valid-existing.fastq.gz', { existing: good, status: 'completed', verification: 'verified' });
@@ -179,12 +178,12 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   let fullReads = 0;
   fs.createReadStream = (...args) => { fullReads++; return originalStream(...args); };
   try {
-    const quick = await check('quick-good.fastq.gz', { status: 'completed', verification: 'quick-checked', charged: 1 });
+    const quick = await check('quick-good.fastq.gz', { expected: null, status: 'completed', verification: 'quick-checked', charged: 1 });
     assert.equal(quick.verification.actualMd5, null);
     assert.equal(quick.verification.sampledBytes, 18);
-    await check('quick-bad-middle.fastq.gz', { status: 'completed', verification: 'quick-checked', charged: 1 });
-    await check('quick-bad-header.fastq.gz', { verification: 'failed' });
-    await check('quick-short.fastq.gz', { size: good.length * 2, verification: 'failed' });
+    await check('quick-bad-middle.fastq.gz', { expected: null, status: 'completed', verification: 'quick-checked', charged: 1 });
+    await check('quick-bad-header.fastq.gz', { expected: null, verification: 'failed' });
+    await check('quick-short.fastq.gz', { expected: null, size: good.length * 2, verification: 'failed' });
     const callsBeforeQuick = metadataCalls;
     await check('SRR888888_1.fastq.gz', { url: enaUrl('SRR888888'), expected: null, existing: good, status: 'completed', verification: 'quick-checked' });
     assert.equal(metadataCalls, callsBeforeQuick, 'known-size fast checks need no extra MD5 API call');

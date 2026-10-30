@@ -108,7 +108,19 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  slowTransfer=false;
  for(let i=0;i<200;i++){await new Promise(r=>setTimeout(r,100));if(await win.webContents.executeJavaScript(`!isDownloading`))break;}
  assert.equal(await win.webContents.executeJavaScript(`completedDownloads.some(f=>f.name==='slow-progress.bin')`),true);
- assert.deepEqual(fs.readFileSync(path.join(dir,'下载 files',slowFile.name)),slowBytes);
+  assert.deepEqual(fs.readFileSync(path.join(dir,'下载 files',slowFile.name)),slowBytes);
+  const controls = await win.webContents.executeJavaScript(`(async()=>{
+    completedDownloads=Array.from({length:121},(_,i)=>({name:'page-'+i,size:10}));
+    switchTransferSubTab('completed');renderCompletedList();updateTransferPaginationUI(121);
+    changeTransferPage(2);updateTransferPaginationUI(121);updateTransferPaginationUI(121);
+    const top=document.getElementById('transferPaginationTop'),bottom=document.getElementById('transferPagination');
+    const result={top:top.style.display,bottom:bottom.style.display,page:getTransferCurrentPage('completed'),jumps:document.querySelectorAll('[aria-label="跳转页码"]').length};
+    activeDownloads=[{originalIndex:9999,name:'stalled',status:'downloading',speed:'20 MB/s',lastSpeedUpdateAt:Date.now()-5000}];
+    renderDownloadingList();await new Promise(r=>setTimeout(r,1200));result.staleSpeed=activeDownloads[0].speed;
+    return result;
+  })()`);
+  assert.deepEqual(controls,{top:'flex',bottom:'flex',page:2,jumps:2,staleSpeed:'0 B/s'});
+  console.log('ELECTRON_PAGINATION_STALL_OK',JSON.stringify(controls));
  console.log('ELECTRON_PROGRESS_OK',JSON.stringify(displayed));
  console.log('ELECTRON_SMOKE',JSON.stringify({mode,state,errors,charges}));
 })().catch(e=>{console.error('ELECTRON_SMOKE_ERROR',e.message);process.exitCode=1}).finally(()=>{clearTimeout(timeout);server.closeAllConnections();server.close();app.exit(process.exitCode||0)});

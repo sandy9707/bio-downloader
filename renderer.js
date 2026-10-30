@@ -2502,6 +2502,8 @@ function updateTransferPaginationUI(totalItems) {
 
   if (totalItems <= TRANSFER_PAGE_SIZE) {
     paginationEl.style.display = 'none';
+    const top = document.getElementById('transferPaginationTop');
+    if (top) top.style.display = 'none';
     return;
   }
   paginationEl.style.display = 'flex';
@@ -2522,6 +2524,28 @@ function updateTransferPaginationUI(totalItems) {
   if (btnPrev) btnPrev.disabled = (currentPage <= 1);
   if (btnNext) btnNext.disabled = (currentPage >= totalPages);
   if (btnLast) btnLast.disabled = (currentPage >= totalPages);
+  // Mirror controls without duplicating element IDs. Both bars share page state.
+  let top = document.getElementById('transferPaginationTop');
+  if (!top) {
+    top = document.createElement('div');
+    top.id = 'transferPaginationTop';
+    top.className = 'transfer-pagination';
+    const list = document.getElementById('transferDownloadingList');
+    if (list) list.before(top);
+  }
+  const existingJump = paginationEl.querySelector('[data-page-jump]');
+  if (existingJump) existingJump.remove();
+  const markup = paginationEl.innerHTML.replace(/\s+id="[^"]+"/g, '');
+  const jump = `<label>跳至 <input type="number" min="1" max="${totalPages}" value="${currentPage}" aria-label="跳转页码" style="width:5rem" onchange="changeTransferPage(Number(this.value))"> 页</label>`;
+  top.innerHTML = markup + jump;
+  top.style.display = 'flex';
+  let bottomJump = paginationEl.querySelector('[data-page-jump]');
+  if (!bottomJump) {
+    bottomJump = document.createElement('span');
+    bottomJump.dataset.pageJump = 'true';
+    paginationEl.appendChild(bottomJump);
+  }
+  bottomJump.innerHTML = jump;
 }
 
 function changeTransferPage(action) {
@@ -3964,7 +3988,8 @@ window.api.onDownloadProgress((data) => {
     const view = transferProgressView(activeItem);
     activeItem.percentage = view.percentage;
     const statusEl = document.getElementById(`trans-status-${index}`);
-    if (statusEl && activeItem.status !== 'paused') statusEl.innerText = '正在高速下载';
+    if (statusEl && activeItem.status !== 'paused') statusEl.innerText = data.engine === 'native' && data.connections != null
+      ? `下载中 · 当前并发上限 ${data.connections} / ${data.connectionLimit || 16}` : '正在高速下载';
     const fill = document.getElementById(`trans-progress-fill-${index}`);
     const sizeEl = document.getElementById(`trans-size-${index}`);
     const pctEl = document.getElementById(`trans-pct-${index}`);
@@ -3976,6 +4001,7 @@ window.api.onDownloadProgress((data) => {
     }
     if (speed !== null && speed !== undefined) {
       activeItem.speed = speed;
+      activeItem.lastSpeedUpdateAt = Date.now();
       const speedEl = document.getElementById(`trans-speed-${index}`);
       if (speedEl) speedEl.innerText = speed;
     }
@@ -3989,6 +4015,23 @@ window.api.onDownloadProgress((data) => {
     scheduleTransferSave();
   }
 });
+
+// External engines may go silent while reconnecting. Never leave their last
+// non-zero speed painted indefinitely when no new progress has arrived.
+if (typeof setInterval === 'function') setInterval(() => {
+  let changed = false;
+  for (const item of activeDownloads) {
+    if (item.lastSpeedUpdateAt && Date.now() - item.lastSpeedUpdateAt > 3000 && parseSpeedToBytes(item.speed) > 0) {
+      item.speed = '0 B/s';
+      const speed = document.getElementById(`trans-speed-${item.originalIndex}`);
+      const eta = document.getElementById(`trans-eta-${item.originalIndex}`);
+      if (speed) speed.innerText = '0 B/s';
+      if (eta) eta.innerText = '';
+      changed = true;
+    }
+  }
+  if (changed) updateGlobalTotalSpeed();
+}, 1000);
 
 // 绑定到 window 暴露给 HTML 属性
 window.toggleMoreMenu = toggleMoreMenu;

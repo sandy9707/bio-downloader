@@ -257,12 +257,14 @@
 
       let receivedBytes = 0;
       let maxBytes = 50 * 1024 * 1024;
+      const requestId = 'network-' + Date.now() + '-' + Math.random();
 
       if (window.api.onSpeedtestProgress) {
         window.api.onSpeedtestProgress((data) => {
+          if (data.requestId && data.requestId !== requestId) return;
           if (data.bytesReceived != null) receivedBytes = data.bytesReceived;
           if (data.totalBytes != null && data.totalBytes > 0) maxBytes = data.totalBytes;
-          if (data.bytesPerSecond) {
+          if (data.bytesPerSecond != null) {
             speedEl.innerText = formatSpeed(data.bytesPerSecond);
             if (maxBytes > 0) {
               progressEl.style.width = Math.min(100, (receivedBytes / maxBytes) * 100) + '%';
@@ -274,6 +276,7 @@
       try {
         const result = await window.api.speedtestNetwork({
           url: NETWORK_TEST_URL,
+          requestId,
           timeoutMs: NETWORK_TEST_TIMEOUT_MS
         });
 
@@ -317,12 +320,14 @@
 
       let receivedBytes = 0;
       let maxBytes = 100 * 1024 * 1024;
+      const requestId = 'downloader-' + Date.now() + '-' + Math.random();
 
       if (window.api.onSpeedtestProgress) {
         window.api.onSpeedtestProgress((data) => {
+          if (data.requestId && data.requestId !== requestId) return;
           if (data.bytesReceived != null) receivedBytes = data.bytesReceived;
           if (data.totalBytes != null && data.totalBytes > 0) maxBytes = data.totalBytes;
-          if (data.bytesPerSecond) {
+          if (data.bytesPerSecond != null) {
             speedEl.innerText = formatSpeed(data.bytesPerSecond);
             if (maxBytes > 0) {
               progressEl.style.width = Math.min(100, (receivedBytes / maxBytes) * 100) + '%';
@@ -334,6 +339,7 @@
       try {
         const result = await window.api.speedtestDownloader({
           url: DOWNLOADER_TEST_URL,
+          requestId,
           expectedSizeMB: 200,
           timeoutMs: DOWNLOADER_TEST_TIMEOUT_MS
         });

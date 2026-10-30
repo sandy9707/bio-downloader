@@ -6,13 +6,14 @@ const { startNativeDownload } = require('./native-download');
 const { createBioTransferGuard } = require('./bio-transfer-guard');
 const duration = ms => Math.max(250, Math.min(30000, Number(ms) || 10000));
 function meter(onProgress, started) {
-  let bytes = 0, last = 0;
+  let bytes = 0, last = 0, totalBytes = null;
   const snapshot = () => {
     const elapsedSeconds = Math.max(0.001, (Date.now() - started) / 1000);
-    return { bytesReceived: bytes, elapsedSeconds, bytesPerSecond: bytes / elapsedSeconds };
+    return { bytesReceived: bytes, totalBytes, elapsedSeconds, bytesPerSecond: bytes / elapsedSeconds };
   };
   return {
     add(n) { bytes += n; if (Date.now() - last >= 200) { last = Date.now(); onProgress(snapshot()); } },
+    total(n) { if (Number(n) > 0) totalBytes = Number(n); },
     result() { const data = snapshot(); onProgress(data); return bytes > 0 ? { success: true, ...data } : { success: false, error: '测速超时或未收到文件数据' }; }
   };
 }
@@ -21,6 +22,7 @@ async function measureNetwork({ url, timeoutMs, onProgress = () => {} }) {
   const timer = setTimeout(() => controller.abort(), duration(timeoutMs));
   try {
     const response = await axios.get(url, { proxy: false, signal: controller.signal, responseType: 'stream', maxRedirects: 5, timeout: duration(timeoutMs) });
+    counter.total(response.headers['content-length']);
     if (/text\/html/i.test(response.headers['content-type'] || '')) { response.data.destroy(); throw new Error('测速地址返回了网页而非文件'); }
     for await (const chunk of response.data) counter.add(chunk.length);
     return counter.result();

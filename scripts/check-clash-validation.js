@@ -53,6 +53,13 @@ function fakeaxios(req) {
   });
   return Promise.resolve({ status: 206, data: stream });
 }
+fakeaxios.get = async (url) => {
+  // 阶段 A 探活：除完全离线的节点外，包括伪装 EPROTO 节点都能通过 HTTP 探活进入阶段 B 真实 HTTPS 测速
+  for (const k of Object.keys(speedPlan)) {
+    if (url.includes(encodeURIComponent(k))) return { data: { delay: 80 } };
+  }
+  return { data: { delay: 0 } };
+};
 fakeaxios.put = async (url, body, options) => {
   if (url.includes('/proxies/__BIODL_BENCH_')) {
     const groupName = decodeURIComponent(url.split('/proxies/')[1]);
@@ -137,8 +144,8 @@ vm.runInContext(source.slice(source.indexOf('function getLocalNodePhysicalKey(')
     // 4. 极端网络本地测速源被整体屏蔽 (0 个测通): 三级云端保底不报错中断
     speedPlan = {};
     fs.writeFileSync(file, yaml.dump(baseConfig()));
-    assert.equal(await context.validateLocalClashNodes(file), allNodes.length);
-    assert.equal(context.currentNodeTier, 3);
+    await assert.rejects(context.validateLocalClashNodes(file), /未找到可用节点/);
+    assert.equal(context.currentRealNodeCount, 0);
 
     console.log('CLASH_VALIDATION_OK: real HTTPS throughput Tier 1/2/3, EPROTO elimination, alias dedup, bench listener cleanup');
   } finally {

@@ -217,15 +217,17 @@ if (!isElectron) {
 let extractionWindow = null; // 引导式提取独立弹出窗口
 let clashProcess = null;
 let currentRealNodeCount = 0;
+let clashLifecycleQueue = Promise.resolve();
 let currentNodeTier = null; // 1: 一级高速节点(>=6.0Mbps), 2: 二级标准节点(>=2.0Mbps), 3: 三级保底节点
 const CLASH_CONTROL_URL = 'http://127.0.0.1:43299';
+const LOCAL_NODE_PREFILTER_TIMEOUT_MS = 2500;
 const LOCAL_NODE_SPEED_TEST_URL = 'https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR390728/SRR390728';
-const LOCAL_NODE_SPEED_SAMPLE_BYTES = 1024 * 1024; // 1 MiB 真实 HTTPS 生信数据块测速
-const LOCAL_NODE_TEST_TIMEOUT_MS = 4000;
+const LOCAL_NODE_SPEED_SAMPLE_BYTES = 16 * 1024 * 1024;
+const LOCAL_NODE_TEST_TIMEOUT_MS = 20000;
 const LOCAL_NODE_TIER1_MBPS = 6.0;
 const LOCAL_NODE_TIER2_MBPS = 2.0;
 const LOCAL_NODE_MIN_POOL_SIZE = 6;
-const LOCAL_NODE_TEST_CONCURRENCY = 10;
+const LOCAL_NODE_TEST_CONCURRENCY = 2;
 const LOCAL_NODE_BENCH_BASE_PORT = 43310;
 const ACCOUNT_AIRPORTS = { 1: '一分机场', 2: '一分机场', 3: '一元机场', 4: '一元机场', 5: '一元机场', 6: 'iKuuu' };
 let currentAxelProcess = null;
@@ -759,11 +761,14 @@ async function findFreeLocalPorts(count, startPort = 43310) {
 async function measureProxyThroughputMbps(proxyPort, testUrl, sampleBytes, timeoutMs) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response;
     let shouldRetry = false;
+    let firstByteAt = 0;
+    let lastChunkAt = 0;
+    let received = 0;
+    const reqStarted = Date.now();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const reqStarted = Date.now();
       response = await axios({
         url: testUrl,
         method: 'GET',
@@ -777,32 +782,34 @@ async function measureProxyThroughputMbps(proxyPort, testUrl, sampleBytes, timeo
       });
       if (response.status !== 206) {
         response.data?.destroy();
-        // 明确协议拒绝(4xx/5xx)不再浪费第2次尝试
         shouldRetry = response.status === 429 || response.status >= 502;
       } else {
-        let firstByteAt = 0;
-        let received = 0;
         for await (const chunk of response.data) {
-          if (!firstByteAt) firstByteAt = Date.now();
+          const t = Date.now();
+          if (!firstByteAt) firstByteAt = t;
+          lastChunkAt = t;
           received += chunk.length;
           if (received >= sampleBytes) break;
         }
-        if (received >= Math.min(sampleBytes, 131072)) {
-          const now = Date.now();
-          const bodyElapsedSec = firstByteAt > 0 ? (now - firstByteAt) / 1000 : 0;
-          const totalElapsedSec = Math.max(0.12, (now - reqStarted) / 1000);
-          const effectiveSec = bodyElapsedSec >= 0.08 ? bodyElapsedSec : totalElapsedSec;
-          return Number(((received * 8) / 1e6 / effectiveSec).toFixed(2));
-        }
-        shouldRetry = true;
       }
     } catch (err) {
-      // EPROTO (如伪装站明文回落) 或满时长死节点超时不重测，仅瞬态断连快速重试 1 次
+      // 若在采样时间窗口到点前已经收到了真实 HTTPS 生信数据(>=64 KiB)，按已收字节算真实吞吐，不因超时中断归零！
       const code = err?.code || '';
-      shouldRetry = code !== 'EPROTO' && code !== 'ERR_CANCELED';
+      if (received < 65536) {
+        shouldRetry = code !== 'EPROTO' && code !== 'ERR_CANCELED';
+      }
     } finally {
       clearTimeout(timer);
       try { response?.data?.destroy(); } catch (_) {}
+    }
+
+    if (received >= 65536 && response?.status === 206) {
+      const endAt = lastChunkAt || Date.now();
+      const bodyElapsedSec = firstByteAt > 0 ? (endAt - firstByteAt) / 1000 : 0;
+      const totalElapsedSec = Math.max(0.12, (endAt - reqStarted) / 1000);
+      // Include connection costs consistently; never switch between body-only
+      // and end-to-end denominators based on an arbitrary 80 ms boundary.
+      return Number(((received * 8) / 1e6 / Math.max(totalElapsedSec, bodyElapsedSec)).toFixed(2));
     }
     if (!shouldRetry) break;
   }
@@ -829,22 +836,55 @@ async function validateLocalClashNodes(configPath, sender) {
   });
 
   const entries = [...physicalGroups.values()];
-  const workerCount = Math.min(typeof LOCAL_NODE_TEST_CONCURRENCY === 'number' ? LOCAL_NODE_TEST_CONCURRENCY : 6, entries.length);
   const tier1Mbps = typeof LOCAL_NODE_TIER1_MBPS === 'number' ? LOCAL_NODE_TIER1_MBPS : 6.0;
   const tier2Mbps = typeof LOCAL_NODE_TIER2_MBPS === 'number' ? LOCAL_NODE_TIER2_MBPS : 2.0;
   const minPoolSize = typeof LOCAL_NODE_MIN_POOL_SIZE === 'number' ? LOCAL_NODE_MIN_POOL_SIZE : 6;
   const testUrl = typeof LOCAL_NODE_SPEED_TEST_URL === 'string' ? LOCAL_NODE_SPEED_TEST_URL : 'https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR390728/SRR390728';
   const sampleBytes = typeof LOCAL_NODE_SPEED_SAMPLE_BYTES === 'number' ? LOCAL_NODE_SPEED_SAMPLE_BYTES : 1024 * 1024;
   const basePort = typeof LOCAL_NODE_BENCH_BASE_PORT === 'number' ? LOCAL_NODE_BENCH_BASE_PORT : 43310;
+  const prefilterTimeout = typeof LOCAL_NODE_PREFILTER_TIMEOUT_MS === 'number' ? LOCAL_NODE_PREFILTER_TIMEOUT_MS : 2500;
 
   let completed = 0;
   let fastCountSoFar = 0;
   const measuredGroups = [];
   emitClashValidationProgress(sender, { completed, total: entries.length, passed: 0 });
 
-  // 在当前运行的 Mihomo 中挂载临时并行测速端口（每个 Worker 独占一个 select 组与端口，互不串流）
+  // 阶段 A（2.5 秒快筛 TCP 死节点）：并行探活各机场物理代表节点，淘汰完全连不上代理服务器的离线节点；
+  // 凡有响应的节点进入阶段 B 真实 HTTPS 生信吞吐测速（测速才是决定淘汰伪装 EPROTO 节点与分级的唯一标准）
+  const reachableEntries = [];
+  let preCursor = 0;
+  const preWorkers = Array.from({ length: Math.min(12, entries.length) }, async () => {
+    while (preCursor < entries.length) {
+      const groupNames = entries[preCursor++];
+      const representative = groupNames[0];
+      let reachable = false;
+      try {
+        const res = await axios.get(`${CLASH_CONTROL_URL}/proxies/${encodeURIComponent(representative)}/delay`, {
+          params: { url: 'http://captive.apple.com/hotspot-detect.html', timeout: prefilterTimeout },
+          proxy: false,
+          timeout: prefilterTimeout + 1000
+        });
+        reachable = Number(res.data?.delay) > 0;
+      } catch (_) {}
+      if (reachable) {
+        reachableEntries.push(groupNames);
+      } else {
+        completed++;
+        emitClashValidationProgress(sender, { completed, total: entries.length, passed: fastCountSoFar });
+      }
+    }
+  });
+  await Promise.all(preWorkers);
+
+  // 若本地防火墙拦截了快筛 URL 导致 0 个响应，则全部进入阶段 B 真实 HTTPS 测速
+  // HTTP reachability is not evidence of HTTPS throughput. Probe all candidates;
+  // the lightweight preflight must never exclude a working download route.
+  const benchTargets = entries;
+  completed = 0;
+
+  const workerCount = Math.min(typeof LOCAL_NODE_TEST_CONCURRENCY === 'number' ? LOCAL_NODE_TEST_CONCURRENCY : 4, benchTargets.length);
   const benchPorts = await findFreeLocalPorts(workerCount, basePort);
-  const allRepNames = entries.map(g => g[0]);
+  const allRepNames = benchTargets.map(g => g[0]);
   const benchConfig = yaml.load(originalYaml) || {};
   benchConfig['proxy-groups'] = Array.isArray(benchConfig['proxy-groups']) ? benchConfig['proxy-groups'] : [];
   benchConfig.listeners = Array.isArray(benchConfig.listeners) ? benchConfig.listeners.filter(l => !String(l?.name || '').startsWith('__biodl_bench_')) : [];
@@ -870,8 +910,8 @@ async function validateLocalClashNodes(configPath, sender) {
   const workers = Array.from({ length: workerCount }, async (_, w) => {
     const groupName = `__BIODL_BENCH_${w}`;
     const proxyPort = benchPorts[w];
-    while (cursor < entries.length) {
-      const groupNames = entries[cursor++];
+    while (cursor < benchTargets.length) {
+      const groupNames = benchTargets[cursor++];
       const representative = groupNames[0];
       let mbps = 0;
       try {
@@ -917,9 +957,12 @@ async function validateLocalClashNodes(configPath, sender) {
     selectedTier = 3;
     selectedGroups.forEach(item => item.groupNames.forEach(name => passedNames.add(name)));
   } else {
-    // 极端网络兜底：本地测速源被防火墙整体阻断导致 0 个测通时，保留云端初筛池不阻断启动
-    selectedTier = 3;
-    candidateNames.forEach(name => passedNames.add(name));
+    fs.writeFileSync(configPath, originalYaml, 'utf8');
+    await reloadClashConfig(configPath);
+    currentNodeTier = null;
+    currentRealNodeCount = 0;
+    emitClashValidationProgress(sender, { completed, total: entries.length, passed: 0, done: true });
+    throw new Error('本地 HTTPS 下载测速未找到可用节点；请检查网络或 TUN 代理冲突后重试');
   }
 
   // 基于干净的原始配置回写筛选结果（自动清除所有临时 __BIODL_BENCH 监听端口与组）
@@ -1597,23 +1640,29 @@ ipcMain.handle('plugin-set-path', async (event, { pluginId, binaryPath }) => {
   return { success: true, path: normalized, version: match ? match[1] : null };
 });
 
-// --- Clash 控制 ---
-ipcMain.handle('clash-start', async (event, { token }) => {
+function runClashSerial(task) {
+  const next = clashLifecycleQueue.then(task, task);
+  clashLifecycleQueue = next.catch(() => {});
+  return next;
+}
+
+// --- Clash 控制（全部经串行队列互斥执行，严禁启动自动初始化与手动点击并发互踩 config.yaml） ---
+ipcMain.handle('clash-start', async (event, { token }) => runClashSerial(async () => {
   await startClash(token, event.sender);
   setExtractionProxy();
   return { success: true, nodeCount: currentRealNodeCount, nodeTier: currentNodeTier };
-});
+}));
 
-ipcMain.handle('clash-stop', () => {
+ipcMain.handle('clash-stop', () => runClashSerial(async () => {
   stopClash();
   setExtractionProxy();
   return true;
-});
+}));
 
-ipcMain.handle('clash-optimize', async (event, { token }) => {
+ipcMain.handle('clash-optimize', async (event, { token }) => runClashSerial(async () => {
   const res = await optimizeClash(token, event.sender);
   return { ...res, nodeCount: currentRealNodeCount, nodeTier: currentNodeTier };
-});
+}));
 
 ipcMain.handle('clash-get-node-count', () => {
   return { count: currentRealNodeCount || 38, tier: currentNodeTier };
@@ -1994,7 +2043,7 @@ ipcMain.handle('open-speedtest-page', async () => {
 const { measureNetwork, measureDownloader } = require('./src/main/speedtest');
 const speedtestSources = require('./shared/speedtest-sources');
 ipcMain.handle('speedtest-network', (event, options = {}) => measureNetwork({ url: speedtestSources.network, ...options,
-  onProgress: data => { if (!event.sender.isDestroyed?.()) event.sender.send('speedtest-progress', data); }
+  onProgress: data => { if (!event.sender.isDestroyed?.()) event.sender.send('speedtest-progress', { ...data, requestId: options.requestId, testType: 'network' }); }
 }));
 ipcMain.handle('speedtest-downloader', async (event, options = {}) => {
   if (!clashProcess) return { success: false, error: '请先在主窗口开启加速器，再测试 SRR 高速下载' };
@@ -2003,7 +2052,7 @@ ipcMain.handle('speedtest-downloader', async (event, options = {}) => {
   return measureDownloader({ ...options, url, engine,
     binary: engine === 'native' ? null : engine === 'aria2' ? await ensureAria2Plugin() : getAxelBinaryPath(),
     proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 },
-    onProgress: data => { if (!event.sender.isDestroyed?.()) event.sender.send('speedtest-progress', data); }
+    onProgress: data => { if (!event.sender.isDestroyed?.()) event.sender.send('speedtest-progress', { ...data, requestId: options.requestId, testType: 'downloader' }); }
   });
 });
 
@@ -2466,7 +2515,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       } catch (_) { /* Diagnostics must not change the download result. */ }
     };
     let verification = null, releaseFile = null, backupPath = file.backupPath || null;
-    let engineForFile, axelBin, deepForFile = deepIntegrityCheck || Boolean(file.redownloadMismatch || file.backupPath);
+    let engineForFile, axelBin, deepForFile = deepIntegrityCheck || Boolean(file.redownloadMismatch || file.backupPath) || /^[a-f0-9]{32}$/i.test(file.md5 || '');
     try {
     releaseFile = downloadFiles.claimFile(savePath);
     const knownMismatch = await downloadFiles.priorMismatch(savePath, file.url);
@@ -2517,8 +2566,8 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
         if (nativeResult) verification.transport = { status: 'range-verified', engine: 'native', boundaries: 'overlap-checked', remoteChecksumVerified: false };
         if (bioGuard) await bioGuard.complete(verification);
         await downloadFiles.persistVerification(savePath, file.url, verification);
-        if (existing && verification.status === 'mismatch') {
-          const error = new Error('已有文件 MD5 与参考值不一致，已保留文件但不作为成功跳过；请核对参考值或选择其他目录下载');
+        if (verification.status === 'mismatch') {
+          const error = new Error('文件 MD5 与参考值不一致，已保留文件，未标记下载成功；请核对参考值或重新下载');
           error.verification = verification;
           throw error;
         }
@@ -2879,7 +2928,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           const task = startNativeDownload({ url: file.url, filename: savePath, connections: Math.min(16, threads),
             expectedSize: file.size || undefined,
             proxy: clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false }, data => {
-            if (data.type === 'progress') event.sender.send('download-progress', { index: fileIndex, engine: 'native', ...data, speed: (data.speedBps / 1024).toFixed(1) + ' KB/s' });
+            if (data.type === 'progress') event.sender.send('download-progress', { index: fileIndex, engine: 'native', ...data, connectionLimit: Math.min(16, threads), speed: (data.speedBps / 1024).toFixed(1) + ' KB/s' });
             if (data.type === 'state' && data.phase !== 'paused') sendStatus({ index: fileIndex, status: 'downloading', phase: data.phase === 'checking-local' ? 'verifying' : 'connecting', savePath,
               speed: data.phase === 'checking-local' ? '正在核对本地断点分块…' : data.phase === 'waiting-lock' ? '正在等待上次下载释放文件锁…' : '正在连接下载源…' });
             if (data.type === 'retry') sendStatus({ index: fileIndex, status: 'downloading', phase: 'connecting', savePath, speed: `连接中断，保留已完成分块，${Math.ceil(data.waitMs / 1000)} 秒后重试…` });

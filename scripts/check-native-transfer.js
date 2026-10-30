@@ -80,7 +80,7 @@ const deadline = setTimeout(() => { console.error('NATIVE_TEST_TIMEOUT'); child?
     reset();await task('publication.bin').run();const output=path.join(temp,'publication.bin'),part=output+'.biodl-part';
     // Recreate the exact filesystem state between publishing and removing part.
     fs.linkSync(output,part);const recovered=await task('publication.bin').run();assert(recovered.recovered);assert(!fs.existsSync(part));equalFile('publication.bin');
-    const events=[];await task('publication.bin',{onEvent:e=>events.push(e)}).run();assert(events.find(e=>e.type==='resume').fast);
+    const events=[];await task('publication.bin',{onEvent:e=>events.push(e)}).run();assert(events.find(e=>e.type==='resume').verifiedBytes === data.length);
     fs.writeFileSync(part,'unrelated partial bytes');await assert.rejects(task('publication.bin').run(),e=>e.code==='PUBLISH_CONFLICT');
     assert.equal(fs.readFileSync(part,'utf8'),'unrelated partial bytes');equalFile('publication.bin');
   });
@@ -95,7 +95,7 @@ const deadline = setTimeout(() => { console.error('NATIVE_TEST_TIMEOUT'); child?
   await test('clean pause quickly resumes only missing blocks', async () => {
     const done = await pausePartial('pause.bin'); reset(); const events = [];
     await task('pause.bin', { onEvent: e => events.push(e) }).run(); equalFile('pause.bin');
-    assert(events.find(e => e.type === 'resume').fast); assert.equal(events.find(e => e.type === 'resume').verifiedBytes, 0);
+    assert(!events.find(e => e.type === 'resume').fast); assert(events.find(e => e.type === 'resume').verifiedBytes > 0);
     assert(requests.filter(r => r.end > r.start).length < Math.ceil(data.length / blockSize)); assert(done > 0);
   });
   await test('local corruption repairs the affected committed block', async () => {
@@ -103,6 +103,19 @@ const deadline = setTimeout(() => { console.error('NATIVE_TEST_TIMEOUT'); child?
     const fd = fs.openSync(part, 'r+'); fs.writeSync(fd, Buffer.from('corrupt'), 0, 7, 1); fs.closeSync(fd);
     reset(); const events = []; await task('repair.bin', { onEvent: e => events.push(e) }).run(); equalFile('repair.bin');
     assert(events.some(e => e.type === 'repair' && e.block === 0)); assert(requests.some(r => r.start === 0 && r.end === blockSize + 31));
+  });
+  await test('sealed checkpoint still checks bytes when size and timestamps match', async () => {
+    await pausePartial('sealed-repair.bin');
+    const part = path.join(temp, 'sealed-repair.bin.biodl-part');
+    const stat = fs.statSync(part);
+    const fd = fs.openSync(part, 'r+');
+    fs.writeSync(fd, Buffer.from('damage'), 0, 6, 1); fs.closeSync(fd);
+    fs.utimesSync(part, stat.atime, stat.mtime);
+    reset(); const events = [];
+    await task('sealed-repair.bin', { onEvent: e => events.push(e) }).run();
+    equalFile('sealed-repair.bin');
+    assert(events.some(e => e.type === 'repair' && e.block === 0));
+    assert(events.find(e => e.type === 'resume').verifiedBytes > 0);
   });
   await test('real process kill recovers durable journal without overwriting committed blocks', async () => {
     reset('slow'); const killed = await childTask('crash.bin', true); assert(killed.killed);
