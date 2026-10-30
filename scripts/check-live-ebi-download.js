@@ -28,7 +28,9 @@ const timer = setTimeout(() => { console.error('Live ENA download exceeded 20 mi
   await engine.callIpcHandler('start-download', { files: [{ ...file, originalIndex: 1 }], targetDir: path.join(temp, 'files'), token: 'test-no-account', maxConcurrent: 1 });
   assert.equal(final?.status, 'completed', JSON.stringify(final));
   assert.equal(final.engine, 'native');
-  assert.equal(final.verification.method, 'quick', 'production default must not perform full MD5');
+  assert.equal(final.verification.method, 'md5', 'known source checksum must be verified automatically');
+  assert.equal(final.verification.status, 'verified');
+  assert.equal(final.verification.actualMd5, file.md5);
   assert.equal(final.verification.transport.status, 'range-verified');
   assert.equal(final.verification.transport.boundaries, 'overlap-checked');
   const hash = crypto.createHash('md5');
