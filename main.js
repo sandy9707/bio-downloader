@@ -217,10 +217,13 @@ if (!isElectron) {
 let extractionWindow = null; // 引导式提取独立弹出窗口
 let clashProcess = null;
 let currentRealNodeCount = 0;
+let currentNodeTier = null; // 1: 一级节点(<=1200ms), 2: 二级节点(<=3000ms), 3: 三级保底节点
 const CLASH_CONTROL_URL = 'http://127.0.0.1:43299';
 const LOCAL_NODE_TEST_URL = 'http://captive.apple.com/hotspot-detect.html';
-const LOCAL_NODE_TEST_TIMEOUT_MS = 2500;
-const LOCAL_NODE_MAX_DELAY_MS = 900;
+const LOCAL_NODE_TEST_TIMEOUT_MS = 4500;
+const LOCAL_NODE_TIER1_DELAY_MS = 1200;
+const LOCAL_NODE_TIER2_DELAY_MS = 3000;
+const LOCAL_NODE_MIN_POOL_SIZE = 6;
 const LOCAL_NODE_TEST_CONCURRENCY = 8;
 const ACCOUNT_AIRPORTS = { 1: '一分机场', 2: '一分机场', 3: '一元机场', 4: '一元机场', 5: '一元机场', 6: 'iKuuu' };
 let currentAxelProcess = null;
@@ -760,47 +763,69 @@ async function validateLocalClashNodes(configPath, sender) {
 
   const entries = [...physicalGroups.values()];
   let completed = 0;
-  let passedGroups = 0;
-  const passedNames = new Set();
   const aliveDelays = [];
+  let fastCountSoFar = 0;
   emitClashValidationProgress(sender, { completed, total: entries.length, passed: 0 });
 
   let cursor = 0;
-  const maxDelayMs = typeof LOCAL_NODE_MAX_DELAY_MS === 'number' ? LOCAL_NODE_MAX_DELAY_MS : 900;
+  const tier1Max = typeof LOCAL_NODE_TIER1_DELAY_MS === 'number' ? LOCAL_NODE_TIER1_DELAY_MS : 1200;
+  const tier2Max = typeof LOCAL_NODE_TIER2_DELAY_MS === 'number' ? LOCAL_NODE_TIER2_DELAY_MS : 3000;
+  const minPoolSize = typeof LOCAL_NODE_MIN_POOL_SIZE === 'number' ? LOCAL_NODE_MIN_POOL_SIZE : 6;
+
   const workers = Array.from({ length: Math.min(LOCAL_NODE_TEST_CONCURRENCY, entries.length) }, async () => {
     while (cursor < entries.length) {
       const groupNames = entries[cursor++];
       const representative = groupNames[0];
       let delayMs = 0;
-      try {
-        const response = await axios.get(`${CLASH_CONTROL_URL}/proxies/${encodeURIComponent(representative)}/delay`, {
-          params: { url: LOCAL_NODE_TEST_URL, timeout: LOCAL_NODE_TEST_TIMEOUT_MS },
-          proxy: false,
-          timeout: LOCAL_NODE_TEST_TIMEOUT_MS + 2000
-        });
-        delayMs = Number(response.data?.delay) || 0;
-      } catch (_) {}
+      for (let attempt = 0; attempt < 2 && delayMs <= 0; attempt++) {
+        try {
+          const response = await axios.get(`${CLASH_CONTROL_URL}/proxies/${encodeURIComponent(representative)}/delay`, {
+            params: { url: LOCAL_NODE_TEST_URL, timeout: LOCAL_NODE_TEST_TIMEOUT_MS },
+            proxy: false,
+            timeout: LOCAL_NODE_TEST_TIMEOUT_MS + 2000
+          });
+          delayMs = Number(response.data?.delay) || 0;
+        } catch (_) {}
+      }
       if (delayMs > 0) {
         aliveDelays.push({ delayMs, groupNames });
-        if (delayMs <= maxDelayMs) {
-          passedGroups++;
-          groupNames.forEach(name => passedNames.add(name));
-        }
+        if (delayMs <= tier1Max) fastCountSoFar += groupNames.length;
       }
       completed++;
-      emitClashValidationProgress(sender, { completed, total: entries.length, passed: passedNames.size });
+      emitClashValidationProgress(sender, { completed, total: entries.length, passed: fastCountSoFar });
     }
   });
   await Promise.all(workers);
 
-  if (!passedNames.size && aliveDelays.length) {
-    aliveDelays.sort((a, b) => a.delayMs - b.delayMs);
-    for (const item of aliveDelays.slice(0, 6)) {
-      passedGroups++;
-      item.groupNames.forEach(name => passedNames.add(name));
-    }
+  aliveDelays.sort((a, b) => a.delayMs - b.delayMs);
+  const tier1Groups = aliveDelays.filter(item => item.delayMs <= tier1Max);
+  const tier2Groups = aliveDelays.filter(item => item.delayMs <= tier2Max);
+  const countAliases = list => list.reduce((sum, item) => sum + item.groupNames.length, 0);
+  const targetTier1Min = Math.min(candidateNames.length, minPoolSize);
+  const targetTier2Min = Math.min(candidateNames.length, 4);
+
+  let selectedGroups = [];
+  let selectedTier = 1;
+  const passedNames = new Set();
+
+  if (countAliases(tier1Groups) >= targetTier1Min || (tier1Groups.length > 0 && tier1Groups.length === aliveDelays.length && countAliases(tier1Groups) >= targetTier2Min)) {
+    selectedGroups = tier1Groups;
+    selectedTier = 1;
+    selectedGroups.forEach(item => item.groupNames.forEach(name => passedNames.add(name)));
+  } else if (countAliases(tier2Groups) >= targetTier2Min || (tier2Groups.length > tier1Groups.length && countAliases(tier2Groups) >= Math.min(candidateNames.length, 3))) {
+    selectedGroups = tier2Groups;
+    selectedTier = 2;
+    selectedGroups.forEach(item => item.groupNames.forEach(name => passedNames.add(name)));
+  } else if (aliveDelays.length > 0) {
+    selectedGroups = aliveDelays;
+    selectedTier = 3;
+    selectedGroups.forEach(item => item.groupNames.forEach(name => passedNames.add(name)));
+  } else {
+    // 三级极端网络保底：本地探测全超时(如校园网/防火墙屏蔽测速探针URL)时不阻断启动，保留线上初筛高速池
+    selectedTier = 3;
+    candidateNames.forEach(name => passedNames.add(name));
   }
-  if (!passedNames.size) throw new Error('当前网络未找到可用高速节点，请检查网络后重试');
+
   downloadPool.proxies = candidateNames.filter(name => passedNames.has(name));
   // Remove dead/unverified candidate nodes from other groups unless doing so
   // would empty that group (which Mihomo rejects with HTTP 400).
@@ -817,12 +842,15 @@ async function validateLocalClashNodes(configPath, sender) {
     writeClashLog('[local-validation] reload failed, restoring original config: ' + reloadErr.message);
     fs.writeFileSync(configPath, originalYaml, 'utf8');
     try { await reloadClashConfig(configPath); } catch (_) {}
-    emitClashValidationProgress(sender, { completed, total: entries.length, passed: candidateNames.length, done: true });
+    currentNodeTier = 3;
+    currentRealNodeCount = candidateNames.length;
+    emitClashValidationProgress(sender, { completed, total: entries.length, passed: candidateNames.length, tier: 3, done: true });
     return currentRealNodeCount;
   }
+  currentNodeTier = selectedTier;
   currentRealNodeCount = passedNames.size;
-  writeClashLog(`[local-validation] ${passedGroups}/${entries.length} physical nodes passed, ${passedNames.size}/${candidateNames.length} account nodes retained`);
-  emitClashValidationProgress(sender, { completed, total: entries.length, passed: passedNames.size, done: true });
+  writeClashLog(`[local-validation] tier=${selectedTier}, ${selectedGroups.length}/${entries.length} physical nodes selected, ${passedNames.size}/${candidateNames.length} account nodes retained`);
+  emitClashValidationProgress(sender, { completed, total: entries.length, passed: passedNames.size, tier: selectedTier, done: true });
   return currentRealNodeCount;
 }
 
@@ -1382,12 +1410,21 @@ function inspectTool(toolId) {
 
 ipcMain.handle('plugin-get-status', async () => {
   ensureBinaries();
+  const settings = getSettings();
   const platform = `${os.platform()} ${os.arch()}`;
   const axel = inspectTool('axel');
   const aria2 = inspectTool('aria2');
   const curl = inspectTool('curl');
+  let sshVersion = '1.17.0';
+  let sshModuleReady = false;
+  try {
+    sshVersion = require('ssh2/package.json').version || sshVersion;
+    sshModuleReady = Boolean(require('ssh2'));
+  } catch (_) {}
+  const sshEnabled = Boolean(settings.sshPluginEnabled) && sshModuleReady;
+
   return {
-    defaultEngine: getSettings().downloadEngines.http,
+    defaultEngine: settings.downloadEngines.http,
     plugins: [
       { id: 'native', name: 'BioDownloader 专属内核（默认）', description: '分块下载、持久断点和相邻分块重叠核对。适用于支持 Range 与强 ETag 的 HTTP/HTTPS 文件。', platform, installed: true, usable: true, version: app.getVersion(), source: 'bundled', internal: true },
       {
@@ -1404,13 +1441,33 @@ ipcMain.handle('plugin-get-status', async () => {
         platform,
         ...aria2
       },
-      { id: 'curl', name: 'curl（FTPS / 可选 FTP、SFTP）', description: '使用系统安装的 curl，或指定支持相应协议的版本。', platform, ...curl }
+      { id: 'curl', name: 'curl（FTPS / 可选 FTP、SFTP）', description: '使用系统安装的 curl，或指定支持相应协议的版本。', platform, ...curl },
+      {
+        id: 'ssh',
+        name: 'SSH 远程连接（连接 Linux Web）',
+        description: '在本机安全打开服务器上的 BioDownloader 网页端，无需开放 43280 公网端口；使用普通 SSH 账号即可连接。',
+        platform,
+        installed: sshEnabled,
+        usable: sshEnabled,
+        version: sshVersion,
+        source: sshEnabled ? 'bundled' : '',
+        noCustomPath: true
+      }
     ]
   };
 });
 
 // 手动触发插件安装/重装
 ipcMain.handle('plugin-install', async (event, { pluginId }) => {
+  if (pluginId === 'ssh') {
+    try {
+      require('ssh2');
+    } catch (e) {
+      throw new Error('当前环境缺少 SSH 组件: ' + e.message);
+    }
+    saveSettings({ sshPluginEnabled: true });
+    return { success: true };
+  }
   if (pluginId === 'curl') { const resolved = inspectTool('curl'); if (!resolved.usable) throw new Error('请安装 curl 并指定绝对路径'); return { success: true, path: resolved.path }; }
   if (pluginId === 'axel') {
     ensureBinaries();
@@ -1447,7 +1504,7 @@ ipcMain.handle('plugin-set-path', async (event, { pluginId, binaryPath }) => {
 ipcMain.handle('clash-start', async (event, { token }) => {
   await startClash(token, event.sender);
   setExtractionProxy();
-  return { success: true, nodeCount: currentRealNodeCount };
+  return { success: true, nodeCount: currentRealNodeCount, nodeTier: currentNodeTier };
 });
 
 ipcMain.handle('clash-stop', () => {
@@ -1458,11 +1515,11 @@ ipcMain.handle('clash-stop', () => {
 
 ipcMain.handle('clash-optimize', async (event, { token }) => {
   const res = await optimizeClash(token, event.sender);
-  return { ...res, nodeCount: currentRealNodeCount };
+  return { ...res, nodeCount: currentRealNodeCount, nodeTier: currentNodeTier };
 });
 
 ipcMain.handle('clash-get-node-count', () => {
-  return currentRealNodeCount || 80;
+  return { count: currentRealNodeCount || 38, tier: currentNodeTier };
 });
 
 // 过滤上游订阅混入的「流量信息假节点」: 部分机场(如一分机场)会在 proxies 里插入

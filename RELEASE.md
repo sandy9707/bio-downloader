@@ -36,3 +36,27 @@
 
 - 正式版未开高级模式：只看 channel=2，看不到 P2。
 - 正式版开启高级模式，或当前版本含 `-preview`：会请求 P2。
+
+## 推送 Tag 前强制预检防线（防范 GitHub Actions Linux / Mac 构建失败）
+
+经统计近期 GitHub Actions 失败与重跑记录，Mac / Linux 构建报错集中在以下 5 类原因。**每次打 `v*` Tag 推送前，必须在本机逐条核对通过，严禁盲推 Tag 试错：**
+
+1. **Linux 桥接与 HTML 同步断层（高频必挂项）**
+   - 凡修改 `index.html`、`speedtest.html`，必须先运行 `node scripts/sync-linux-web.js` 同步生成 `packages/web/`。
+   - 凡在 `preload.js` 或 `main.js` 新增 IPC 方法/事件，必须同步补齐 `packages/web/web-bridge.js` 与 `packages/cli/server.js`（`forwardEvents`），并运行 `node scripts/check-web-bridge-contract.js` 验证。
+2. **Linux 独立包与 `2.0.41` 原地升级依赖缺失（Linux 专属必挂项）**
+   - 桌面端由 `electron-builder` 自动收集 `node_modules`，但 Linux 版由 `scripts/build-linux.js` 手工拷贝白名单，且 CI 会实测从 `2.0.41` 老目录原地升级（`scripts/check-linux-upgrade.js`）。
+   - 凡新增任何第三方 `require('xxx')` 依赖，必须同时：① 加入 `scripts/build-linux.js` 打包列表；② 确保 `linux-self-update` 原地升级后旧目录可解析该模块（内置 vendor 或随升级包写入），并在本机执行 `npm run build:linux` 校验。
+3. **Mac / Linux 本地回环速度过快引发的测试竞态（改动并发/节流必测）**
+   - GitHub 的 Linux 与 Apple Silicon Mac Runner 本地 `127.0.0.1` 吞吐极快，若初始并发连接数过高（如直接 16 并发起跳），测试小文件会在首个 `250ms` IPC 进度回调触发前传完，导致 `check-native-app.js --stress` 的强杀恢复或取消窗口断言失败。
+   - 凡调整 `native-transfer` 连接数、分块大小或进度节流间隔，推送前必须在本机实跑通过：
+     ```bash
+     node scripts/check-native-transfer.js && node scripts/check-native-app.js --stress && rm -rf .evidence
+     ```
+4. **`renderer.js` 孤立 VM 上下文全局变量未兜底**
+   - `check-transfer-persistence.js`、`check-installer-download.js` 等回归脚本会用 `vm.runInContext` 单独截取 `renderer.js` 内的渲染函数（如 `renderCompletedList`、`downloadUpdate`）在空白上下文执行。
+   - 在此类函数内引用任何新增顶层 `const/let` 状态（如集合、配置项）时，必须加 `typeof xxx !== 'undefined'` 保护，并在本机跑完完整 `npm test`。
+5. **公网 EBI 源站对 GitHub Runner 共享 IP 偶发限流（HTTP 403）与 Windows 冷启动超时**
+   - `check-live-ebi-download.js` 直连 `ftp.sra.ebi.ac.uk` 下载 101 MB 真实生信文件；GitHub Mac / Ubuntu 共享出口 IP 偶发触发源站防火墙限流返回 `HTTP 403`（非代码回归）。
+   - Windows `check-packaged-update.js` 偶发受 Runner 上 Windows Defender 首次扫描未签名 EXE 影响超出 90s 启动确认窗口。
+   - **处置准则**：先查看 `gh run view <id> --log-failed` 区分代码断言错误与外部环境抖动；确认为 EBI `HTTP 403` 或成品冷启动超时后，使用 `gh run rerun <id> --failed` 仅重跑失败 Job，切勿盲目改业务代码或重复打新 Tag。

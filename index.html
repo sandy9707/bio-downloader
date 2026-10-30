@@ -181,6 +181,7 @@
     }
 
     .accelerator-status-panel {
+      width: 100%;
       padding: 0.65rem 0.85rem;
       background: var(--bg-secondary);
       border: 1px solid var(--border-color);
@@ -188,6 +189,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 0.5rem;
       margin-top: 0.4rem;
       font-size: 0.82rem;
       font-weight: 500;
@@ -248,8 +250,10 @@
     .switch {
       position: relative;
       display: inline-block;
-      width: 38px;
-      height: 20px;
+      width: 44px;
+      height: 24px;
+      flex: 0 0 44px;
+      margin-left: auto;
     }
 
     .switch input {
@@ -262,29 +266,34 @@
       position: absolute;
       cursor: pointer;
       top: 0; left: 0; right: 0; bottom: 0;
-      background-color: var(--switch-track);
-      transition: .3s;
-      border-radius: 20px;
+      background-color: #94a3b8;
+      transition: background-color 0.2s ease;
+      border-radius: 24px;
+    }
+
+    body.dark-mode .slider {
+      background-color: #475569;
     }
 
     .slider:before {
       position: absolute;
       content: "";
-      height: 14px;
-      width: 14px;
+      height: 18px;
+      width: 18px;
       left: 3px;
-      bottom: 3px;
-      background-color: white;
-      transition: .3s;
+      top: 3px;
+      background-color: #ffffff;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+      transition: transform 0.2s ease;
       border-radius: 50%;
     }
 
     input:checked + .slider {
-      background-image: var(--primary-grad);
+      background-color: #10b981;
     }
 
     input:checked + .slider:before {
-      transform: translateX(18px);
+      transform: translateX(20px);
     }
 
     /* ==========================================
@@ -1774,17 +1783,11 @@
 
     <!-- VIEW: 扩展插件 -->
     <div class="tab-view" id="plugins-tab">
-      <div class="card" id="sshPluginCard" style="margin-bottom:1.5rem;">
-        <h3 style="margin:0 0 .6rem;">SSH · 连接 Linux Web</h3>
-        <p class="settings-hint">在本机打开服务器上的 BioDownloader，无需开放 43280 公网端口。桌面端内置，无需另装 OpenSSH；使用普通 SSH 账号即可。</p>
-        <button class="btn btn-secondary" onclick="openSshPanel()">配置 SSH 连接 →</button>
-      </div>
-
       <div class="card" style="max-width: 800px; margin: 0 auto; width: 100%;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.2rem; flex-wrap:wrap; gap:0.5rem;">
           <div>
-            <h3 style="color:#6366f1; margin:0; display:flex; align-items:center; gap:0.4rem;">🧩 扩展插件生态</h3>
-            <p style="font-size:0.85rem; color:var(--text-muted); margin-top:0.3rem; margin-bottom:0;">自动检测软件内置版本、系统 PATH，也可填写已有程序的绝对路径。</p>
+            <h3 style="color:var(--primary-color); margin:0; display:flex; align-items:center; gap:0.4rem;">🧩 扩展插件生态</h3>
+            <p style="font-size:0.85rem; color:var(--text-muted); margin-top:0.3rem; margin-bottom:0;">管理下载引擎与远程连接扩展组件，支持一键安装启用或指定本地程序路径。</p>
           </div>
           <button class="btn btn-secondary" onclick="refreshPluginsList()" style="font-size:0.85rem; padding:0.4rem 0.9rem; display:flex; align-items:center; gap:0.3rem;">
             <span>🔄</span> 重新检测

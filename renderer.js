@@ -259,8 +259,12 @@ async function updateClashUIState() {
       const info = document.getElementById('clashConfigInfo'); if (info) info.innerText = '尚未启动下载加速器。启动下载时会自动开启。';
     }
     try {
-      const nodeCount = await window.api.getNodeCount();
-      if (nodeCount) updateNodeCountUI(nodeCount);
+      const nodeInfo = await window.api.getNodeCount();
+      if (nodeInfo && typeof nodeInfo === 'object') {
+        updateNodeCountUI(nodeInfo.count, nodeInfo.tier);
+      } else if (nodeInfo) {
+        updateNodeCountUI(nodeInfo);
+      }
     } catch(e) {}
   } catch (e) {
     console.error('获取加速器状态错误:', e);
@@ -290,8 +294,13 @@ async function toggleClash() {
       if (progressWrap) progressWrap.style.display = 'block';
       try {
         const startRes = await window.api.startClash(currentUser.token);
-        if (startRes && startRes.nodeCount) updateNodeCountUI(startRes.nodeCount);
-        showToast('下载加速器启动成功', 'success');
+        if (startRes && startRes.nodeCount) updateNodeCountUI(startRes.nodeCount, startRes.nodeTier);
+        const tierMsg = startRes?.nodeTier === 2
+          ? `加速器已开启（自动放宽启用 ${startRes.nodeCount} 个二级连接节点）`
+          : startRes?.nodeTier === 3
+            ? `加速器已开启（弱网保底启用 ${startRes.nodeCount} 个三级连接节点）`
+            : '下载加速器启动成功';
+        showToast(tierMsg, 'success');
       } catch (err) {
         const msg = (err && err.message) || '未知错误';
         console.error('[toggleClash] startClash failed:', err);
@@ -4269,15 +4278,23 @@ window.copyInviteCode = copyInviteCode;
 window.copyInviteUrl = copyInviteUrl;
 
 let currentRealNodeCount = 0;
+let currentNodeTier = null;
 
-function updateNodeCountUI(count) {
+function updateNodeCountUI(count, tier) {
   if (typeof count === 'number' && count > 0) {
     currentRealNodeCount = count;
+  }
+  if (tier === 1 || tier === 2 || tier === 3) {
+    currentNodeTier = tier;
   }
   const textEl = document.getElementById('btnOptimizeConnText');
   if (textEl) {
     if (currentRealNodeCount > 0) {
-      textEl.innerText = `⚡ 优化连接 (目前节点${currentRealNodeCount})`;
+      const tierLabel = currentNodeTier === 1 ? '一级节点'
+        : currentNodeTier === 2 ? '二级节点'
+        : currentNodeTier === 3 ? '三级节点'
+        : '目前节点';
+      textEl.innerText = `⚡ 优化连接 (${tierLabel}${currentRealNodeCount})`;
     } else {
       textEl.innerText = `⚡ 优化连接`;
     }
@@ -4293,7 +4310,7 @@ function setClashValidationProgress(data) {
   const pct = total > 0 ? Math.min(100, Math.round(completed * 100 / total)) : 0;
   wrap.style.display = 'block';
   fill.style.width = pct + '%';
-  if (typeof data?.passed === 'number' && data.passed > 0) updateNodeCountUI(data.passed);
+  if (typeof data?.passed === 'number' && data.passed > 0) updateNodeCountUI(data.passed, data.tier);
   if (data && data.done) {
     setTimeout(() => {
       wrap.style.display = 'none';
@@ -4331,8 +4348,13 @@ async function optimizeConnections() {
   try {
     const res = await window.api.optimizeClash(currentUser.token);
     if (res.success) {
-      if (res.nodeCount) updateNodeCountUI(res.nodeCount);
-      showToast(res.message || '网络通道优化成功，已重新拉取配置并刷新网络通道！', 'success');
+      if (res.nodeCount) updateNodeCountUI(res.nodeCount, res.nodeTier);
+      const tierNotice = res.nodeTier === 2
+        ? `优秀节点较少，已自动放宽启用 ${res.nodeCount} 个二级连接节点`
+        : res.nodeTier === 3
+          ? `当前网络受限，已放宽启用 ${res.nodeCount} 个三级保底节点`
+          : (res.message || `网络通道优化成功（已优选 ${res.nodeCount || currentRealNodeCount} 个一级节点）`);
+      showToast(tierNotice, 'success');
     }
   } catch (err) {
     showToast('连接优化失败: ' + (err.message || '未知错误'), 'error');
@@ -4702,20 +4724,26 @@ async function refreshPluginsList() {
 
     container.innerHTML = plugins.map(p => {
       const isOk = p.installed && p.usable;
+      const isSsh = p.id === 'ssh';
       const statusBadge = isOk
         ? `<span style="background:rgba(16, 185, 129, 0.15); color:#10b981; border:1px solid rgba(16, 185, 129, 0.3); padding:0.25rem 0.6rem; border-radius:6px; font-size:0.8rem; font-weight:700; display:flex; align-items:center; gap:0.25rem;">✅ 已就绪 (v${escapeHtml(p.version)})</span>`
         : (p.installed
             ? `<span style="background:rgba(239, 68, 68, 0.15); color:#ef4444; border:1px solid rgba(239, 68, 68, 0.3); padding:0.25rem 0.6rem; border-radius:6px; font-size:0.8rem; font-weight:700; display:flex; align-items:center; gap:0.25rem;">⚠️ 依赖缺失或异常</span>`
-            : `<span style="background:rgba(156, 163, 175, 0.15); color:var(--text-muted); border:1px solid var(--border-color); padding:0.25rem 0.6rem; border-radius:6px; font-size:0.8rem; font-weight:600; display:flex; align-items:center; gap:0.25rem;">⭕ 未安装</span>`);
+            : `<span style="background:rgba(156, 163, 175, 0.15); color:var(--text-muted); border:1px solid var(--border-color); padding:0.25rem 0.6rem; border-radius:6px; font-size:0.8rem; font-weight:600; display:flex; align-items:center; gap:0.25rem;">⭕ ${isSsh ? '未安装启用' : '未安装'}</span>`);
 
-      const actionBtn = isOk
-        ? `<button class="btn btn-secondary" onclick="refreshPluginsList()" style="font-size:0.8rem; padding:0.35rem 0.8rem;">🔄 重新检测</button>`
-        : (p.installed
-            ? `<button class="btn btn-primary" onclick="handleInstallPlugin('${escapeHtml(p.id)}', this)" style="font-size:0.8rem; padding:0.35rem 0.8rem; background:linear-gradient(135deg, #f59e0b, #d97706); border:none;">🛠️ 修复并覆盖更新</button>`
-            : `<button class="btn btn-primary" onclick="handleInstallPlugin('${escapeHtml(p.id)}', this)" style="font-size:0.8rem; padding:0.35rem 0.8rem;">📥 立即下载并安装</button>`);
+      const actionBtn = isSsh
+        ? (isOk
+            ? `<button class="btn btn-primary" id="sshPluginOpenBtn" onclick="openSshPanel()" style="font-size:0.8rem; padding:0.35rem 0.85rem;">⚙️ 配置 SSH 连接 →</button>
+               <button class="btn btn-secondary" onclick="refreshPluginsList()" style="font-size:0.8rem; padding:0.35rem 0.8rem;">🔄 重新检测</button>`
+            : `<button class="btn btn-primary" id="sshPluginInstallBtn" onclick="handleInstallPlugin('ssh', this)" style="font-size:0.8rem; padding:0.35rem 0.85rem;">➕ 安装并启用扩展</button>`)
+        : (isOk
+            ? `<button class="btn btn-secondary" onclick="refreshPluginsList()" style="font-size:0.8rem; padding:0.35rem 0.8rem;">🔄 重新检测</button>`
+            : (p.installed
+                ? `<button class="btn btn-primary" onclick="handleInstallPlugin('${escapeHtml(p.id)}', this)" style="font-size:0.8rem; padding:0.35rem 0.8rem; background:#d97706; border:none;">🛠️ 修复并覆盖更新</button>`
+                : `<button class="btn btn-primary" onclick="handleInstallPlugin('${escapeHtml(p.id)}', this)" style="font-size:0.8rem; padding:0.35rem 0.8rem;">📥 立即下载并安装</button>`));
 
       return `
-        <div style="background:var(--bg-input); border:1px solid var(--border-color); border-radius:10px; padding:1.1rem 1.25rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+        <div data-plugin-id="${escapeHtml(p.id)}" style="background:var(--bg-input); border:1px solid var(--border-color); border-radius:10px; padding:1.1rem 1.25rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
           <div style="flex:1; min-width:240px;">
             <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.4rem; flex-wrap:wrap;">
               <span style="font-weight:700; font-size:0.95rem; color:var(--text-primary);">${escapeHtml(p.name)}</span>
@@ -4728,7 +4756,7 @@ async function refreshPluginsList() {
               ${p.path ? `<span style="margin-left:0.8rem;">路径: ${escapeHtml(p.path)}</span>` : ''}
             </div>
             ${p.errorDetail ? `<div style="margin-top:0.4rem; padding:0.4rem 0.6rem; background:rgba(239, 68, 68, 0.1); border-radius:4px; font-size:0.75rem; color:#ef4444; font-family:monospace; word-break:break-all;">报错原因: ${escapeHtml(p.errorDetail)}</div>` : ''}
-            ${p.internal ? '' : `<div style="display:flex; gap:0.5rem; margin-top:0.7rem; align-items:center; flex-wrap:wrap;">
+            ${p.internal || p.noCustomPath ? '' : `<div style="display:flex; gap:0.5rem; margin-top:0.7rem; align-items:center; flex-wrap:wrap;">
               <input id="pluginPath-${escapeHtml(p.id)}" type="text" placeholder="填写 ${escapeHtml(p.id === 'axel' ? 'axel' : p.id === 'curl' ? 'curl' : 'aria2c')} 可执行文件绝对路径" style="flex:1; min-width:260px; padding:0.5rem 0.65rem; font-size:0.78rem;">
               <button class="btn btn-secondary" onclick="handleSetPluginPath('${escapeHtml(p.id)}', this)" style="font-size:0.78rem; padding:0.4rem 0.7rem;">使用此路径</button>
             </div>`}
@@ -4753,16 +4781,17 @@ async function refreshPluginsList() {
 
 async function handleInstallPlugin(pluginId, btnEl) {
   if (!window.api || !window.api.installPlugin) return;
+  const isSsh = pluginId === 'ssh';
   const originalText = btnEl ? btnEl.innerHTML : '';
   if (btnEl) {
     btnEl.disabled = true;
-    btnEl.innerHTML = '⏳ 正在下载安装...';
+    btnEl.innerHTML = isSsh ? '⏳ 正在启用扩展...' : '⏳ 正在下载安装...';
   }
-  showToast('正在下载并配置插件...', 'info');
+  showToast(isSsh ? '正在校验内置 SSH 组件并启用扩展...' : '正在下载并配置插件...', 'info');
   try {
     const res = await window.api.installPlugin(pluginId);
     if (res && res.success) {
-      showToast('插件安装就绪并校验通过！', 'success');
+      showToast(isSsh ? 'SSH 远程连接扩展已启用，可点击配置使用！' : '插件安装就绪并校验通过！', 'success');
       await refreshPluginsList();
     } else {
       showToast('安装失败', 'error');
