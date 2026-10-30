@@ -19,7 +19,7 @@ function acquireWorker(start) {
 // Keep the logical task alive while paused: resume never creates a second
 // scheduler/billing task. Each run closes its files before another worker starts.
 function startNativeDownload(options, onEvent = () => {}) {
-  options = { ...options, connections: Math.max(1, Math.min(4, options.connections || 4)) };
+  options = { ...options, connections: Math.max(1, Math.min(16, options.connections || 8)) };
   let worker, timer, cancelWaiting, settled = false, state = 'running', cancelRequested = false;
   let resolveRun, rejectRun, resolvePause;
   const started = Date.now(), promise = new Promise((resolve, reject) => { resolveRun = resolve; rejectRun = reject; });

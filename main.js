@@ -2711,7 +2711,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           logStream.write(`引擎: ${engineForFile}\n\n`);
           activeDiagnosticStream = logStream;
           for (const line of pendingDiagnostics.splice(0)) logStream.write(line);
-          recordDiagnostic({ type: 'attempt-start', engine: engineForFile, attempt, requestedConnections: threads, actualConnectionLimit: engineForFile === 'aria2' ? Math.min(16, threads) : engineForFile === 'native' ? Math.min(4, threads) : threads });
+          recordDiagnostic({ type: 'attempt-start', engine: engineForFile, attempt, requestedConnections: threads, actualConnectionLimit: engineForFile === 'aria2' ? Math.min(16, threads) : engineForFile === 'native' ? Math.min(16, threads) : threads });
         } catch (logErr) {
           console.error('Failed to create download log stream:', logErr);
         }
@@ -2722,7 +2722,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         const isSftpProtocol = file.isSftp || String(file.url).startsWith('sftp://');
 
         if (engineForFile === 'native') {
-          const task = startNativeDownload({ url: file.url, filename: savePath, connections: Math.min(4, threads),
+          const task = startNativeDownload({ url: file.url, filename: savePath, connections: Math.min(16, threads),
             expectedSize: file.size || undefined,
             proxy: clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false }, data => {
             if (data.type === 'progress') event.sender.send('download-progress', { index: fileIndex, engine: 'native', ...data, speed: (data.speedBps / 1024).toFixed(1) + ' KB/s' });

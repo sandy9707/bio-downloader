@@ -35,7 +35,7 @@ async function measureDownloader({ url, axelBin, binary = axelBin, engine = 'axe
   let guard, proc, timer, stopped = false, received = 0;
   try {
     if (engine === 'native') {
-      nativeTask = startNativeDownload({ url, filename: path.join(dir, 'sample.bin'), proxy, connections: 4,
+      nativeTask = startNativeDownload({ url, filename: path.join(dir, 'sample.bin'), proxy, connections: 8,
         timeoutMs: Math.min(5000, duration(timeoutMs)) }, event => {
         if (event.type === 'progress') { const delta = Math.max(0, event.networkBytes - received); received = event.networkBytes; counter.add(delta); }
         if (received >= (Number(expectedSizeMB) || 200) * 1024 * 1024) stop();

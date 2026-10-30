@@ -1198,7 +1198,7 @@ function renderQueue() {
     if (lowPowerModeSetting) threads = Math.min(threads, 16);
     if (stableModeSetting) threads = 1;
 
-    const threadHint = stableModeSetting ? '<span style="color:#ef4444; font-weight:bold;">稳定模式 (1线程)</span>' : `${file.engine === 'native' ? 'BioDownloader' : file.engine === 'axel' ? 'Axel' : file.engine === 'curl' ? 'curl' : 'aria2'} · 最多 ${file.engine === 'native' ? Math.min(4, threads) : file.engine === 'axel' ? threads : Math.min(16, threads)} 连接`;
+    const threadHint = stableModeSetting ? '<span style="color:#ef4444; font-weight:bold;">稳定模式 (1线程)</span>' : `${file.engine === 'native' ? 'BioDownloader' : file.engine === 'axel' ? 'Axel' : file.engine === 'curl' ? 'curl' : 'aria2'} · 最多 ${file.engine === 'native' ? Math.min(16, threads) : file.engine === 'axel' ? threads : Math.min(16, threads)} 连接`;
 
     itemEl.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center;">

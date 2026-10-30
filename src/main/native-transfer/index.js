@@ -25,7 +25,7 @@ class NativeTransfer {
     // No implicit environment proxy and no direct fallback. The caller must
     // explicitly choose false or pass its existing Mihomo HTTP proxy object.
     if (options.proxy !== false && (!options.proxy || options.proxy.protocol !== 'http' || !options.proxy.host || !Number.isInteger(options.proxy.port))) throw new TransferError('PROXY_REQUIRED', '必须明确指定代理，或显式选择直连');
-    this.options = { connections: 4, blockSize: 4 * 1024 * 1024, timeoutMs: 60000, retryBudgetMs: 15 * 60000,
+    this.options = { connections: 8, blockSize: 4 * 1024 * 1024, timeoutMs: 60000, retryBudgetMs: 15 * 60000,
       retryBaseMs: 1000, retryMaxMs: 30000, progressIntervalMs: 250, lockStaleMs: 15000, onEvent: () => {}, ...options };
     integer(this.options.connections, 1, 16, '连接数'); integer(this.options.blockSize, 65536, 16 * 1024 * 1024, '分块大小');
     for (const key of ['timeoutMs', 'retryBudgetMs', 'retryBaseMs', 'retryMaxMs', 'progressIntervalMs']) integer(this.options[key], 1, 86400000, key);

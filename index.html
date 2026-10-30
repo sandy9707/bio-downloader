@@ -5,80 +5,98 @@
   <title>BioDownloader Pro - 生信数据多线程加速下载器</title>
   <style>
     /* ==========================================
-       【全局变量 & 主题设计】
+       【全局变量 & 主题设计 (Impeccable Operate Craft)】
        ========================================== */
     /* ---- 亮色主题 (默认) ---- */
     :root {
-      --bg-main: #f0f4f8;
+      --bg-main: #f4f6f9;
       --bg-sidebar: #ffffff;
-      --bg-card: rgba(255, 255, 255, 0.85);
+      --bg-secondary: #f8fafc;
+      --bg-card: #ffffff;
       --bg-input: #f8fafc;
-      --border-color: rgba(203, 213, 225, 0.8);
+      --border-color: #e2e8f0;
       --text-main: #0f172a;
-      --text-muted: #64748b;
-      --sidebar-border: rgba(226, 232, 240, 1);
-      --queue-item-bg: rgba(241, 245, 249, 0.8);
+      --text-muted: #475569;
+      --sidebar-border: #e2e8f0;
+      --queue-item-bg: #f8fafc;
       --progress-bar-bg: #e2e8f0;
-      --package-card-bg: rgba(248, 250, 252, 0.9);
+      --package-card-bg: #f8fafc;
       --modal-bg: #ffffff;
 
-      /* 语义化补充变量(修复多处未定义引用:传输卡片底色/子tab激活态/重试按钮/文本色等) */
+      /* 语义化补充变量 */
       --card-bg: #ffffff;
       --card-bg-selected: #eef2ff;
-      --primary-color: #4f46e5;
-      --primary: #4f46e5;
-      --primary-light: #6366f1;
+      --primary-color: #4338ca;
+      --primary: #4338ca;
+      --primary-light: #4338ca;
       --text-color: #334155;
       --text-primary: #0f172a;
 
-      /* 组件级语义变量(亮色为主,修复亮色下写死的深色值) */
-      --btn-secondary-bg: rgba(99, 102, 241, 0.08);
-      --btn-secondary-bg-hover: rgba(99, 102, 241, 0.16);
+      /* 组件级语义变量 */
+      --btn-secondary-bg: #ffffff;
+      --btn-secondary-bg-hover: #f1f5f9;
       --btn-disabled-bg: #e2e8f0;
-      --btn-disabled-text: #94a3b8;
+      --btn-disabled-text: #475569;
       --switch-track: #cbd5e1;
-      --surface-subtle: rgba(15, 23, 42, 0.035);
+      --surface-subtle: #f1f5f9;
       --code-bg: #f1f5f9;
       --code-text: #334155;
+      --card-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 1px 2px rgba(15, 23, 42, 0.02);
 
-      /* 渐变配色 */
-      --primary-grad: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-      --accent-grad: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
-      --success-grad: linear-gradient(135deg, #10b981 0%, #059669 100%);
-      --danger-grad: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+      /* 实色克制主色，去除廉价对角渐变 */
+      --primary-grad: #4338ca;
+      --accent-grad: #0369a1;
+      --success-grad: #047857;
+      --danger-grad: #b91c1c;
       
-      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --font-mono: "SF Mono", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace;
     }
 
     /* ---- 暗色主题 ---- */
     body.dark-mode {
-      --bg-main: #0b0f19;
-      --bg-sidebar: rgba(15, 23, 42, 0.95);
-      --bg-card: rgba(30, 41, 59, 0.45);
+      --bg-main: #0b0f17;
+      --bg-sidebar: #111827;
+      --bg-secondary: #0f172a;
+      --bg-card: #111827;
       --bg-input: #0f172a;
-      --border-color: rgba(51, 65, 85, 0.5);
-      --text-main: #f8fafc;
+      --border-color: #1f2937;
+      --text-main: #f1f5f9;
       --text-muted: #94a3b8;
-      --sidebar-border: rgba(51, 65, 85, 0.5);
-      --queue-item-bg: rgba(15, 23, 42, 0.4);
-      --progress-bar-bg: #1e293b;
-      --package-card-bg: rgba(15, 23, 42, 0.6);
-      --modal-bg: #1e293b;
-      --card-bg: rgba(30, 41, 59, 0.6);
-      --card-bg-selected: rgba(99, 102, 241, 0.18);
+      --sidebar-border: #1f2937;
+      --queue-item-bg: #0f172a;
+      --progress-bar-bg: #1f2937;
+      --package-card-bg: #0f172a;
+      --modal-bg: #111827;
+      --card-bg: #111827;
+      --card-bg-selected: rgba(99, 102, 241, 0.16);
       --primary-color: #818cf8;
       --primary: #6366f1;
       --primary-light: #a5b4fc;
       --text-color: #cbd5e1;
       --text-primary: #f8fafc;
-      --btn-secondary-bg: rgba(51, 65, 85, 0.5);
-      --btn-secondary-bg-hover: rgba(51, 65, 85, 0.7);
+      --btn-secondary-bg: #1e293b;
+      --btn-secondary-bg-hover: #334155;
       --btn-disabled-bg: #1e293b;
       --btn-disabled-text: #64748b;
-      --switch-track: #374151;
-      --surface-subtle: rgba(255, 255, 255, 0.04);
-      --code-bg: #0b0f19;
+      --switch-track: #334155;
+      --surface-subtle: #1e293b;
+      --code-bg: #0b0f17;
       --code-text: #cbd5e1;
+      --card-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+      --primary-grad: #4f46e5;
+      --accent-grad: #0369a1;
+      --success-grad: #047857;
+      --danger-grad: #b91c1c;
+    }
+
+    ::selection {
+      background: rgba(79, 70, 229, 0.18);
+      color: var(--text-primary);
+    }
+
+    input, textarea {
+      caret-color: var(--primary-color);
     }
 
     /* 滚动条主题化(细条 + 主题色,统一队列/传输/日志滚动区质感) */
@@ -112,69 +130,68 @@
        【左侧边栏 (Sidebar)】
        ========================================== */
     .sidebar {
-      width: 240px;
+      width: 236px;
       background: var(--bg-sidebar);
       border-right: 1px solid var(--sidebar-border);
       display: flex;
       flex-direction: column;
-      padding: 1.5rem;
+      padding: 1.25rem 1rem;
       flex-shrink: 0;
-      box-shadow: 2px 0 12px rgba(0,0,0,0.06);
-      transition: background 0.3s, border-color 0.3s;
+      transition: background 0.2s, border-color 0.2s;
     }
 
     .brand {
-      font-size: 1.3rem;
-      font-weight: 800;
-      background: linear-gradient(to right, #38bdf8, #818cf8);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      margin-bottom: 2rem;
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 1.5rem;
       text-align: center;
-      letter-spacing: 0.5px;
+      letter-spacing: -0.02em;
     }
 
     .nav-menu {
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: 0.25rem;
       flex-grow: 1;
     }
 
     .nav-item {
       display: flex;
       align-items: center;
-      padding: 0.85rem 1rem;
+      padding: 0.65rem 0.85rem;
       border-radius: 8px;
       cursor: pointer;
       color: var(--text-muted);
-      font-size: 0.95rem;
+      font-size: 0.9rem;
       font-weight: 500;
-      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: background-color 0.15s ease, color 0.15s ease;
     }
 
     .nav-item:hover {
-      background: rgba(99, 102, 241, 0.08);
+      background: var(--surface-subtle);
       color: var(--text-main);
     }
 
     .nav-item.active {
       background: var(--primary-grad);
-      color: white;
-      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
+      color: #ffffff;
+      font-weight: 600;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.14);
     }
 
     .accelerator-status-panel {
-      padding: 1rem;
-      background: var(--bg-card);
+      padding: 0.65rem 0.85rem;
+      background: var(--bg-secondary);
       border: 1px solid var(--border-color);
-      border-radius: 10px;
+      border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-top: 0.5rem;
-      font-size: 0.85rem;
-      transition: background 0.3s;
+      margin-top: 0.4rem;
+      font-size: 0.82rem;
+      font-weight: 500;
+      transition: background 0.2s;
     }
 
     .theme-toggle-btn {
@@ -183,23 +200,23 @@
       justify-content: center;
       gap: 0.4rem;
       width: 100%;
-      padding: 0.6rem;
+      padding: 0.55rem 0.75rem;
       border-radius: 8px;
       border: 1px solid var(--border-color);
-      background: var(--bg-card);
-      color: var(--text-muted);
+      background: var(--bg-secondary);
+      color: var(--text-color);
       cursor: pointer;
       font-size: 0.82rem;
       font-weight: 500;
       margin-top: auto;
-      margin-bottom: 0.5rem;
-      transition: all 0.2s;
+      margin-bottom: 0.4rem;
+      transition: background-color 0.15s, border-color 0.15s, color 0.15s;
     }
 
     .theme-toggle-btn:hover {
-      background: rgba(99, 102, 241, 0.1);
+      background: var(--btn-secondary-bg-hover);
       color: var(--text-main);
-      border-color: #6366f1;
+      border-color: var(--text-muted);
     }
 
     .status-indicator {
@@ -213,18 +230,18 @@
       height: 8px;
       border-radius: 50%;
       background: #ef4444;
-      box-shadow: 0 0 8px #ef4444;
-      transition: all 0.3s;
+      box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+      transition: background-color 0.2s, box-shadow 0.2s;
     }
 
     .dot.active {
       background: #10b981;
-      box-shadow: 0 0 10px #10b981;
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
     }
 
     .dot.warning {
       background: #f59e0b;
-      box-shadow: 0 0 10px #f59e0b;
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
     }
 
     /* Switch toggle */
@@ -364,39 +381,36 @@
        ========================================== */
     .card {
       background: var(--bg-card);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
       border: 1px solid var(--border-color);
-      border-radius: 12px;
-      padding: 1.5rem;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+      border-radius: 10px;
+      padding: 1.35rem 1.5rem;
+      box-shadow: var(--card-shadow);
     }
 
-    /* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V4 · component: source navigation · theme: existing BioDownloader · responsive: pass */
     .btn-group {
       display: inline-flex;
       flex-wrap: wrap;
       align-items: center;
-      gap: 0.35rem;
+      gap: 0.25rem;
       background: var(--bg-card);
       padding: 0.25rem;
       border-radius: 8px;
       border: 1px solid var(--border-color);
       align-self: flex-start;
       margin-bottom: 0;
-      transition: background 0.3s;
+      transition: background 0.2s;
     }
 
     .pill-btn {
-      padding: 0.45rem 1rem;
+      padding: 0.42rem 0.9rem;
       border-radius: 6px;
       border: none;
       background: transparent;
       color: var(--text-muted);
       cursor: pointer;
-      font-size: 0.85rem;
-      font-weight: 600;
-      transition: all 0.2s;
+      font-size: 0.84rem;
+      font-weight: 500;
+      transition: background-color 0.15s, color 0.15s;
       min-width: 0;
       flex: 0 0 auto;
       white-space: nowrap;
@@ -406,13 +420,13 @@
 
     .pill-btn:hover {
       color: var(--text-primary);
-      background: rgba(99, 102, 241, 0.08);
+      background: var(--surface-subtle);
     }
 
     .pill-btn.active {
       background: var(--primary-grad);
-      color: white;
-      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.2);
+      color: #ffffff;
+      font-weight: 600;
     }
 
     /* 下载中心顶行:常用数据源 + 引导式提取 固定排在同一行；二级数据源独立成第二行 */
@@ -421,12 +435,11 @@
     .extraction-entry {
       flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.45rem; white-space: nowrap;
       background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px;
-      padding: 0.45rem 1rem; cursor: pointer; color: var(--primary-color); font-weight: 700; font-size: 0.85rem;
-      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-      transition: border-color .2s, background .2s, transform .12s, box-shadow .12s;
+      padding: 0.45rem 0.95rem; cursor: pointer; color: var(--primary-color); font-weight: 600; font-size: 0.84rem;
+      transition: border-color .15s, background .15s;
     }
-    .extraction-entry:hover { border-color: var(--primary-color); background: var(--btn-secondary-bg-hover); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(79,70,229,0.15); }
-    .extraction-entry .ex-ico { font-size: 1rem; }
+    .extraction-entry:hover { border-color: var(--primary-color); background: var(--btn-secondary-bg-hover); }
+    .extraction-entry .ex-ico { font-size: 0.95rem; }
 
     .hub-secondary-row {
       margin-bottom: 0.75rem;
@@ -1233,10 +1246,10 @@
     @media (max-width:800px) { .engine-row { grid-template-columns:1fr; gap:0.65rem; } .settings-row { flex-wrap:wrap; } }
 
     /* ===== 引导式提取 User-Guided Extraction (2.0.0) ===== */
-    .extraction-module-card { display:flex; align-items:center; gap:1rem; padding:1.1rem 1.3rem; border-radius:14px; cursor:pointer;
-      background:linear-gradient(135deg, rgba(99,102,241,0.14), rgba(6,182,212,0.12)); border:1px solid rgba(99,102,241,0.35);
-      box-shadow:0 6px 20px rgba(79,70,229,0.12); transition:transform .15s, box-shadow .15s; }
-    .extraction-module-card:hover { transform:translateY(-2px); box-shadow:0 10px 26px rgba(79,70,229,0.22); }
+    .extraction-module-card { display:flex; align-items:center; gap:1rem; padding:1.1rem 1.3rem; border-radius:10px; cursor:pointer;
+      background:var(--bg-card); border:1px solid var(--border-color);
+      box-shadow:var(--card-shadow); transition:border-color .15s, background .15s; }
+    .extraction-module-card:hover { border-color:var(--primary-color); background:var(--surface-subtle); }
     .emc-icon { font-size:2rem; }
     .emc-body { flex:1; min-width:0; }
     .emc-title { font-size:1.05rem; font-weight:800; color:var(--text-primary); display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
@@ -1287,7 +1300,7 @@
       background:var(--code-bg); color:var(--code-text); font-family:monospace; font-size:.72rem; padding:.5rem; line-height:1.5; }
     .ex-run { width:100%; margin-top:.4rem; height:32px; font-size:.8rem; }
     /* 传输列表中的提取任务卡片 */
-    .transfer-item-ex { border-left:3px solid var(--primary-color); }
+    .transfer-item-ex { border-color: var(--primary-color); }
     @media (max-width: 900px) {
       .extraction-body { flex-direction:column; }
       .extraction-sidebar { width:100%; flex:0 0 auto; }
@@ -1318,12 +1331,12 @@
 
   <!-- 左侧边栏 -->
   <div class="sidebar">
-    <div class="brand" style="display: flex; flex-direction: column; align-items: center; gap: 0.25rem; justify-content: center; margin-bottom: 2rem;">
-      <div style="display: flex; align-items: center; gap: 0.5rem;">
-        <img src="logo.png" alt="Logo" style="height: 28px; width: 28px; border-radius: 6px; box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);">
-        <span style="font-size: 1.25rem; font-weight: 800; background: linear-gradient(to right, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 0.5px;">BioDownloader</span>
+    <div class="brand" style="display: flex; flex-direction: column; align-items: flex-start; gap: 0.2rem; justify-content: center; margin-bottom: 1.5rem; padding: 0 0.25rem;">
+      <div style="display: flex; align-items: center; gap: 0.55rem;">
+        <img src="logo.png" alt="Logo" style="height: 26px; width: 26px; border-radius: 6px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);">
+        <span style="font-size: 1.15rem; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em;">BioDownloader</span>
       </div>
-      <span id="sidebarVersion" style="font-size: 0.7rem; color: var(--text-muted); letter-spacing: 0.5px;">v-.-.-</span>
+      <span id="sidebarVersion" style="font-size: 0.72rem; color: var(--text-muted); font-family: var(--font-mono); padding-left: 2.15rem;">v-.-.-</span>
     </div>
     <div class="nav-menu">
       <div class="nav-item active" onclick="switchTab('download-hub')">下载中心</div>
@@ -1336,12 +1349,11 @@
     </div>
 
     <!-- 实时总速度展示面板 -->
-    <div class="global-speed-panel" style="margin-top: auto; margin-bottom: 0.5rem; padding: 0.7rem 1rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; display: flex; align-items: center; justify-content: space-between;">
-      <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.35rem;">
-        <span style="font-size: 0.9rem;">🚀</span>
+    <div class="global-speed-panel" style="margin-top: auto; margin-bottom: 0.4rem; padding: 0.6rem 0.85rem; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; display: flex; align-items: center; justify-content: space-between;">
+      <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.35rem; font-weight: 500;">
         <span>实时总速度</span>
       </div>
-      <span id="globalTotalSpeed" style="font-size: 0.95rem; font-weight: 800; color: #38bdf8; font-family: monospace;">0 B/s</span>
+      <span id="globalTotalSpeed" style="font-size: 0.88rem; font-weight: 700; color: var(--primary-color); font-family: var(--font-mono); font-variant-numeric: tabular-nums;">0 B/s</span>
     </div>
 
     <!-- 夜间模式切换按钮 -->
@@ -1363,7 +1375,7 @@
     </div>
 
     <!-- 优化连接 / 重置通道按钮 -->
-    <button class="btn btn-secondary" id="btnOptimizeConn" onclick="optimizeConnections()" style="width: 100%; margin-top: 0.5rem; font-size: 0.8rem; padding: 0.45rem 0.6rem; display: flex; align-items: center; justify-content: center; gap: 0.3rem; border-radius: 8px; background: rgba(99, 102, 241, 0.12); border: 1px solid rgba(99, 102, 241, 0.25); color: #818cf8; cursor: pointer; white-space: nowrap; overflow: hidden;">
+    <button class="btn btn-secondary" id="btnOptimizeConn" onclick="optimizeConnections()" style="width: 100%; margin-top: 0.4rem; font-size: 0.8rem; padding: 0.5rem 0.6rem; display: flex; align-items: center; justify-content: center; gap: 0.3rem; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--primary-color); cursor: pointer; white-space: nowrap; overflow: hidden;">
       <span id="btnOptimizeConnText">⚡ 优化连接</span>
     </button>
     <div id="clashValidationProgress" style="display:none; margin-top:0.45rem;">
