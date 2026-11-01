@@ -2203,6 +2203,13 @@
         这里是最近 7 天内您开启日志记录后捕获的 Axel 下载命令与报错输出。您可以将其上传给开发者，以便排查修复下载失败问题。
       </p>
       
+      <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.75rem;">
+        <button class="btn btn-secondary" onclick="localLogsList.forEach(log=>checkedLogFiles.add(log.name));renderLocalLogsTable(localLogsList)">全选</button>
+        <button class="btn btn-secondary" onclick="checkedLogFiles.clear();renderLocalLogsTable(localLogsList)">取消全选</button>
+        <button class="btn btn-primary" onclick="uploadCheckedLogs()">上传勾选日志</button>
+        <button class="btn btn-secondary" onclick="uploadCheckedLogs(30)">上传近30分钟错误日志</button>
+        <button class="btn btn-secondary" onclick="uploadCheckedLogs(1440)">上传近一天错误日志</button>
+      </div>
       <!-- 日志列表 -->
       <div style="max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.5rem; text-align: left; margin-bottom: 1rem;">
         <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">

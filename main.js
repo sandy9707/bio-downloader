@@ -1054,7 +1054,7 @@ async function startClash(token, sender) {
     const subUrl = `${BACKEND_BASE_URL}/speedup?token=${token}`;
     let response;
     try {
-      response = await axios.get(subUrl, { timeout: 10000, validateStatus: () => true });
+      response = await backendGet(subUrl, { timeout: 8000, retryAttempts: 3, validateStatus: () => true });
     } catch (netErr) {
       writeClashLog('[startClash] /speedup network error: ' + netErr.message);
       throw new Error('下载加速器启动失败：无法连接订阅服务器（' + netErr.message + '），请检查网络。');
@@ -1210,7 +1210,7 @@ async function optimizeClash(token, sender) {
   try {
     console.log('Optimizing Clash connections for token:', token);
     const subUrl = `${BACKEND_BASE_URL}/speedup?token=${token}`;
-    const response = await axios.get(subUrl, { timeout: 10000, validateStatus: () => true });
+    const response = await backendGet(subUrl, { timeout: 8000, retryAttempts: 3, validateStatus: () => true });
     if (response.status >= 400) {
       const body = typeof response.data === 'string' ? response.data.slice(0, 200) : '';
       const friendly = body.includes('Token 不存在') ? 'Token 不存在，请退出重新登录。'
@@ -2195,12 +2195,14 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
           }));
           return await Promise.all(subPromises);
         } else {
+          if (!/^SRR\d+$/i.test(acc)) throw new Error(`${acc} 暂未取得 ENA 文件列表，请稍后重试，不能自动构造 AWS SRA 地址`);
           // 回退 AWS SRA
           const url = `https://sra-pub-run-odp.s3.amazonaws.com/sra/${acc}/${acc}`;
           const size = await headRequestSize(url);
           return [{ name: acc, url, size }];
         }
       } catch (e) {
+        if (!/^SRR\d+$/i.test(acc)) throw new Error(`${acc} 的 ENA 文件查询失败：${e.message}；请重试检验下载大小`);
         // 回退 AWS SRA
         const url = `https://sra-pub-run-odp.s3.amazonaws.com/sra/${acc}/${acc}`;
         const size = await headRequestSize(url);
@@ -2533,7 +2535,18 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
 
     // 纵深防御:保存前再清洗一次文件名,杜绝任何来源的非法字符导致 Windows 建文件崩溃
     const safeName = sanitizePathSegment(file.name) || (`download_${Date.now()}`);
-    const savePath = path.join(fileDestFolder, safeName);
+    let savePath = path.join(fileDestFolder, safeName);
+    // A directory with the same basename is user data, not a partial file.
+    // Keep it untouched and use a stable filename so future retries resume it.
+    if (fs.existsSync(savePath) && fs.lstatSync(savePath).isDirectory()) {
+      const suffix = /^[SED]RR\d+$/i.test(safeName) ? '.sra' : '.download';
+      let candidate = path.join(fileDestFolder, safeName + suffix);
+      let n = 1;
+      while (fs.existsSync(candidate) && fs.lstatSync(candidate).isDirectory()) {
+        candidate = path.join(fileDestFolder, safeName + suffix + '.' + n++);
+      }
+      savePath = candidate;
+    }
 
     if (cancelledFiles.has(fileIndex)) {
       // 任务在排队期间已被用户取消:直接回传取消状态,不再起下载进程

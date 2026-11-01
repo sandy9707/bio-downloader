@@ -3461,6 +3461,27 @@ async function retryFailedDownload(index) {
   const oldFile = item.fileObj || {};
   const dir = oldFile.targetDir || item.targetDir || item.saveDir || defaultDir;
   if (!dir) return showToast('请先选择下载保存目录', 'error');
+  if (/^https:\/\/sra-pub-run-odp\.s3\.amazonaws\.com\/sra\/(ERR|DRR)\d+\//i.test(oldFile.url || item.url || '')) {
+    try {
+      const accession = (oldFile.url || item.url).split('/')[4];
+      const resolved = await window.api.checkSize('ebi_raw', accession);
+      if (!resolved?.length) throw new Error('ENA 未返回文件列表');
+      const files = resolved.map(source => ({ ...source, originalIndex: allocateTransferId(), targetDir: dir, status: 'waiting' }));
+      const pos = failedDownloads.indexOf(item);
+      if (pos < 0) return;
+      failedDownloads.splice(pos, 1);
+      activeDownloads.push(...files);
+      renderFailedList();renderDownloadingList();updateTransferCounts();switchTransferSubTab('downloading');
+      await window.api.startDownload(files, dir, currentUser.token, maxConcurrentDownloadsSetting);
+    } catch (error) {
+      if (!failedDownloads.includes(item)) {
+        failedDownloads.unshift(item);
+        renderFailedList();updateTransferCounts();
+      }
+      showToast('重新查询或启动 ENA 文件失败，原失败记录已保留：' + error.message, 'error');
+    }
+    return;
+  }
   const position = failedDownloads.indexOf(item);
   if (position < 0) return; // A second click must not queue the same failed record twice.
   failedDownloads.splice(position, 1);
@@ -4183,6 +4204,33 @@ async function toggleDeepIntegrityCheck(checked) {
 
 let localLogsList = [];
 let selectedLogFilename = '';
+const checkedLogFiles = new Set();
+let uploadingLogs = false;
+
+function toggleLogChecked(name, checked) {
+  if (checked) checkedLogFiles.add(name); else checkedLogFiles.delete(name);
+}
+
+async function uploadCheckedLogs(minutes) {
+  if (uploadingLogs || !currentUser) return;
+  uploadingLogs = true;
+  let uploaded = 0, failed = 0;
+  try {
+    const candidates = minutes ? localLogsList.filter(log => Date.now() - Number(log.time) <= minutes * 60000) : localLogsList.filter(log => checkedLogFiles.has(log.name));
+    for (const log of candidates) {
+      try {
+        const content = await window.api.readLogContent(log.name);
+        if (minutes && !/"(?:status|type)"\s*:\s*"(?:failed|failure)"|attempt-failed|下载失败|\b(?:ECONNRESET|EPROTO|ETIMEDOUT)\b/i.test(content)) continue;
+        const result = await window.api.uploadLogContent(currentUser.token, log.name, content);
+        if (!result?.success) throw new Error(result?.error || '上传失败');
+        uploaded++;
+      } catch (_) { failed++; }
+    }
+    showToast(`日志上传完成：成功 ${uploaded}，失败 ${failed}`, failed ? 'warning' : 'success');
+  } finally { uploadingLogs = false; }
+}
+window.toggleLogChecked = toggleLogChecked;
+window.uploadCheckedLogs = uploadCheckedLogs;
 
 async function openLogManagerModal() {
   document.getElementById('logManagerModal').style.display = 'flex';
@@ -4221,13 +4269,14 @@ function renderLocalLogsTable(list) {
     
     tr.innerHTML = `
       <td style="padding: 0.5rem; text-align: left; font-family: monospace; font-size: 0.8rem; word-break: break-all;">
-        ${log.name}<br>
+        <input type="checkbox" aria-label="选择日志" ${checkedLogFiles.has(log.name) ? 'checked' : ''} onchange="toggleLogChecked('${escapeJsArg(log.name)}',this.checked)">
+        ${escapeHtml(log.name)}<br>
         <span style="font-size: 0.7rem; color: var(--text-muted); font-family: inherit;">时间: ${timeStr}</span>
       </td>
       <td style="padding: 0.5rem; text-align: right; color: var(--text-muted);">${sizeKB}</td>
       <td style="padding: 0.5rem; text-align: center; white-space: nowrap;">
-        <button class="btn btn-secondary" style="font-size:0.75rem; padding: 0.2rem 0.4rem; margin-right: 0.25rem;" onclick="viewLocalLogDetail('${log.name}')">查看</button>
-        <button class="btn btn-danger" style="font-size:0.75rem; padding: 0.2rem 0.4rem;" onclick="deleteLocalLog('${log.name}')">删除</button>
+        <button class="btn btn-secondary" style="font-size:0.75rem; padding: 0.2rem 0.4rem; margin-right: 0.25rem;" onclick="viewLocalLogDetail('${escapeJsArg(log.name)}')">查看</button>
+        <button class="btn btn-danger" style="font-size:0.75rem; padding: 0.2rem 0.4rem;" onclick="deleteLocalLog('${escapeJsArg(log.name)}')">删除</button>
       </td>
     `;
     tbody.appendChild(tr);
@@ -4285,7 +4334,6 @@ async function uploadSelectedLog() {
     const res = await window.api.uploadLogContent(currentUser.token, selectedLogFilename, content);
     if (res.success) {
       showToast(res.message || '诊断日志已成功上报，非常感谢您的反馈！');
-      hideLogPreview();
     } else {
       showToast('日志上报失败: ' + (res.error || '未知错误'), 'error');
     }
