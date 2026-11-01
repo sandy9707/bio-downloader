@@ -131,13 +131,28 @@ function verifyPatchFile(filePath, expectedSha256, signatureB64) {
 
 // 简易 semver 比较: a>b 返回 1, a<b 返回 -1, 相等 0(按数字段比较,用于防降级)
 function compareVersions(a, b) {
-  const pa = String(a || '0').split('.').map((x) => parseInt(x, 10) || 0);
-  const pb = String(b || '0').split('.').map((x) => parseInt(x, 10) || 0);
+  const [ca, ra] = String(a || '0').split('+')[0].split('-');
+  const [cb, rb] = String(b || '0').split('+')[0].split('-');
+  const pa = ca.split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = cb.split('.').map((x) => parseInt(x, 10) || 0);
   const len = Math.max(pa.length, pb.length);
   for (let i = 0; i < len; i++) {
     const da = pa[i] || 0, db = pb[i] || 0;
     if (da > db) return 1;
     if (da < db) return -1;
+  }
+  if (ra === rb) return 0;
+  if (!ra) return 1;
+  if (!rb) return -1;
+  const aa = ra.split('.'), bb = rb.split('.');
+  for (let i = 0; i < Math.max(aa.length, bb.length); i++) {
+    if (aa[i] === bb[i]) continue;
+    if (aa[i] === undefined) return -1;
+    if (bb[i] === undefined) return 1;
+    const na = /^\d+$/.test(aa[i]), nb = /^\d+$/.test(bb[i]);
+    if (na && nb) return Number(aa[i]) > Number(bb[i]) ? 1 : -1;
+    if (na !== nb) return na ? -1 : 1;
+    return aa[i] > bb[i] ? 1 : -1;
   }
   return 0;
 }
@@ -2001,7 +2016,7 @@ ipcMain.handle('check-for-updates', async (event, { advancedMode } = {}) => {
         const pUrl = `${BACKEND_BASE_URL}/api/client/version?channel=P2`;
         const pRes = await backendGet(pUrl);
         const pv = pRes.data && pRes.data.version;
-        if (pv) {
+        if (pv && (!isPreviewClient || compareVersions(pv, latestVersion) > 0)) {
           preview = {
             version: pv,
             releaseNotes: pRes.data.releaseNotes || '',
