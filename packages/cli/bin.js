@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 const { program } = require('commander');
-const { BiodlServer } = require('./server');
 const os = require('os');
 const path = require('path');
 const https = require('https');
@@ -90,6 +89,7 @@ program
   .option('-p, --port <port>', 'Web 服务监听端口', 43280)
   .option('-h, --host <host>', '绑定网络地址 (默认 0.0.0.0 允许全网/局域网访问)', '0.0.0.0')
   .action(async (options) => {
+    const { BiodlServer } = require('./server');
     const server = new BiodlServer({
       host: options.host,
       port: parseInt(options.port, 10)
@@ -173,9 +173,16 @@ program
 program
   .command('get <type> <accession>')
   .description('快速解析并下载生信数据 (SRA / EBI / GEO / 直链)')
-  .option('-o, --output <dir>', '保存目录', path.join(os.homedir(), 'Downloads'))
+   .option('-o, --output <dir>', '保存目录', path.join(os.homedir(), process.platform === 'win32' ? 'Desktop' : 'Downloads'))
   .option('-c, --concurrent <number>', '并发下载数', 3)
   .action(async (type, accession, options) => {
+    if (process.platform === 'win32') {
+      const occupied = await new Promise(resolve => {
+        const socket = require('net').connect(43289, '127.0.0.1', () => { socket.destroy(); resolve(true); });
+        socket.on('error', () => resolve(false));
+      });
+      if (occupied) throw new Error('加速端口已被占用，请先关闭本机桌面客户端或其他 BioDownloader 命令，再启动 CLI 下载');
+    }
     const s = await main.callIpcHandler('get-settings');
     if (s.usageChoice !== 'accepted') {
       console.error('请先阅读使用声明：./biodl consent；确认后执行 ./biodl consent --accept。');
@@ -256,7 +263,7 @@ program
       });
       main.eventBus.on('download-status', (data) => {
         if (data.status === 'completed') console.log(`\n🎉 [已完成] ${data.fileName}`);
-        if (data.status === 'failed') console.log(`\n❌ [失败] ${data.fileName}: ${data.speed}`);
+        if (data.status === 'failed') { console.log(`\n❌ [失败] ${data.fileName}: ${data.speed}`); process.exitCode = 1; }
       });
 
       await main.callIpcHandler('start-download', {
@@ -268,6 +275,9 @@ program
 
     } catch (e) {
       console.error('下载出错:', e.message);
+      process.exitCode = 1;
+    } finally {
+      await main.callIpcHandler('clash-stop');
     }
   });
 
@@ -365,6 +375,15 @@ program.command('doctor').description('检查官方服务连通性；不读取�
     const result = await main.callIpcHandler('check-for-updates');
     if (result?.success) console.log('官方服务连接正常。若 Web 登录仍失败，请记录页面的具体报错；不要发送密码或 Token。');
     else { console.error(result?.message || '连接失败'); process.exitCode = 1; }
+  });
+
+program.command('optimize').description('重新测试本地线路并显示优选结果')
+  .action(async () => {
+    if (process.platform === 'win32') throw new Error('Windows 请使用 get 命令自动优选线路；独立 optimize 暂不支持与桌面共享端口');
+    const settings = await main.callIpcHandler('get-settings');
+    if (!settings.token) throw new Error('请先登录');
+    try { console.log(JSON.stringify(await main.callIpcHandler('clash-optimize', { token: settings.token }))); }
+    finally { await main.callIpcHandler('clash-stop'); }
   });
 
 program.parseAsync(process.argv).catch(error => { console.error('操作失败:', error.message); process.exitCode = 1; });

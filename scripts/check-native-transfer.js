@@ -30,7 +30,7 @@ const server = http.createServer((req, res) => {
   let offset = start;
   function send() {
     if (res.destroyed) return;
-    if (mode === 'hold') { timer = setTimeout(send, 50); return; }
+    if (mode === 'hold' || (mode === 'straggler' && index === 0 && !requests.some(r => r.start >= blockSize * 4 - 32))) { timer = setTimeout(send, 20); return; }
     const next = Math.min(end + 1, offset + (offset === start && mode === 'slow' ? 1024 : 16384)); const chunk = Buffer.from(data.subarray(offset, next)); if (mode === 'boundary' && start > 0 && offset === start) chunk[0] ^= 1; res.write(chunk); offset = next;
     if (offset === end + 1) res.end(); else timer = setTimeout(send, mode === 'slow' ? 15 + index % 3 : 1);
   }
@@ -76,6 +76,12 @@ const deadline = setTimeout(() => { console.error('NATIVE_TEST_TIMEOUT'); child?
     assert(requests.filter(r => r.end > r.start).every(r => r.ifMatch === etag));
     assert(!fs.existsSync(path.join(temp, '并行.bin.biodl-part')));
   });
+  await test('healthy slots continue while first block waits for a later request', async () => {
+    reset('straggler');
+    await task('straggler.bin', { timeoutMs: 2000, connections: 4 }).run();
+    equalFile('straggler.bin');
+    assert(requests.some(r => r.start >= blockSize * 4 - 32));
+  });
   await test('interrupted publication cleans only its own verified hardlink', async () => {
     reset();await task('publication.bin').run();const output=path.join(temp,'publication.bin'),part=output+'.biodl-part';
     // Recreate the exact filesystem state between publishing and removing part.
@@ -86,11 +92,24 @@ const deadline = setTimeout(() => { console.error('NATIVE_TEST_TIMEOUT'); child?
   });
   await test('five resets per block recover automatically; no three-error whole-file abort', async () => {
     reset('reset'); const events = []; await task('reset.bin', { onEvent: e => events.push(e) }).run(); equalFile('reset.bin');
-    assert(events.some(e => e.type === 'retry' && e.attempt >= 5)); assert(events.some(e => e.type === 'retry' && e.connections === 1));
+    assert(events.some(e => e.type === 'retry' && e.attempt >= 5)); assert(events.some(e => e.type === 'retry' && e.connections < 4));
   });
   await test('429 throttling and timeout recover on the same route', async () => {
     reset('busy'); await task('busy.bin').run(); equalFile('busy.bin');
     reset('stall'); await task('stall.bin', { timeoutMs: 80 }).run(); equalFile('stall.bin');
+  });
+  await test('correlated resets reduce once; throttling still halves concurrency', async () => {
+    const t = task('policy.bin', { connections: 16 });
+    t.limit = 16;
+    let count = 0;
+    await Promise.all(Array.from({ length: 4 }, () => {
+      let first = true;
+      return t.retry(async () => { if (first) { first = false; count++; throw Object.assign(new Error('reset'), { code: 'ECONNRESET' }); } });
+    }));
+    assert.equal(count, 4);assert.equal(t.limit, 15);
+    t.lastBackoffAt = 0;let first = true;
+    await t.retry(async () => { if (first) { first = false; throw Object.assign(new Error('limited'), { code: 'HTTP_429', retryable: true }); } });
+    assert.equal(t.limit, 7);
   });
   await test('clean pause quickly resumes only missing blocks', async () => {
     const done = await pausePartial('pause.bin'); reset(); const events = [];

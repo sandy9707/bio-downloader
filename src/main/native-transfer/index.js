@@ -34,6 +34,7 @@ class NativeTransfer {
     this.sourceKey = digest(this.url); this.completed = new Map(); this.anchors = new Map(); this.active = new Map(); this.controllers = new Set();
     this.stop = new AbortController(); this.running = false; this.limit = Math.min(4, this.options.connections);
     this.confirmedBytes = 0; this.networkBytes = 0; this.lastNetworkBytes = 0; this.lastTick = Date.now(); this.goodBlocks = 0;
+    this.lastBackoffAt = 0;
     this.httpAgent = new http.Agent({ keepAlive: true, maxSockets: this.options.connections });
     this.httpsAgent = new https.Agent({ keepAlive: true, maxSockets: this.options.connections });
   }
@@ -60,7 +61,15 @@ class NativeTransfer {
       catch (error) {
         this.check();
         if (!error.retryable && !transientCodes.has(error.code)) throw error;
-        this.limit = Math.max(1, Math.floor(this.limit / 2)); this.goodBlocks = 0;
+        // Correlated failures must not repeatedly halve every connection in one
+        // outage. Explicit throttling is stronger evidence than a single reset.
+        const now = Date.now();
+        if (!this.lastBackoffAt || now - this.lastBackoffAt >= 3000) {
+          this.limit = Math.max(1, error.code === 'HTTP_429' || error.code === 'HTTP_503'
+            ? Math.floor(this.limit / 2) : this.limit - 1);
+          this.lastBackoffAt = now;
+          this.goodBlocks = 0;
+        }
         const backoff = Math.min(this.options.retryMaxMs, this.options.retryBaseMs * 2 ** Math.min(attempt, 10));
         const waitMs = Math.max(Math.round(backoff * (0.8 + Math.random() * 0.4)), error.retryAfterMs || 0);
         if (Date.now() - started + waitMs > this.options.retryBudgetMs) throw new TransferError('NETWORK_WAIT', '连接持续不可用，已保留断点；网络恢复后可继续', { resumable: true, cause: error });
@@ -249,19 +258,26 @@ class NativeTransfer {
       this.safeToSeal = true;
       timer = setInterval(() => this.progress(), this.options.progressIntervalMs);
       const pending = Array.from({ length: this.blockCount }, (_, i) => i).filter(i => !this.completed.has(i));
-      // Bounded waves avoid a worker retaining an old, excessive concurrency
-      // setting after a node fails. Other healthy blocks can still finish.
-      for (let offset = 0; offset < pending.length;) {
-        this.check(); const wave = pending.slice(offset, offset + this.limit); offset += wave.length;
-        const results = await Promise.allSettled(wave.map(async index => {
-          try { await this.piece(index); }
-          catch (e) {
-            if (!this.stoppedByUser && !this.fatal) this.fatal = e;
-            this.stop.abort(); for (const c of this.controllers) c.abort(); throw e;
+      // Continuously refill slots: a slow/retrying block cannot hold all healthy
+      // workers at a wave barrier. A reduced limit drains existing work naturally.
+      const inFlight = new Set();
+      let offset = 0;
+      while (offset < pending.length || inFlight.size) {
+        if (!this.stop.signal.aborted && !this.fatal) {
+          while (offset < pending.length && inFlight.size < this.limit) {
+            const index = pending[offset++];
+            let job;
+            job = this.piece(index).catch(error => {
+              if (!this.stoppedByUser && !this.fatal) this.fatal = error;
+              this.stop.abort(); for (const c of this.controllers) c.abort();
+            }).finally(() => inFlight.delete(job));
+            inFlight.add(job);
           }
-        }));
-        this.check(); const rejected = results.find(r => r.status === 'rejected'); if (rejected) throw rejected.reason;
+        }
+        if (!inFlight.size) break;
+        await Promise.race(inFlight);
       }
+      this.check();
       this.check();
       if (this.completed.size !== this.blockCount || (await this.data.stat()).size !== this.meta.size) throw new TransferError('NOT_COMPLETE', '仍有未提交分块');
       // A final conditional probe catches changed generations; no whole-file MD5 pass.

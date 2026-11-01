@@ -1,5 +1,5 @@
 const { backendGet } = require('./src/main/backend-request');
-const isElectron = Boolean(process.versions && process.versions.electron);
+const isElectron = Boolean(process.versions && process.versions.electron) && process.env.BIODL_HEADLESS !== '1';
 let electron = {};
 try {
   if (isElectron) electron = require('electron');
@@ -309,7 +309,7 @@ ipcMain.on('flush-transfers-history', (event, data) => {
 // 【文件路径管理】
 // ==========================================
 // 针对打包和开发环境，获取 bin 资源文件夹的路径
-const BIN_DIR = (app.isPackaged && process.resourcesPath)
+const BIN_DIR = ((app.isPackaged || process.env.BIODL_HEADLESS === '1') && process.resourcesPath)
   ? path.join(process.resourcesPath, 'bin')
   : path.join(__dirname, 'bin');
 
