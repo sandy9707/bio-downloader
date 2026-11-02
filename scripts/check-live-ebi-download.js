@@ -27,7 +27,7 @@ const timer = setTimeout(() => { console.error('Live ENA download exceeded 20 mi
   assert.ok(file.url.startsWith('http://ftp.sra.ebi.ac.uk/'));
   await engine.callIpcHandler('start-download', { files: [{ ...file, originalIndex: 1 }], targetDir: path.join(temp, 'files'), token: 'test-no-account', maxConcurrent: 1 });
   assert.equal(final?.status, 'completed', JSON.stringify(final));
-  assert.equal(final.engine, 'native');
+  assert.equal(final.engine, 'aria2', 'release gate exercises the default download engine');
   assert.equal(final.verification.method, 'quick', 'automatic full MD5 remains controlled by user setting');
   assert.equal(final.verification.transport.status, 'range-verified');
   assert.equal(final.verification.transport.boundaries, 'overlap-checked');
