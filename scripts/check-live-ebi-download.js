@@ -30,7 +30,9 @@ const timer = setTimeout(() => { console.error('Live ENA download exceeded 20 mi
   assert.equal(final.engine, 'aria2', 'release gate exercises the default download engine');
   assert.equal(final.verification.method, 'quick', 'automatic full MD5 remains controlled by user setting');
   assert.equal(final.verification.transport.status, 'sampled', 'aria2 source guard must finish its independent samples');
-  assert.equal(final.verification.transport.boundaries, 'overlap-checked');
+  assert.equal(final.verification.transport.rangesChecked, true);
+  assert(final.verification.transport.sampleCount > 0);
+  assert(final.verification.transport.sampledBytes > 0);
   const hash = crypto.createHash('md5');
   for await (const bytes of fs.createReadStream(final.savePath)) hash.update(bytes);
   const actualMd5 = hash.digest('hex');
