@@ -2502,6 +2502,17 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
   if (!Array.isArray(files) || !files.length) throw new Error('下载队列为空，请先检验链接生成任务');
   if (typeof targetDir !== 'string' || !targetDir) throw new Error('请先选择下载保存目录');
   if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+  const staging = getSettings().stagingEnabled ? getSettings().stagingDir : null;
+  if (getSettings().stagingEnabled && !staging) throw new Error('请在设置中指定中转目录');
+  if (staging) {
+    fs.mkdirSync(staging, { recursive: true });
+    const available = await require('./src/main/staging-delivery').available(staging);
+    if (files.some(file => !file.isUpdate && !(Number(file.size) > 0))) throw new Error('中转模式需要先检验文件大小，再开始下载');
+    const largest = Math.max(...files.map(file => Number(file.size) || 0));
+    if (available < largest + 64 * 1048576) throw new Error('中转空间不足以容纳单个最大文件及安全余量');
+    const a = fs.statSync(staging), b = fs.statSync(targetDir);
+    if (a.dev === b.dev && available < files.reduce((n,f)=>n+(Number(f.size)||0),0) + largest + 64*1048576) throw new Error('中转与最终目录位于同一磁盘，需要同时容纳最终文件和复制中的文件');
+  }
 
   // Existing allocated data does not need to be reserved a second time.
   const { additionalSpace } = require('./src/main/download-space');
@@ -2526,7 +2537,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     event.sender.send('download-status', data);
   }
   const MAX_RETRIES = 3;
-  const maxConcurrentCount = Math.max(1, parseInt(maxConcurrent, 10) || 3);
+  const maxConcurrentCount = staging ? 1 : Math.max(1, parseInt(maxConcurrent, 10) || 3);
   const actualConcurrentCount = Math.max(1, Math.min(maxConcurrentCount, files.length));
   const lowPowerMode = Boolean(getSettings().lowPowerMode);
   const stableMode = Boolean(getSettings().stableMode);
@@ -2576,6 +2587,14 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       return;
     }
 
+    const finalSavePath = savePath;
+    const usingStaging = Boolean(staging && !file.isUpdate && !downloadFiles.hasResume(finalSavePath) && !fs.existsSync(finalSavePath));
+    if (usingStaging) {
+      const key = require('crypto').createHash('sha256').update(finalSavePath + '\n' + file.url).digest('hex');
+      fileDestFolder = path.join(staging, key);
+      fs.mkdirSync(fileDestFolder, { recursive: true });
+      savePath = path.join(fileDestFolder, safeName);
+    }
     let bioGuard = null;
     let nativeResult = null;
     let diagnosticLogPath = null, activeDiagnosticStream = null;
@@ -2591,6 +2610,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     let verification = null, releaseFile = null, backupPath = file.backupPath || null;
     let engineForFile, axelBin, deepForFile = deepIntegrityCheck || Boolean(file.redownloadMismatch || file.backupPath);
     try {
+    if (usingStaging && await require('./src/main/staging-delivery').available(staging) < Number(file.size) + 64*1048576) throw new Error('中转剩余空间不足，已保留断点');
     releaseFile = downloadFiles.claimFile(savePath);
     const knownMismatch = await downloadFiles.priorMismatch(savePath, file.url);
     if (!downloadFiles.hasResume(savePath) && (file.redownloadMismatch || knownMismatch)) {
@@ -2690,6 +2710,13 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       if (localStats.isFile() && file.size > 0 && localStats.size === Number(file.size)) {
         try {
           await checkIntegrity(true);
+          if (usingStaging) {
+            activeIntegrityChecks.set(fileIndex, { wake: () => {} });
+            try { await require('./src/main/staging-delivery').deliver(savePath, finalSavePath, checkControl); }
+            finally { activeIntegrityChecks.delete(fileIndex); }
+            savePath = finalSavePath;
+            await downloadFiles.persistVerification(savePath, file.url, verification);
+          }
           sendStatus({
             index: fileIndex, fileName: file.name, status: 'completed', percentage: 100, savePath,
             speed: verification.status === 'verified' ? 'MD5 与参考值一致(跳过)' : verification.status === 'mismatch' ? '已保留（MD5 与参考值不一致，跳过）' : verification.status === 'unavailable' ? '已存在（MD5 未核验，跳过）' : '快速检查通过(跳过)',
@@ -3256,6 +3283,15 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
     }
 
     if (downloadSuccess) {
+      if (usingStaging) {
+        sendStatus({ index: fileIndex, status: 'downloading', phase: 'delivering', savePath, speed: '正在交付到最终目录…' });
+        activeIntegrityChecks.set(fileIndex, { wake: () => {} });
+        try { await require('./src/main/staging-delivery').deliver(savePath, finalSavePath, checkControl); }
+        finally { activeIntegrityChecks.delete(fileIndex); }
+        savePath = finalSavePath;
+        await downloadFiles.persistVerification(savePath, file.url, verification);
+        nativeResult = null;
+      }
       pausedAxelFiles.delete(fileIndex); // 任务成功后清理暂停/取消标记,防止残留影响后续同下标任务
       cancelledFiles.delete(fileIndex);
       if (!file.isUpdate && !nativeResult?.receiptAccounts?.includes(nativeReceiptKey(token))) {

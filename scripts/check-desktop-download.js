@@ -120,6 +120,21 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
     return result;
   })()`);
   assert.deepEqual(controls,{top:'flex',bottom:'flex',page:2,jumps:2,staleSpeed:'0 B/s'});
+  const queueCheck=await win.webContents.executeJavaScript(`(()=>{
+    currentQueue=Array.from({length:1501},(_,i)=>({name:'q'+i,url:'https://example.test/'+i,size:100}));
+    renderQueue();const first=document.querySelectorAll('#queueList .queue-item').length;
+    queueSelection(true);changeQueuePage(2);selectQueueItem(50,true);removeQueueSelected();
+    return {first,remaining:currentQueue.length,cards:document.querySelectorAll('#queueList .queue-item').length};
+  })()`);
+  assert.deepEqual(queueCheck,{first:50,remaining:1450,cards:50});
+  console.log('ELECTRON_QUEUE_1500_OK',JSON.stringify(queueCheck));
+  await win.webContents.executeJavaScript(`window.api.saveSettings({stagingEnabled:true,stagingDir:${JSON.stringify(path.join(dir,'stage'))}})`);
+  const staged={name:'staged.bin',url:`http://127.0.0.1:${server.address().port}/stage`,size:bytes.length,originalIndex:777};
+  await win.webContents.executeJavaScript(`window.api.startDownload([${JSON.stringify(staged)}],${JSON.stringify(path.join(dir,'external'))},'fixture',3)`);
+  assert.deepEqual(fs.readFileSync(path.join(dir,'external','staged.bin')),bytes);
+  const stagingRoot=path.join(dir,'stage');
+  assert(fs.readdirSync(stagingRoot).every(folder=>!fs.existsSync(path.join(stagingRoot,folder,'staged.bin'))));
+  console.log('ELECTRON_STAGING_END_TO_END_OK');
   console.log('ELECTRON_PAGINATION_STALL_OK',JSON.stringify(controls));
  console.log('ELECTRON_PROGRESS_OK',JSON.stringify(displayed));
  console.log('ELECTRON_SMOKE',JSON.stringify({mode,state,errors,charges}));

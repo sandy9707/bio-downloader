@@ -1171,7 +1171,26 @@ async function checkSizes() {  const input = document.getElementById('accInput-'
   }
 }
 
+let queuePage = 1;
+async function saveStagingSettings() {
+  const enabled=document.getElementById('settingsStagingToggle').checked;
+  const dir=document.getElementById('settingsStagingDir').value.trim();
+  document.getElementById('stagingOptions').hidden=!enabled;
+  await window.api.saveSettings({stagingEnabled:enabled,stagingDir:dir});
+}
+async function chooseStagingDir() {
+  const dir=await window.api.selectDirectory();if(!dir)return;
+  document.getElementById('settingsStagingDir').value=dir;await saveStagingSettings();
+}
+window.saveStagingSettings=saveStagingSettings;window.chooseStagingDir=chooseStagingDir;
+const queueSelected = new Set();
+function changeQueuePage(page) { queuePage = Math.max(1, Math.min(Math.ceil(currentQueue.length / 50) || 1, Number(page) || 1));renderQueue(); }
+function selectQueueItem(index, checked) { const file = currentQueue[index];if (checked) queueSelected.add(file);else queueSelected.delete(file); }
+function queueSelection(all) { currentQueue.slice((queuePage-1)*50,queuePage*50).forEach(file=>all?queueSelected.add(file):queueSelected.delete(file));renderQueue(); }
+function removeQueueSelected() { currentQueue=currentQueue.filter(file=>!queueSelected.has(file));queueSelected.clear();renderQueue(); }
+window.changeQueuePage=changeQueuePage;window.selectQueueItem=selectQueueItem;window.queueSelection=queueSelection;window.removeQueueSelected=removeQueueSelected;
 function renderQueue() {
+  for (const file of queueSelected) if (!currentQueue.includes(file)) queueSelected.delete(file);
   const listEl = document.getElementById('queueList');
   listEl.innerHTML = '';
 
@@ -1180,7 +1199,12 @@ function renderQueue() {
     return;
   }
 
-  currentQueue.forEach((file, index) => {
+  queuePage=Math.min(queuePage,Math.ceil(currentQueue.length/50)||1);
+  const controls=document.createElement('div');
+  controls.innerHTML=`<button onclick="queueSelection(true)">全选本页</button> <button onclick="queueSelection(false)">取消本页</button> <button onclick="removeQueueSelected()">移除选中</button> <button onclick="changeQueuePage(${queuePage-1})" ${queuePage<=1?'disabled':''}>上一页</button> ${queuePage}/${Math.ceil(currentQueue.length/50)} <button onclick="changeQueuePage(${queuePage+1})" ${queuePage*50>=currentQueue.length?'disabled':''}>下一页</button>`;
+  listEl.appendChild(controls);
+  currentQueue.slice((queuePage-1)*50,queuePage*50).forEach((file, position) => {
+    const index=(queuePage-1)*50+position;
     const itemEl = document.createElement('div');
     itemEl.className = 'queue-item';
     itemEl.id = `queue-item-${index}`;
@@ -1211,6 +1235,7 @@ function renderQueue() {
 
     itemEl.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center;">
+        <input type="checkbox" aria-label="选择下载项目" ${queueSelected.has(file)?'checked':''} onchange="selectQueueItem(${index},this.checked)">
         <div class="item-meta" style="flex-grow:1;">
           ${index === editingIndex
             ? `<input id="rename-input-${index}" class="rename-input" style="font-size:0.95rem;padding:2px 6px;border-radius:4px;border:1px solid var(--primary);background:rgba(255,255,255,0.1);color:inherit;width:100%;" value="${escapeHtml(file.name)}" onkeydown="if(event.key==='Enter'){commitRename(${index});}else if(event.key==='Escape'){cancelRename();}" onblur="commitRename(${index})" />`
@@ -1241,6 +1266,7 @@ function renderQueue() {
     `;
     listEl.appendChild(itemEl);
   });
+  listEl.appendChild(controls.cloneNode(true));
 }
 
 // ==========================================
@@ -1259,7 +1285,7 @@ async function startDownload() {
   // Capture before any asynchronous connection work or navigation. Keep unique
   // transfer IDs so old pause/cancel flags cannot affect a new batch.
   const dir = defaultDir, token = currentUser.token;
-  const queue = currentQueue.filter(file => !activeDownloads.some(task =>
+  const queue = currentQueue.filter(file => (typeof queueSelected === 'undefined' || !queueSelected.size || queueSelected.has(file)) && !activeDownloads.some(task =>
     task.url === file.url && task.name === file.name && task.targetDir === dir));
   if (!queue.length) return showToast('这些文件已在传输列表，请在那里继续或恢复下载', 'info');
   const totalBytes = queue.reduce((sum, file) => sum + (Number(file.size) || 0), 0);
@@ -3853,6 +3879,10 @@ async function initTransfersAndSettings(settings) {
   if (stableModeToggle) stableModeToggle.checked = stableModeSetting;
   const deepIntegrityToggle = document.getElementById('settingsDeepIntegrityToggle');
   if (deepIntegrityToggle) deepIntegrityToggle.checked = Boolean(settings && settings.deepIntegrityCheck);
+  const stagingToggle=document.getElementById('settingsStagingToggle');
+  if(stagingToggle) stagingToggle.checked=Boolean(settings.stagingEnabled);
+  const stagingOptions=document.getElementById('stagingOptions');if(stagingOptions)stagingOptions.hidden=!settings.stagingEnabled;
+  const stagingPath=document.getElementById('settingsStagingDir');if(stagingPath)stagingPath.value=settings.stagingDir||'';
   for (const [group, value] of Object.entries({ http: 'aria2', bio: 'inherit', ftp: 'aria2', sftp: 'aria2', ftps: 'curl', ...settings?.downloadEngines })) {
     const select = document.getElementById('engine-' + group); if (select) select.value = value;
   }
