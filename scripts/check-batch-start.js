@@ -11,7 +11,7 @@ function harness(startDownload) {
     ensureTransferConnection: async()=>true, allocateTransferId:()=>++id, formatBytes:String,
     switchTab:tab=>calls.push(tab), switchTransferSubTab(){}, renderDownloadingList(){}, updateTransferCounts(){}, refreshUserInfo:async()=>{},
     showToast:(...m)=>messages.push(m) });
-  vm.runInContext(source.slice(source.indexOf('async function startDownload()'),source.indexOf('async function cancelDownload()')),context);
+  vm.runInContext(source.slice(source.indexOf('async function startDownload('),source.indexOf('let desktopSubmission')),context);
   return {context,elements,messages,calls};
 }
 (async()=>{

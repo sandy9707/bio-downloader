@@ -50,6 +50,7 @@ async function validateAndSaveToken(input) {
 }
 
 function promptInput(question, hidden = false) {
+  if (!process.stdin.isTTY) return Promise.reject(new Error('当前终端不支持交互登录，请从官网设置复制 biodl auth TOKEN 命令，或使用 ssh -t 交互终端'));
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     if (hidden && process.stdin.isTTY) {
@@ -68,7 +69,8 @@ function promptInput(question, hidden = false) {
 
 function privateIpv4Addresses() {
   const values = [];
-  for (const list of Object.values(os.networkInterfaces())) {
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    if (/^(docker|veth|br-|virbr|tun|tap|lo|wg|tailscale)/i.test(name)) continue;
     for (const item of list || []) {
       if (item.family === 'IPv4' && !item.internal) values.push(item.address);
     }
@@ -108,7 +110,11 @@ program
 请在 Windows / macOS / Linux 电脑的 Chrome 或 Edge 地址栏中打开：
 🏠 内网访问 : ${localUrls.length ? localUrls.join('\n             ') : '未检测到内网 IPv4，请执行 hostname -I 查看'}
 🌍 外网访问 : 请使用服务器提供商提供的地址，并确认安全组/防火墙放行端口（不自动查询公网 IP）
-💻 本机访问 : http://127.0.0.1:${port}
+💻 仅服务器本机访问 : http://127.0.0.1:${port}
+
+远程电脑不能把127.0.0.1或0.0.0.0当作服务器IP。若服务器端口不能开放，请在自己的电脑执行：
+ssh -N -L 43280:127.0.0.1:${port} 用户名@服务器地址
+保持该SSH窗口开启，再在自己电脑浏览器打开 http://127.0.0.1:43280
 
 IP 是服务器地址，端口是冒号后的数字 ${port}。请把完整的 http://IP:${port} 输入浏览器地址栏，不要在 Xshell/X-Share 的文件管理器中打开。
 ============================================================
@@ -188,12 +194,8 @@ program
       if (occupied) throw new Error('加速端口已被占用，请先关闭本机桌面客户端或其他 BioDownloader 命令，再启动 CLI 下载');
     }
     const s = await main.callIpcHandler('get-settings');
-    if (s.usageChoice !== 'accepted') {
-      console.error('请先阅读使用声明：./biodl consent；确认后执行 ./biodl consent --accept。');
-      process.exitCode = 1; return;
-    }
     if (!s.token) {
-      console.error('❌ 尚未登录，请先执行 ./biodl login -u 用户名 -p 密码，或 ./biodl auth TOKEN');
+      console.error('尚未登录，请执行 biodl auth TOKEN；也可交互运行 biodl login');
       process.exit(1);
     }
 
@@ -379,6 +381,24 @@ program.command('paths').description('显示程序、配置及默认下载目录
       console.log(`引擎 ${plugin.id}: ${plugin.internal ? '内置 JavaScript / Worker' : (plugin.path || '未找到可执行程序')} (${plugin.usable ? '就绪' : '不可用'})`);
     }
     if (data === appDir || data.startsWith(appDir + path.sep)) console.log('注意：当前 BIODL_DATA_DIR 位于程序目录内。删除程序前请先备份并迁移此目录，然后更新环境变量。');
+  });
+
+function desktopProfile() {
+  return process.env.BIODL_DESKTOP_DATA_DIR || (process.platform === 'win32'
+    ? path.join(process.env.APPDATA, 'bio-downloader') : process.platform === 'darwin'
+      ? path.join(os.homedir(), 'Library', 'Application Support', 'bio-downloader')
+      : path.join(os.homedir(), '.config', 'bio-downloader'));
+}
+program.command('gui-status').description('查询同账户运行中GUI的传输状态')
+  .action(async () => {
+    try { console.log(JSON.stringify(await require('../../src/main/desktop-command').callDesktop(desktopProfile(), 'status'), null, 2)); }
+    catch (e) { console.error(e.message);process.exitCode = 1; }
+  });
+program.command('gui-get <type> <accession>').description('把下载任务提交给运行中的GUI，不另启动下载内核')
+  .option('-o, --output <dir>', '最终保存目录', process.platform === 'win32' ? 'Z:\\11' : path.join(os.homedir(), 'Downloads'))
+  .action(async (type, accession, options) => {
+    try { console.log(JSON.stringify(await require('../../src/main/desktop-command').callDesktop(desktopProfile(), 'submit', { type, accession, output: path.resolve(options.output) }), null, 2)); }
+    catch (e) { console.error(e.message);process.exitCode = 1; }
   });
 program.command('doctor').description('检查官方服务连通性；不读取账号密码，不检测网络类型')
   .action(async () => {

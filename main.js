@@ -633,6 +633,51 @@ app.whenReady().then(() => {
   ensureBinaries();
   ensureClashDataFiles();
   createWindow();
+  const remoteFile = path.join(app.getPath('userData'), 'desktop-control-state.json');
+  let remoteState;
+  try { remoteState = JSON.parse(fs.readFileSync(remoteFile,'utf8')); } catch (_) { remoteState = { id: require('crypto').randomUUID(), seen: [] }; }
+  const saveRemote = () => fs.writeFileSync(remoteFile, JSON.stringify(remoteState), { mode: 0o600 });
+  saveRemote();
+  let pollingDesktop = false, remoteNextPoll = 0, remoteFailures = 0;
+  const remoteTimer = setInterval(async () => {
+    if (pollingDesktop || Date.now()<remoteNextPoll || !getSettings().desktopRemoteEnabled || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isLoading()) return;
+    const token = getSettings().token;if (!token) return;
+    pollingDesktop = true;
+    try {
+      const snapshot = await mainWindow.webContents.executeJavaScript('desktopCommandStatus()');
+      if (!snapshot) return;
+      if (remoteState.lastError) snapshot.remoteCommandError=remoteState.lastError;
+      snapshot.active = snapshot.active.slice(0,50);
+      if (snapshot.submission?.accession) snapshot.submission.accession = snapshot.submission.accession.slice(0,1000);
+      const response = await axios.post(`${BACKEND_BASE_URL}/api/desktop-control/${remoteState.id}/heartbeat`, { name: os.hostname(), snapshot, ack: remoteState.ack }, { headers: { Authorization: 'Bearer ' + token }, proxy: false, timeout: 8000 });
+      remoteFailures=0;
+      const command = response.data?.command;
+      if (command?.id && !remoteState.seen.includes(command.id)) {
+        if (snapshot.busy) return; // keep queued command for a later heartbeat
+        // Persist claim before dispatch: reconnect cannot create a duplicate task.
+        // Crash at this boundary is reported as claimed, never silently replayed.
+        remoteState.seen = [...remoteState.seen.slice(-99),command.id];remoteState.ack={id:command.id};saveRemote();
+        try { await mainWindow.webContents.executeJavaScript(`acceptDesktopCommand(${JSON.stringify(command)})`); }
+        catch(error) { remoteState.lastError={id:command.id,message:error.message};saveRemote(); }
+      } else if (command?.id) { remoteState.ack={id:command.id};saveRemote(); }
+    } catch (error) {
+      remoteNextPoll=Date.now()+Math.min(120000,10000*2**Math.min(4,remoteFailures++));
+      console.warn('网页设备控制暂不可用:', error.message);
+    }
+    finally { pollingDesktop = false; }
+  }, 10000);
+  app.once('will-quit', () => clearInterval(remoteTimer));
+  const desktopCommand = require('./src/main/desktop-command');
+  desktopCommand.startDesktopCommand({ directory: app.getPath('userData'),
+    submit: payload => {
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isLoading()) throw new Error('桌面尚未准备完成');
+      return mainWindow.webContents.executeJavaScript(`acceptDesktopCommand(${JSON.stringify(payload)})`);
+    },
+    status: () => {
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isLoading()) throw new Error('桌面尚未准备完成');
+      return mainWindow.webContents.executeJavaScript('desktopCommandStatus()');
+    }
+  }).then(bridge => app.once('will-quit', () => bridge.close())).catch(error => console.error('CLI桌面桥接未启动:', error.message));
   setupExtractionBrowser(); // 2.0.0 引导式提取:初始化内置浏览器分区会话/下载拦截/资源嗅探
   buildAppMenu();           // 应用菜单:File 含「添加链接 / 打开引导式提取」
 
@@ -1460,6 +1505,7 @@ async function headRequestSize(url) {
 
   const tryGetSizeFromHeaders = (headers) => {
     if (!headers) return 0;
+    if (/text\/html|application\/xml|text\/xml/i.test(headers['content-type'] || '')) return 0;
     // 优先 content-range(Range 请求会带 /总大小,content-length 此时只是分段长度,如 2B)
     if (headers['content-range']) {
       const match = headers['content-range'].match(/\/(\d+)$/);
@@ -1477,7 +1523,7 @@ async function headRequestSize(url) {
 
   // 校验大小只需极小的 HEAD / Range 请求, 直连通常远快于绕代理(代理走单节点延迟高,实测 4.7s vs 直连 0.9s)。
   // 因此顺序: 直连优先 → 代理兜底(加速器开启时, 若直连被墙/失败才走代理)。
-  const directOptions = { timeout: 10000, maxRedirects: 5 };            // 无 proxy = 直连
+  const directOptions = { timeout: 10000, maxRedirects: 5, proxy: false };
   const proxyOptions = { timeout: 10000, maxRedirects: 5,
     proxy: clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false };
 
@@ -1494,10 +1540,7 @@ async function headRequestSize(url) {
     const sz = tryGetSizeFromHeaders(res.headers);
     if (sz > 0) return sz;
   } catch (e) {
-    if (e.response && e.response.headers) {
-      const sz = tryGetSizeFromHeaders(e.response.headers);
-      if (sz > 0) return sz;
-    }
+    // An HTTP error body's Content-Length is not the requested file size.
   }
 
   // ---- 代理兜底路径 (直连失败/被墙时) ----
@@ -1513,10 +1556,7 @@ async function headRequestSize(url) {
     const sz = tryGetSizeFromHeaders(res.headers);
     if (sz > 0) return sz;
   } catch (e) {
-    if (e.response && e.response.headers) {
-      const sz = tryGetSizeFromHeaders(e.response.headers);
-      if (sz > 0) return sz;
-    }
+    // Keep unknown size rather than recording a 199-byte 403 error page.
   }
 
   return 0;
@@ -2536,7 +2576,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     if (['completed', 'failed', 'cancelled', 'paused'].includes(data.status)) outcomes.set(data.index, data);
     event.sender.send('download-status', data);
   }
-  const MAX_RETRIES = 3;
+  const MAX_RETRIES = 4; // initial attempt plus at most three network retries
   const maxConcurrentCount = staging ? 1 : Math.max(1, parseInt(maxConcurrent, 10) || 3);
   const actualConcurrentCount = Math.max(1, Math.min(maxConcurrentCount, files.length));
   const lowPowerMode = Boolean(getSettings().lowPowerMode);
@@ -2552,6 +2592,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
 
   async function downloadSingleFile(file, fileIndex) {
     if (cancelled) return;
+    const directDownload = file.networkMode === 'direct';
 
     let fileDestFolder;
     if (file.isUpdate) {
@@ -2690,7 +2731,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
         sendStatus({ index: fileIndex, fileName: file.name, status: 'downloading', phase: 'verifying', speed: '正在核对源文件与断点…', savePath });
         bioGuard = await createBioTransferGuard({
           url: guardedUrl, filename: savePath, expectedSize: file.size, engine: engineForFile,
-          proxy: clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false,
+          proxy: !directDownload && clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false,
           checkControl,
           isPaused: () => pausedAxelFiles.has(fileIndex),
           onDiagnostic: recordDiagnostic,
@@ -2747,7 +2788,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     let preservePartialFile = false;
 
     const env = { ...process.env };
-    if (clashProcess !== null) {
+    if (!directDownload && clashProcess !== null) {
       env.http_proxy = 'http://127.0.0.1:43289';
       env.https_proxy = 'http://127.0.0.1:43289';
       env.all_proxy = 'http://127.0.0.1:43289';
@@ -3028,7 +3069,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
         if (engineForFile === 'native') {
           const task = startNativeDownload({ url: file.url, filename: savePath, connections: Math.min(16, threads),
             expectedSize: file.size || undefined,
-            proxy: clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false }, data => {
+            proxy: !directDownload && clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false }, data => {
             if (data.type === 'progress') event.sender.send('download-progress', { index: fileIndex, engine: 'native', ...data, connectionLimit: Math.min(16, threads), speed: (data.speedBps / 1024).toFixed(1) + ' KB/s' });
             if (data.type === 'state' && data.phase !== 'paused') sendStatus({ index: fileIndex, status: 'downloading', phase: data.phase === 'checking-local' ? 'verifying' : 'connecting', savePath,
               speed: data.phase === 'checking-local' ? '正在核对本地断点分块…' : data.phase === 'waiting-lock' ? '正在等待上次下载释放文件锁…' : '正在连接下载源…' });
@@ -3242,10 +3283,18 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
             await prepareGuard(); attempt = 0;
           } else { preservePartialFile = true; break; }
         }
-        if (bioGuard?.error) { preservePartialFile = true; break; }
+        if (bioGuard?.error) {
+          const failure = bioGuard.error;
+          const transient = failure.cause?.retryable || ['ECONNRESET','ECONNREFUSED','ECONNABORTED','ETIMEDOUT','EAI_AGAIN','EPIPE','EPROTO','ERR_STREAM_PREMATURE_CLOSE'].includes(failure.code);
+          if (transient && attempt < MAX_RETRIES && !cancelled && !cancelledFiles.has(fileIndex) && !pausedAxelFiles.has(fileIndex)) {
+            await bioGuard.close();bioGuard=null;
+            await prepareGuard();
+          } else { preservePartialFile = true; break; }
+        }
         if (lastErrorMsg === 'Cancelled' || lastErrorMsg === 'Paused' || cancelledFiles.has(fileIndex)) {
           break; // 被取消/暂停时立即中断重试循环(暂停须保留断点,重试会破坏语义)
         }
+        if (/ENOSPC|EACCES|EPERM|UNSAFE_PATH|磁盘.*不足|status code (?:400|401|403|404|410)|HTTP (?:400|401|403|404|410)/i.test(lastErrorMsg)) break;
       } finally {
         // end() only schedules flushing. Wait for the Windows file handle to
         // close before this attempt is reported finished or another one starts.
@@ -3294,7 +3343,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       }
       pausedAxelFiles.delete(fileIndex); // 任务成功后清理暂停/取消标记,防止残留影响后续同下标任务
       cancelledFiles.delete(fileIndex);
-      if (!file.isUpdate && !nativeResult?.receiptAccounts?.includes(nativeReceiptKey(token))) {
+      if (!file.isUpdate && !directDownload && !nativeResult?.receiptAccounts?.includes(nativeReceiptKey(token))) {
         try {
           // 上报【实际下载字节数】(落盘文件大小)而非预估 file.size——直链未知大小时 file.size=0 会漏计;
           // 更新包(isUpdate)与"检验下载大小"均不走此处,故只有真实数据下载计费,与服务端 /speedup 闸门统一。

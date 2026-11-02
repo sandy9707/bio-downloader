@@ -1272,7 +1272,7 @@ function renderQueue() {
 // ==========================================
 // 【加速下载调度逻辑】
 // ==========================================
-async function startDownload() {
+async function startDownload(direct = false) {
   if (isDownloading) return;
   if (!currentUser) {
     showToast('请登录账户后开始下载，未登录无法连接代理加速', 'error');
@@ -1290,7 +1290,7 @@ async function startDownload() {
   if (!queue.length) return showToast('这些文件已在传输列表，请在那里继续或恢复下载', 'info');
   const totalBytes = queue.reduce((sum, file) => sum + (Number(file.size) || 0), 0);
   const remaining = currentUser.trafficLimit - currentUser.trafficConsumed;
-  if (remaining < totalBytes) {
+  if (!direct && remaining < totalBytes) {
     showToast(`您的额度不足！剩余流量: ${formatBytes(remaining)}，所需流量: ${formatBytes(totalBytes)}，请充值后下载`, 'error');
     switchTab('store-tab');
     return;
@@ -1304,10 +1304,10 @@ async function startDownload() {
   try {
     document.getElementById('checkSizeBtn').disabled = true;
     document.getElementById('downloadBtn').disabled = true;
-    if (!(await ensureTransferConnection())) return;
+    if (!direct && !(await ensureTransferConnection())) return;
     for (const file of queue) {
       file.originalIndex = allocateTransferId();
-      const task = { ...file, targetDir: dir, percentage: 0, status: 'waiting', speed: '排队中...' };
+      const task = { ...file, networkMode: direct ? 'direct' : file.networkMode, targetDir: dir, percentage: 0, status: 'waiting', speed: direct ? '直连排队中（不扣加速流量）' : '排队中...' };
       batch.push(task);
     }
     activeDownloads.push(...batch);
@@ -1349,6 +1349,45 @@ async function startDownload() {
     document.getElementById('downloadBtn').disabled = !currentQueue.length;
     try { await refreshUserInfo(); } catch (_) {}
   }
+}
+
+let desktopSubmission = null;
+function desktopCommandStatus() {
+  return { busy: isDownloading || desktopSubmission?.state === 'preparing', submission: desktopSubmission, active: activeDownloads.map(item => ({ id: item.originalIndex, name: item.name, status: item.status, speed: item.speed, percentage: item.percentage, savePath: item.savePath })), completed: completedDownloads.length, failed: failedDownloads.length };
+}
+function acceptDesktopCommand(request) {
+  if (!['ebi','sra','geo','links'].includes(request.type) || typeof request.accession!=='string' || request.accession.length>12000 || typeof request.output!=='string' || !request.output.trim()) throw new Error('无效远程下载任务');
+  if (!/^(?:[A-Za-z]:[\\/]|\/|\\\\)/.test(request.output)) throw new Error('请指定绝对保存路径');
+  if (!currentUser?.token) throw new Error('请先在GUI登录');
+  if (isDownloading || desktopSubmission?.state === 'preparing') throw new Error('GUI正在处理一批任务，请等待或先暂停');
+  const id = 'cli-' + Date.now();
+  desktopSubmission = { id, state: 'preparing', type: request.type, accession: request.accession, output: request.output };
+  const token = currentUser.token;
+  isDownloading = true;
+  const batch = [];
+  (async () => {
+    try {
+      const types = { ebi: 'ebi_raw', sra: 'sra_raw', geo: 'geo_suppl', links: 'links' };
+      const files = await window.api.checkSize(types[request.type], request.accession);
+      if (!files?.length) throw new Error('未解析到下载文件');
+      if (!(await ensureTransferConnection())) throw new Error('GUI加速器未连接');
+      for (const file of files) batch.push({ ...file, originalIndex: allocateTransferId(), targetDir: request.output, status: 'waiting', percentage: 0, speed: 'CLI提交 · 排队中' });
+      activeDownloads.push(...batch);
+      syncTransfersToStorage();
+      renderDownloadingList();updateTransferCounts();switchTab('transfers-tab');switchTransferSubTab('downloading');
+      desktopSubmission.state = 'downloading';
+      const result = await window.api.startDownload(batch, request.output, token, maxConcurrentDownloadsSetting);
+      for (const outcome of result?.outcomes || []) handleDownloadStatus(outcome);
+      desktopSubmission.state = result?.cancelled ? 'cancelled' : 'finished';
+    } catch (error) {
+      desktopSubmission.state = 'failed';desktopSubmission.error = error.message;
+      for (const task of batch) if (activeDownloads.includes(task) && task.status === 'waiting') { task.status = 'paused';task.startupError = error.message; }
+      showToast('CLI提交失败：' + error.message, 'error');
+    } finally {
+      isDownloading = false;syncTransfersToStorage();renderDownloadingList();updateTransferCounts();
+    }
+  })();
+  return { accepted: true, id, message: '已交给GUI处理；用gui-status查询解析或下载结果' };
 }
 
 async function cancelDownload() {
@@ -3483,7 +3522,7 @@ async function ensureTransferConnection() {
 
 async function retryFailedDownload(index) {
   const item = failedDownloads[index];
-  if (!item || !(await ensureTransferConnection())) return;
+  if (!item || (item.networkMode !== 'direct' && item.fileObj?.networkMode !== 'direct' && !(await ensureTransferConnection()))) return;
   const oldFile = item.fileObj || {};
   const dir = oldFile.targetDir || item.targetDir || item.saveDir || defaultDir;
   if (!dir) return showToast('请先选择下载保存目录', 'error');
@@ -3492,7 +3531,7 @@ async function retryFailedDownload(index) {
       const accession = (oldFile.url || item.url).split('/')[4];
       const resolved = await window.api.checkSize('ebi_raw', accession);
       if (!resolved?.length) throw new Error('ENA 未返回文件列表');
-      const files = resolved.map(source => ({ ...source, originalIndex: allocateTransferId(), targetDir: dir, status: 'waiting' }));
+      const files = resolved.map(source => ({ ...source, networkMode: oldFile.networkMode || item.networkMode, originalIndex: allocateTransferId(), targetDir: dir, status: 'waiting' }));
       const pos = failedDownloads.indexOf(item);
       if (pos < 0) return;
       failedDownloads.splice(pos, 1);
@@ -3536,7 +3575,7 @@ async function retryFailedDownload(index) {
 }
 
 async function retryAllFailedDownloads() {
-  if (!failedDownloads.length || !(await ensureTransferConnection())) return;
+  if (!failedDownloads.length) return;
   const selected = [...selectedTransferKeys.failed].filter(item => failedDownloads.includes(item));
   const queue = selected.length > 0 ? selected : [...failedDownloads];
   selectedTransferKeys.failed.clear();
@@ -3610,7 +3649,7 @@ async function resumeTransferFile(fileId) {
     showToast('请先选择下载的保存目标路径', 'error');
     return;
   }
-  if (!(await ensureTransferConnection())) return;
+  if (file.networkMode !== 'direct' && !(await ensureTransferConnection())) return;
   file.status = 'waiting';
   delete file.startupError;
   file.speed = '准备恢复...';
@@ -3879,6 +3918,7 @@ async function initTransfersAndSettings(settings) {
   if (stableModeToggle) stableModeToggle.checked = stableModeSetting;
   const deepIntegrityToggle = document.getElementById('settingsDeepIntegrityToggle');
   if (deepIntegrityToggle) deepIntegrityToggle.checked = Boolean(settings && settings.deepIntegrityCheck);
+  const remoteToggle=document.getElementById('desktopRemoteToggle');if(remoteToggle)remoteToggle.checked=Boolean(settings.desktopRemoteEnabled);
   const stagingToggle=document.getElementById('settingsStagingToggle');
   if(stagingToggle) stagingToggle.checked=Boolean(settings.stagingEnabled);
   const stagingOptions=document.getElementById('stagingOptions');if(stagingOptions)stagingOptions.hidden=!settings.stagingEnabled;
@@ -3966,7 +4006,7 @@ function handleDownloadStatus(data) {
         folder: activeItem.folder,
         type: activeItem.type,
         md5: activeItem.md5, verification: activeItem.verification, engine: activeItem.engine, backupPath: activeItem.backupPath,
-        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir, redownloadMismatch: activeItem.redownloadMismatch, backupPath: activeItem.backupPath }
+        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir, redownloadMismatch: activeItem.redownloadMismatch, backupPath: activeItem.backupPath, networkMode: activeItem.networkMode }
       };
       completedDownloads = completedDownloads.filter(item => !savePath || transferPathKey(item.savePath) !== transferPathKey(savePath));
       completedDownloads.unshift(completedItem);
@@ -3984,7 +4024,7 @@ function handleDownloadStatus(data) {
         folder: activeItem.folder,
         type: activeItem.type,
         savePath: savePath || '', md5: activeItem.md5, verification: activeItem.verification, engine: activeItem.engine, backupPath: activeItem.backupPath,
-        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir, redownloadMismatch: activeItem.redownloadMismatch, backupPath: activeItem.backupPath }
+        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir, redownloadMismatch: activeItem.redownloadMismatch, backupPath: activeItem.backupPath, networkMode: activeItem.networkMode }
       };
       failedDownloads.unshift(failedItem);
       activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);
@@ -4273,11 +4313,14 @@ function closeLogManagerModal() {
 }
 
 async function loadLocalLogsList() {
+  const table=document.getElementById('localLogsTableBody');
+  if(table)table.innerHTML='<tr><td colspan="3">正在读取日志…</td></tr>';
   try {
     localLogsList = await window.api.getLogsList();
     renderLocalLogsTable(localLogsList);
   } catch (err) {
     console.error('Failed to load local logs:', err);
+    if(table)table.innerHTML='<tr><td colspan="3">读取失败：'+escapeHtml(err.message)+' <button onclick="loadLocalLogsList()">重试</button></td></tr>';
   }
 }
 

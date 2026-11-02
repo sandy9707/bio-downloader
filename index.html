@@ -1491,6 +1491,7 @@
         <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
           <button class="btn btn-primary" id="checkSizeBtn" onclick="checkSizes()">检验下载大小</button>
           <button class="btn btn-success" id="downloadBtn" onclick="startDownload()" disabled>开始加速下载</button>
+          <button class="btn btn-secondary" id="directDownloadBtn" onclick="startDownload(true)" title="不经过应用加速器，不扣加速流量；速度取决于本地网络和源站">直连下载（不扣加速流量）</button>
           <button class="btn btn-danger" id="cancelBtn" onclick="cancelDownload()" style="display:none;">取消下载</button>
         </div>
       </div>
@@ -1998,6 +1999,10 @@
             <input id="settingsStagingDir" aria-label="中转目录" placeholder="指定稳定磁盘上的中转目录" onchange="saveStagingSettings()">
             <button class="btn btn-secondary" onclick="chooseStagingDir()">选择中转目录</button>
           </div>
+        </div>
+        <div class="form-group" style="margin-top:1.5rem;">
+          <label><input type="checkbox" id="desktopRemoteToggle" onchange="window.api.saveSettings({desktopRemoteEnabled:this.checked})"> 允许官网控制这台电脑的下载</label>
+          <p class="settings-hint">登录GUI并启用后，可在官网设置中选择本机、提交下载和查看状态。数据直接下载到本机；退出GUI后离线。</p>
         </div>
         <!-- 下载诊断日志 -->
         <div class="form-group" style="margin-top:1.5rem;">

@@ -3,7 +3,7 @@ const root=process.cwd(),appRoot=process.env.BIODL_TEST_ASAR?path.resolve(proces
 fs.mkdirSync(process.env.BIODL_DATA_DIR,{recursive:true});fs.writeFileSync(path.join(process.env.BIODL_DATA_DIR,'settings.json'),JSON.stringify({loggingEnabled:true,token:null,usageChoice:'accepted'}));
 const {app,BrowserWindow,ipcMain,session}=require('electron');app.setAppPath(appRoot);app.getVersion=()=>require(path.join(appRoot,'package.json')).version;
 if(appRoot!==root){Object.defineProperty(app,'isPackaged',{value:true});Object.defineProperty(process,'resourcesPath',{value:path.dirname(appRoot)});assert.equal(process.resourcesPath,path.dirname(appRoot));}
-const axios=require(path.join(appRoot,'node_modules/axios/dist/node/axios.cjs'));axios.get=async()=>({data:{success:false,error:'Offline test fixture'}});let charges=0;axios.post=async(url)=>{assert(url.endsWith('/api/user/consume'));charges++;return {data:{success:true}}};
+const axios=require(path.join(appRoot,'node_modules/axios/dist/node/axios.cjs'));axios.get=async()=>({data:{success:false,error:'Offline test fixture'}});let charges=0,remoteCommand=null,remoteAck=false;axios.post=async(url,body)=>{if(url.includes('/api/desktop-control/')){if(body.ack?.id===remoteCommand?.id){remoteAck=true;return {data:{success:true,command:null}};}return {data:{success:true,command:remoteCommand}};}assert(url.endsWith('/api/user/consume'));charges++;return {data:{success:true}}};
 const mode='fixed';
 require(path.join(appRoot,'main.js'));
 ipcMain.removeHandler('clash-status');ipcMain.handle('clash-status',()=>true);
@@ -135,6 +135,29 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
   const stagingRoot=path.join(dir,'stage');
   assert(fs.readdirSync(stagingRoot).every(folder=>!fs.existsSync(path.join(stagingRoot,folder,'staged.bin'))));
   console.log('ELECTRON_STAGING_END_TO_END_OK');
+  const bridgeApi=require(path.join(appRoot,'src/main/desktop-command'));
+  for(let i=0;i<50&&!fs.existsSync(path.join(process.env.BIODL_DATA_DIR,'desktop-command.json'));i++)await new Promise(r=>setTimeout(r,100));
+  const guiDir=path.join(dir,'cli-visible');
+  const receipt=await bridgeApi.callDesktop(process.env.BIODL_DATA_DIR,'submit',{type:'links',accession:`http://127.0.0.1:${server.address().port}/bridge`,output:guiDir});
+  assert.equal(receipt.accepted,true);
+  let shared;
+  for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,100));shared=await bridgeApi.callDesktop(process.env.BIODL_DATA_DIR,'status');if(['finished','failed'].includes(shared.submission?.state))break;}
+  assert.equal(shared.submission.state,'finished',JSON.stringify(shared));
+  assert.equal(await win.webContents.executeJavaScript(`completedDownloads.some(item=>item.savePath&&item.savePath.startsWith(${JSON.stringify(guiDir)}))`),true);
+  console.log('ELECTRON_CLI_GUI_SHARED_OK',JSON.stringify({accepted:receipt.accepted,state:shared.submission.state,completed:shared.completed}));
+  const remoteDir=path.join(dir,'website-visible');
+  remoteCommand={id:crypto.randomUUID(),type:'links',accession:`http://127.0.0.1:${server.address().port}/website`,output:remoteDir};
+  await win.webContents.executeJavaScript(`window.api.saveSettings({desktopRemoteEnabled:true,token:'fixture'})`);
+  for(let i=0;i<250&&!remoteAck;i++)await new Promise(r=>setTimeout(r,100));
+  assert.equal(remoteAck,true,'desktop polling must acknowledge website command');
+  assert.equal(await win.webContents.executeJavaScript(`completedDownloads.some(item=>item.savePath&&item.savePath.startsWith(${JSON.stringify(remoteDir)}))`),true);
+  await win.webContents.executeJavaScript('window.api.saveSettings({desktopRemoteEnabled:false})');
+  console.log('ELECTRON_WEBSITE_GUI_SHARED_OK');
+  const beforeDirectCharges=charges;
+  await win.webContents.executeJavaScript(`(async()=>{await window.api.saveSettings({stagingEnabled:false});currentQueue=[{name:'direct.bin',url:'http://127.0.0.1:${server.address().port}/direct',size:32768}];queueSelected.clear();const oldQuota=currentUser.trafficLimit;currentUser.trafficLimit=0;try{await startDownload(true);}finally{currentUser.trafficLimit=oldQuota;}})()`);
+  assert.equal(charges,beforeDirectCharges,'explicit direct download must not consume acceleration traffic');
+  assert.equal(await win.webContents.executeJavaScript(`completedDownloads.some(item=>item.name==='direct.bin')`),true);
+  console.log('ELECTRON_DIRECT_NO_CONSUME_OK');
   console.log('ELECTRON_PAGINATION_STALL_OK',JSON.stringify(controls));
  console.log('ELECTRON_PROGRESS_OK',JSON.stringify(displayed));
  console.log('ELECTRON_SMOKE',JSON.stringify({mode,state,errors,charges}));

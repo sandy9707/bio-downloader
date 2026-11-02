@@ -19,9 +19,13 @@
 
   // 1. 登录会话建立后连接 SSE，避免匿名访问下载任务事件。
   let sse = null;
+  let connectedSid = null;
   function connectSse() {
-    if (sse) sse.close();
     const sid = localStorage.getItem('biodl_session');
+    if (!sid) { if(sse)sse.close();sse=null;connectedSid=null;return; }
+    if (sse && connectedSid === sid && sse.readyState !== 2) return;
+    if (sse) sse.close();
+    connectedSid = sid;
     const sseUrl = sid ? `/api/events?sid=${encodeURIComponent(sid)}` : '/api/events';
     sse = new EventSource(sseUrl);
     sse.addEventListener('update-download-progress', (e) => {
@@ -156,21 +160,36 @@
     const savedSid = localStorage.getItem('biodl_session');
     if (savedSid) headers['X-Biodl-Session'] = savedSid;
 
-    const res = await fetch('/api/ipc', {
+    let res;
+    try { res = await fetch('/api/ipc', {
       method: 'POST',
       headers,
       body: JSON.stringify({ channel, payload })
-    });
+    }); } catch (_) { throw new Error('与Linux服务的连接已中断，请检查服务日志/反向代理超时后重试；不要重复提交同一下载'); }
     const json = await res.json();
     if (json && json.sessionId) {
       localStorage.setItem('biodl_session', json.sessionId);
     }
     if (channel === 'save-settings' && payload && payload.token === null) {
       localStorage.removeItem('biodl_session');
+      connectSse();
     }
     if (json && json.error) throw new Error(json.error);
     if ((channel === 'api-login' || channel === 'api-register' || channel === 'api-get-user-info' || channel === 'get-settings') && json && json.result && (json.result.success || json.result.token)) {
       connectSse();
+    }
+    if (channel === 'clash-optimize' && json?.result?.optimizationJob) {
+      const id = json.result.optimizationJob;
+      const deadline = Date.now() + 10 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const response = await fetch('/api/clash-optimization', { headers, cache: 'no-store' });
+        const job = await response.json();
+        if (!response.ok || job.id !== id) throw new Error(job.error || '优化任务已改变，请查询服务器状态');
+        if (job.state === 'failed') throw new Error(job.error || '优化失败');
+        if (job.state === 'completed') return job.result;
+      }
+      throw new Error('优化仍在后台处理，请稍后查询；不要重复启动下载');
     }
     return json ? json.result : undefined;
   }

@@ -5,7 +5,7 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'biodl-fallback-test-'));
 process.env.BIODL_DATA_DIR = path.join(temp, 'profile');
 // Shorten only the retry backoff; the actual bundled Axel and HTTP streams run normally.
 const originalTimeout = global.setTimeout;
-global.setTimeout = (fn, ms, ...args) => originalTimeout(fn, [4000, 8000].includes(ms) ? 10 : ms, ...args);
+global.setTimeout = (fn, ms, ...args) => originalTimeout(fn, [4000, 8000, 16000].includes(ms) ? 10 : ms, ...args);
 const engine = require('../main');
 const axios = require('axios'), charges = [], events = [], requests = [];
 axios.post = async (_url, body) => { charges.push(body.bytes); return { data: { success: true } }; };
@@ -44,7 +44,7 @@ async function download(name) {
   const result = await download('fresh.bin');
   assert.equal(result?.status, 'completed', JSON.stringify(result));
   assert.deepEqual(fs.readFileSync(path.join(dest, 'fresh.bin')), bytes);
-  assert.equal(requests.filter(r => !r.node).length, 3, 'exercise all three real Axel failures');
+  assert(requests.filter(r => !r.node).length >= 4, 'four attempts must reach source (Axel may also probe metadata)');
   assert.equal(requests.filter(r => r.node).length, 1, 'fallback must run after retry loop');
   assert.deepEqual(charges, [bytes.length]);
   mode = 'failure';

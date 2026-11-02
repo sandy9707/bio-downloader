@@ -28,6 +28,7 @@ class BiodlServer {
     this.sseClients = new Set();
     this.sessions = new Map();
     this.server = null;
+    this.optimizationJob = null;
     this.loadSessions();
 
     // 绑定 main.js 的事件总线，通过 SSE 实时推送到浏览器
@@ -40,7 +41,8 @@ class BiodlServer {
       'update-progress',
       'update-status',
       'update-download-progress',
-      'speedtest-progress'
+      'speedtest-progress',
+      'clash-validation-progress'
     ];
     for (const ev of forwardEvents) {
       main.eventBus.on(ev, (data) => this.broadcastSSE(ev, data));
@@ -209,12 +211,24 @@ class BiodlServer {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive'
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
       });
       res.write('retry: 3000\n\n');
       this.sseClients.add(res);
-      req.on('close', () => this.sseClients.delete(res));
+      const heartbeat=setInterval(()=>{try{res.write(': heartbeat\n\n');}catch(_){}},15000);
+      res.on('close', () => { clearInterval(heartbeat);this.sseClients.delete(res); });
       return;
+    }
+
+    // Optimization can outlast browser/reverse-proxy request limits. Keep one
+    // authenticated job and poll short requests, rather than holding POST open.
+    if (pathname === '/api/clash-optimization' && req.method === 'GET') {
+      const session = this.getSession(req);
+      if (!session) return this.sendJson(res, 401, { error: '请先登录' });
+      const job = this.optimizationJob;
+      if (!job || job.owner !== session.token) return this.sendJson(res, 404, { error: '没有可查询的优化任务' });
+      return this.sendJson(res, 200, { id: job.id, state: job.state, result: job.result, error: job.error });
     }
 
     // 2. 核心通用 IPC 网关 (100% 复用 main.js 原生 65 个处理函数)
@@ -261,10 +275,23 @@ class BiodlServer {
           res.setHeader('Set-Cookie', 'biodl_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
         }
 
+        if (channel === 'clash-optimize') {
+          if (!session) return this.sendJson(res, 401, { error: '请先登录' });
+          let job = this.optimizationJob;
+          if (job?.state === 'running') {
+            if (job.owner !== session.token) return this.sendJson(res, 409, { error: '已有用户正在优化服务器连接' });
+          } else {
+            job = { id: crypto.randomBytes(16).toString('hex'), owner: session.token, state: 'running' };
+            this.optimizationJob = job;
+            Promise.resolve().then(() => main.callIpcHandler(channel, { ...payload, token: session.token }))
+              .then(result => { job.result = result;job.state = 'completed'; }, error => { job.error = error.message;job.state = 'failed'; });
+          }
+          return this.sendJson(res, 202, { success: true, result: { optimizationJob: job.id } });
+        }
         const result = await main.callIpcHandler(channel, payload);
         let createdSid = null;
         if ((channel === 'api-login' || channel === 'api-register' || channel === 'api-get-user-info') && result && result.success && result.token) {
-          createdSid = this.createSession(res, result.token);
+          if (!session || session.token !== result.token) createdSid = this.createSession(res, result.token);
         }
         return this.sendJson(res, 200, { success: true, result, sessionId: createdSid || (session ? session.id : null) });
       } catch (err) {
