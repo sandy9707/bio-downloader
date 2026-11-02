@@ -22,7 +22,7 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  let state;
  for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,200));state=await win.webContents.executeJavaScript(`({downloading:isDownloading,active:activeDownloads.map(f=>({name:f.name,status:f.status})),completed:completedDownloads.length,failed:failedDownloads.length,toast:document.getElementById('notificationToast').innerText})`);if(state.completed===3||!state.downloading)break;}
  assert.equal(state.completed,3,JSON.stringify({state,errors}));
- assert.equal(await win.webContents.executeJavaScript(`completedDownloads.every(f=>f.engine==='native')`),true);assert.equal(charges,3);assert.match(state.toast,/完成 3/);
+  assert.equal(await win.webContents.executeJavaScript(`completedDownloads.every(f=>f.engine==='aria2')`),true);assert.equal(charges,3);assert.match(state.toast,/完成 3/);
  if(mode==='fixed'){
   await win.webContents.executeJavaScript(`switchTransferSubTab('completed');verifyAllCompletedMd5();`);
   for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,100));if(await win.webContents.executeJavaScript(`manualMd5Run===null`))break;}
@@ -59,8 +59,8 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  fs.writeFileSync(path.join(root,'.evidence','settings-engines-'+process.platform+'.png'),(await win.webContents.capturePage()).toPNG());
  await win.webContents.executeJavaScript(`document.getElementById('engine-http').value='axel';saveDownloadEngines()`);
  assert.equal(await win.webContents.executeJavaScript(`window.api.getSettings().then(s=>s.downloadEngines.http)`),'axel');
- await win.webContents.executeJavaScript(`document.getElementById('engine-http').value='aria2';saveDownloadEngines()`);
- assert.equal(await win.webContents.executeJavaScript(`window.api.getSettings().then(s=>s.downloadEngines.http)`),'aria2');
+  await win.webContents.executeJavaScript(`document.getElementById('engine-http').value='aria2';saveDownloadEngines()`);
+   assert.equal(await win.webContents.executeJavaScript(`window.api.getSettings().then(s=>s.downloadEngines.http)`),'aria2');
  fs.mkdirSync(path.join(root,'.evidence'),{recursive:true});
  await win.webContents.executeJavaScript(`document.getElementById('backToSettings').click();document.getElementById('settingsDeepIntegrityToggle').scrollIntoView({block:'center'});`);
  assert.equal(await win.webContents.executeJavaScript(`currentTab`),'settings-tab');
@@ -80,7 +80,7 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
   assert.equal(await win.webContents.executeJavaScript(`window.api.getSettings().then(s=>s.downloadEngines.http)`),engine);
  }
 
- assert.equal(await win.webContents.executeJavaScript(`window.api.getSettings().then(s=>s.downloadEngines.http)`),'native');
+   assert.equal(await win.webContents.executeJavaScript(`window.api.getSettings().then(s=>s.downloadEngines.http)`),'native');
  assert.equal(await win.webContents.executeJavaScript(`document.getElementById('pluginPath-native')===null`),true);
  fs.writeFileSync(path.join(root,'.evidence','settings-plugins-'+process.platform+'.png'),(await win.webContents.capturePage()).toPNG());
  // Exercise the actual renderer while the native engine receives ranges slowly.

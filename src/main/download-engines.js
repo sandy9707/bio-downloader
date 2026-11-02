@@ -2,10 +2,10 @@ const fs = require('fs');
 const redact = text => text.replace(/(\w+:\/\/)[^\s/]*@/g, '$1[redacted]@').replace(/([?&](?:token|password|key|signature)=)[^&\s]+/gi, '$1[redacted]');
 const { spawn } = require('child_process');
 const { bioSource } = require('./bio-transfer-guard');
-const defaults = { http: 'native', bio: 'inherit', ftp: 'aria2', sftp: 'aria2', ftps: 'curl' };
+const defaults = { http: 'aria2', bio: 'inherit', ftp: 'aria2', sftp: 'aria2', ftps: 'curl' };
 function migrateEngineSettings(settings = {}) {
   return { ...settings, downloadEngineSchema: 2,
-    downloadEngines: settings.nativeDownloadEngines || { ...defaults, ...settings.downloadEngines, http: 'native', bio: 'inherit' } };
+    downloadEngines: { ...defaults, ...(settings.nativeDownloadEngines || settings.downloadEngines) } };
 }
 // Keep old clients' settings readable if the user rolls back from the preview.
 function storeEngineSettings(settings) {

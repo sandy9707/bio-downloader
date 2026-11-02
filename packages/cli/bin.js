@@ -79,7 +79,7 @@ function privateIpv4Addresses() {
 
 program
   .name('biodl')
-  .description('BioDownloader Server - Linux Web 管理与命令行下载服务')
+  .description('BioDownloader - Windows / macOS / Linux 命令行下载与 Web 服务')
   .version(SERVER_VERSION);
 
 // 1. biodl start: 启动 Web 管理面板与下载服务 (默认 0.0.0.0)
@@ -175,11 +175,15 @@ program
   .description('快速解析并下载生信数据 (SRA / EBI / GEO / 直链)')
    .option('-o, --output <dir>', '保存目录', path.join(os.homedir(), process.platform === 'win32' ? 'Desktop' : 'Downloads'))
   .option('-c, --concurrent <number>', '并发下载数', 3)
+  .option('--engine <name>', '本次 HTTP 下载引擎：native / aria2 / axel')
   .action(async (type, accession, options) => {
-    if (process.platform === 'win32') {
+    if (options.engine && !['native', 'aria2', 'axel'].includes(options.engine)) throw new Error('引擎必须是 native、aria2 或 axel');
+    if (!Number.isSafeInteger(Number(options.concurrent)) || Number(options.concurrent) < 1) throw new Error('并发下载数必须为正整数');
+    {
       const occupied = await new Promise(resolve => {
         const socket = require('net').connect(43289, '127.0.0.1', () => { socket.destroy(); resolve(true); });
         socket.on('error', () => resolve(false));
+        socket.setTimeout(1500, () => { socket.destroy(); resolve(true); });
       });
       if (occupied) throw new Error('加速端口已被占用，请先关闭本机桌面客户端或其他 BioDownloader 命令，再启动 CLI 下载');
     }
@@ -258,6 +262,7 @@ program
 
       // 启动下载
       console.log('🚀 正在启动加速下载...');
+      if (options.engine) await main.callIpcHandler('save-settings', { downloadEngines: { ...s.downloadEngines, http: options.engine, bio: 'inherit' } });
       main.eventBus.on('download-progress', (data) => {
         process.stdout.write(`\r[进度] ${data.percentage}% | 速度: ${data.speed}      `);
       });
@@ -277,6 +282,7 @@ program
       console.error('下载出错:', e.message);
       process.exitCode = 1;
     } finally {
+      if (options.engine) await main.callIpcHandler('save-settings', { downloadEngines: s.downloadEngines });
       await main.callIpcHandler('clash-stop');
     }
   });
@@ -367,6 +373,11 @@ program.command('paths').description('显示程序、配置及默认下载目录
     console.log('配置、历史与会话目录: ' + data);
     console.log('默认下载目录: ' + (settings.defaultDir || path.join(os.homedir(), 'Downloads')));
     console.log('下载文件和断点保存在各任务的目标目录，请一起保留。');
+    const status = await main.callIpcHandler('plugin-get-status');
+    for (const plugin of status.plugins || []) {
+      if (!['native','aria2','axel','curl'].includes(plugin.id)) continue;
+      console.log(`引擎 ${plugin.id}: ${plugin.internal ? '内置 JavaScript / Worker' : (plugin.path || '未找到可执行程序')} (${plugin.usable ? '就绪' : '不可用'})`);
+    }
     if (data === appDir || data.startsWith(appDir + path.sep)) console.log('注意：当前 BIODL_DATA_DIR 位于程序目录内。删除程序前请先备份并迁移此目录，然后更新环境变量。');
   });
 program.command('doctor').description('检查官方服务连通性；不读取账号密码，不检测网络类型')

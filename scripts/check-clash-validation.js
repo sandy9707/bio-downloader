@@ -92,7 +92,7 @@ const context = vm.createContext({
   axios: fakeaxios
 });
 
-vm.runInContext(source.slice(source.indexOf('function getLocalNodePhysicalKey('), source.indexOf('async function startClash(')), context);
+vm.runInContext(source.slice(source.indexOf('function hasRepeatedRouteGain('), source.indexOf('async function startClash(')), context);
 
 (async () => {
   try {

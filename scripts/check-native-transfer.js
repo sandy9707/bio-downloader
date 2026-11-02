@@ -186,6 +186,10 @@ const deadline = setTimeout(() => { console.error('NATIVE_TEST_TIMEOUT'); child?
     try {
       const good=task('proxy-redirect.bin',{url:'https://localhost:'+tls.address().port+'/redirect',proxy});good.httpsAgent.options.ca=cert;
       await good.run();equalFile('proxy-redirect.bin');assert(tunnels>0);assert(requests.length>1);
+      reset();tunnels=0;
+      const pooled=task('proxy-pooled.bin',{url:'https://localhost:'+tls.address().port+'/file',proxy,connections:1});pooled.httpsAgent.options.ca=cert;
+      await pooled.run();equalFile('proxy-pooled.bin');
+      assert(tunnels < requests.length, `TLS proxy sockets must be reused: ${tunnels} tunnels for ${requests.length} requests`);
       reset();const bad=task('proxy-downgrade.bin',{url:'https://localhost:'+tls.address().port+'/downgrade',proxy});bad.httpsAgent.options.ca=cert;
       await assert.rejects(bad.run(),/HTTPS/);assert.equal(requests.length,0);assert(!fs.existsSync(path.join(temp,'proxy-downgrade.bin')));
     } finally {server.off('connect',connect);for(const s of tlsSockets)s.destroy();await new Promise(r=>tls.close(r));}

@@ -727,6 +727,12 @@ function writeClashLog(msg) {
     console.log(msg);
   } catch (e) {}
 }
+function hasRepeatedRouteGain(single, repeatedSingle, combined, repeatedCombined) {
+  const values = [single, repeatedSingle, combined, repeatedCombined];
+  return values.every(n => Number.isFinite(n) && n > 0)
+    && Math.min(combined, repeatedCombined) > Math.max(single, repeatedSingle) * 1.2;
+}
+
 function getLocalNodePhysicalKey(name) {
   const value = String(name || '');
   const match = value.match(/\[账号(\d+)\]\s*$/);
@@ -1011,7 +1017,7 @@ async function validateLocalClashNodes(configPath, sender) {
       const combined = await aggregate('__BIODL_COMBINED');
       const combinedAgain = combined > single * 1.2 ? await aggregate('__BIODL_COMBINED') : 0;
       const singleAgain = combinedAgain ? await aggregate('__BIODL_SINGLE') : single;
-      if (single > 0 && singleAgain > 0 && Math.min(combined, combinedAgain) > Math.max(single, singleAgain) * 1.2) {
+      if (hasRepeatedRouteGain(single, singleAgain, combined, combinedAgain)) {
         const combinedName = 'BioDownloader 吞吐增益线路';
         groups.push({ name: combinedName, type: 'load-balance', strategy: 'round-robin', proxies: comparable.map(item => item.representative), url: 'https://www.gstatic.com/generate_204', interval: 60, lazy: true });
         downloadPool.proxies = [combinedName, ...downloadPool.proxies];
@@ -1618,7 +1624,7 @@ ipcMain.handle('plugin-get-status', async () => {
   return {
     defaultEngine: settings.downloadEngines.http,
     plugins: [
-      { id: 'native', name: 'BioDownloader 专属内核（默认）', description: '分块下载、持久断点和相邻分块重叠核对。适用于支持 Range 与强 ETag 的 HTTP/HTTPS 文件。', platform, installed: true, usable: true, version: app.getVersion(), source: 'bundled', internal: true },
+      { id: 'native', name: 'BioDownloader 专属内核（可选）', description: '分块下载、持久断点和相邻分块重叠核对。适用于支持 Range 与强 ETag 的 HTTP/HTTPS 文件。', platform, installed: true, usable: true, version: app.getVersion(), source: 'bundled', internal: true },
       {
         id: 'axel',
         name: 'Axel（可选引擎）',

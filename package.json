@@ -1,6 +1,6 @@
 {
   "name": "bio-downloader",
-  "version": "2.2.4",
+  "version": "2.2.5",
   "description": "Commercial Biology Raw Data Downloader Desktop Client",
   "main": "main.js",
   "scripts": {
@@ -61,6 +61,12 @@
       "cloud-preload.js"
     ],
     "mac": {
+      "extraFiles": [
+        {
+          "from": "packages/cli/biodl-mac",
+          "to": "MacOS/biodl"
+        }
+      ],
       "icon": "icons/icon.icns",
       "extraResources": [
         {

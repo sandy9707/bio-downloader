@@ -6,6 +6,7 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const axios = require('axios');
+const { PooledProxyAgent } = require('./proxy-agent');
 const lockfile = require('proper-lockfile');
 const { errorDetails } = require('../download-diagnostics');
 const { Journal, TransferError, digest, writeAll, fingerprint, syncDirectory } = require('./journal');
@@ -36,7 +37,8 @@ class NativeTransfer {
     this.confirmedBytes = 0; this.networkBytes = 0; this.lastNetworkBytes = 0; this.lastTick = Date.now(); this.goodBlocks = 0;
     this.lastBackoffAt = 0;
     this.httpAgent = new http.Agent({ keepAlive: true, maxSockets: this.options.connections });
-    this.httpsAgent = new https.Agent({ keepAlive: true, maxSockets: this.options.connections });
+    const agentOptions = { keepAlive: true, maxSockets: this.options.connections, maxFreeSockets: this.options.connections, timeout: this.options.timeoutMs };
+    this.httpsAgent = this.options.proxy ? new PooledProxyAgent(this.options.proxy, agentOptions) : new https.Agent(agentOptions);
   }
   event(type, details = {}) { try { this.options.onEvent({ type, time: new Date().toISOString(), ...details }); } catch (_) { /* UI observers cannot corrupt the transfer. */ } }
   pause() { this.stoppedByUser = true; this.stop.abort(); for (const c of this.controllers) c.abort(); }
@@ -83,7 +85,7 @@ class NativeTransfer {
     const controller = new AbortController(); this.controllers.add(controller);
     let response;
     try {
-      response = await axios({ url: this.url, method: 'GET', responseType: 'stream', proxy: this.options.proxy,
+      response = await axios({ url: this.url, method: 'GET', responseType: 'stream', proxy: this.url.startsWith('https:') ? false : this.options.proxy,
         signal: controller.signal, timeout: this.options.timeoutMs, maxRedirects: 5, decompress: false,
         httpAgent: this.httpAgent, httpsAgent: this.httpsAgent, validateStatus: () => true,
         headers: { Range: `bytes=${start}-${end}`, 'Accept-Encoding': 'identity', ...(meta ? { 'If-Match': meta.etag } : {}) },

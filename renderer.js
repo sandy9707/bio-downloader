@@ -3853,7 +3853,7 @@ async function initTransfersAndSettings(settings) {
   if (stableModeToggle) stableModeToggle.checked = stableModeSetting;
   const deepIntegrityToggle = document.getElementById('settingsDeepIntegrityToggle');
   if (deepIntegrityToggle) deepIntegrityToggle.checked = Boolean(settings && settings.deepIntegrityCheck);
-  for (const [group, value] of Object.entries({ http: 'native', bio: 'inherit', ftp: 'aria2', sftp: 'aria2', ftps: 'curl', ...settings?.downloadEngines })) {
+  for (const [group, value] of Object.entries({ http: 'aria2', bio: 'inherit', ftp: 'aria2', sftp: 'aria2', ftps: 'curl', ...settings?.downloadEngines })) {
     const select = document.getElementById('engine-' + group); if (select) select.value = value;
   }
 

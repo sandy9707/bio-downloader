@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+MACOS_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+export ELECTRON_RUN_AS_NODE=1
+export BIODL_HEADLESS=1
+export BIODL_DATA_DIR="${BIODL_DATA_DIR:-$HOME/Library/Application Support/bio-downloader-cli}"
+exec "$MACOS_DIR/BioDownloader" "$MACOS_DIR/../Resources/app.asar/packages/cli/bin.js" "$@"

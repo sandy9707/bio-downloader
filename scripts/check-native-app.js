@@ -60,7 +60,8 @@ async function verify(route) {
 const started = Date.now(), deadline = setTimeout(() => { child?.kill('SIGKILL'); console.error('NATIVE_APP_TIMEOUT'); process.exit(2); }, 480000);
 (async () => {
   main.ensureBinaries(); await new Promise(r => server.listen(0,'127.0.0.1',r)); base = `http://127.0.0.1:${server.address().port}`;
-  assert.equal((await main.callIpcHandler('get-settings')).downloadEngines.http, 'native');
+  assert.equal((await main.callIpcHandler('get-settings')).downloadEngines.http, 'aria2');
+  await main.callIpcHandler('save-settings',{downloadEngines:{http:'native',bio:'inherit'}});
   const batch = download([file('/large',1),file('/small1',2),file('/small2',3)]);
   await until(() => progress.some(e => e.index === 1 && e.committedBytes >= 4 * MiB));
   assert.equal((await main.callIpcHandler('pause-download',1)).suspended,true);
@@ -83,7 +84,10 @@ const started = Date.now(), deadline = setTimeout(() => { child?.kill('SIGKILL')
   const source = `process.env.BIODL_DATA_DIR=process.argv[1];require('axios').post=async()=>({data:{success:true}});const m=require('./main');m.eventBus.on('download-progress',e=>{if(e.committedBytes>0)process.stdout.write('DURABLE_COMMIT\\n')});m.callIpcHandler('start-download',JSON.parse(process.argv[2]));`;
   let observed=false;
   await new Promise((resolve,reject)=>{
-    child=spawn(process.execPath,['-e',source,path.join(temp,'child-profile'),JSON.stringify(options)],{cwd:root,stdio:['ignore','pipe','pipe']});
+    const childProfile=path.join(temp,'child-profile');
+    fs.mkdirSync(childProfile,{recursive:true});
+    fs.writeFileSync(path.join(childProfile,'settings.json'),JSON.stringify({nativeDownloadEngines:{http:'native',bio:'inherit'}}));
+    child=spawn(process.execPath,['-e',source,childProfile,JSON.stringify(options)],{cwd:root,stdio:['ignore','pipe','pipe']});
     child.stdout.on('data',b=>{if(String(b).includes('DURABLE_COMMIT')){observed=true;child.kill('SIGKILL')}});
     child.stderr.resume();child.on('error',reject);child.on('close',resolve);
   }); child=null; assert(observed,'kill must occur after main IPC received a durable block');

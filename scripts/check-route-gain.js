@@ -1,0 +1,10 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
+const s=fs.readFileSync(require('path').join(__dirname,'../main.js'),'utf8');
+const context=vm.createContext({});
+vm.runInContext(s.slice(s.indexOf('function hasRepeatedRouteGain('),s.indexOf('function getLocalNodePhysicalKey(')),context);
+assert(context.hasRepeatedRouteGain(100,102,140,135));
+assert(!context.hasRepeatedRouteGain(100,100,200,110));
+assert(!context.hasRepeatedRouteGain(100,100,120,120));
+assert(!context.hasRepeatedRouteGain(0,0,100,100));
+assert(!context.hasRepeatedRouteGain(100,100,0,200));
+console.log('ROUTE_GAIN_OK: repeated gain only, reject one-off burst, failed lanes, zero baseline');
