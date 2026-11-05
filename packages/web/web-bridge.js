@@ -20,6 +20,8 @@
   // 1. 登录会话建立后连接 SSE，避免匿名访问下载任务事件。
   let sse = null;
   let connectedSid = null;
+  const pendingProgress = new Map();
+  let progressTimer = null;
   function connectSse() {
     const sid = localStorage.getItem('biodl_session');
     if (!sid) { if(sse)sse.close();sse=null;connectedSid=null;return; }
@@ -43,13 +45,20 @@
     sse.addEventListener('download-status', (e) => {
       try {
         const data = JSON.parse(e.data);
+        if (['completed','failed','cancelled','paused'].includes(data.status)) pendingProgress.delete(data.index);
         listeners.downloadStatus.forEach(fn => fn(data));
       } catch (err) {}
     });
     sse.addEventListener('download-progress', (e) => {
       try {
         const data = JSON.parse(e.data);
-        listeners.downloadProgress.forEach(fn => fn(data));
+        pendingProgress.set(data.index, data);
+        while (pendingProgress.size > 2000) pendingProgress.delete(pendingProgress.keys().next().value);
+        if (!progressTimer) progressTimer = setTimeout(() => {
+          progressTimer = null;
+          const batch = [...pendingProgress.values()];pendingProgress.clear();
+          for (const item of batch) for (const fn of listeners.downloadProgress) { try { fn(item); } catch (_) {} }
+        }, 250);
       } catch (err) {}
     });
     sse.addEventListener('curl-download-progress', (e) => {

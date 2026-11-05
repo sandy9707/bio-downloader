@@ -29,6 +29,9 @@ class BiodlServer {
     this.sessions = new Map();
     this.server = null;
     this.optimizationJob = null;
+    this.pendingProgress = new Map();
+    this.latestStatuses = new Map();
+    this.progressTimer = null;
     this.loadSessions();
 
     // 绑定 main.js 的事件总线，通过 SSE 实时推送到浏览器
@@ -56,9 +59,34 @@ class BiodlServer {
   }
 
   broadcastSSE(event, data) {
+    if (event === 'download-status') {
+      this.latestStatuses.delete(data.index);
+      this.latestStatuses.set(data.index, data);
+      while (this.latestStatuses.size > 2000) this.latestStatuses.delete(this.latestStatuses.keys().next().value);
+    }
+    if (event === 'download-progress') {
+      this.pendingProgress.set(data.index, data);
+      while (this.pendingProgress.size > 2000) this.pendingProgress.delete(this.pendingProgress.keys().next().value);
+      if (!this.progressTimer) this.progressTimer = setTimeout(() => {
+        this.progressTimer = null;
+        const batch = [...this.pendingProgress.values()];this.pendingProgress.clear();
+        for (const item of batch) this.writeSSE('download-progress', item);
+      }, 250);
+      return;
+    }
+    if (event === 'download-status' && ['completed','failed','cancelled','paused'].includes(data.status)) this.pendingProgress.delete(data.index);
+    this.writeSSE(event, data);
+  }
+
+  writeSSE(event, data) {
     const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of this.sseClients) {
-      try { res.write(payload); } catch (e) { this.sseClients.delete(res); }
+      try {
+        // Do not accumulate an unbounded replay backlog for a slow browser.
+        // Reconnection resumes live events; it must never block the downloader.
+        if (res.destroyed || res.writableLength > 512 * 1024) { this.sseClients.delete(res);res.destroy();continue; }
+        res.write(payload);
+      } catch (e) { this.sseClients.delete(res);res.destroy(); }
     }
   }
 
@@ -81,6 +109,9 @@ class BiodlServer {
   }
 
   stop() {
+    clearTimeout(this.progressTimer);this.progressTimer=null;this.pendingProgress.clear();
+    for (const client of this.sseClients) client.end();
+    this.sseClients.clear();
     return new Promise((resolve) => {
       if (this.server) {
         this.server.close(() => resolve());
@@ -215,6 +246,10 @@ class BiodlServer {
         'X-Accel-Buffering': 'no'
       });
       res.write('retry: 3000\n\n');
+      for (const data of this.latestStatuses.values()) {
+        if (res.writableLength > 512 * 1024) break;
+        res.write(`event: download-status\ndata: ${JSON.stringify(data)}\n\n`);
+      }
       this.sseClients.add(res);
       const heartbeat=setInterval(()=>{try{res.write(': heartbeat\n\n');}catch(_){}},15000);
       res.on('close', () => { clearInterval(heartbeat);this.sseClients.delete(res); });
