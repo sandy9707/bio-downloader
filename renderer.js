@@ -3874,6 +3874,7 @@ async function loadTransferHistory(settings = {}) {
   try {
     if (window.api && window.api.getTransfersHistory) history = await window.api.getTransfersHistory();
   } catch (e) { console.error('读取传输记录失败:', e.message); }
+  const runtimeSnapshot = history?.runtimeSnapshot;
   // An existing empty file is authoritative: clearing history must not resurrect old localStorage data.
   if (!history || history.exists === false || (history.legacy && !history.completed.length && !history.failed.length && !history.active.length && !history.extraction.length)) {
     try {
@@ -3887,17 +3888,35 @@ async function loadTransferHistory(settings = {}) {
   const entries = key => Array.isArray(history && history[key]) ? history[key].filter(t => t && typeof t === 'object') : [];
   completedDownloads = entries('completed').map(({ md5Progress, ...item }) => item);
   failedDownloads = entries('failed');
-  // Old process handles no longer exist. Restore unfinished work as paused without charging or starting it.
+  // Web refreshes do not stop the Linux service. Only retain handles proven to
+  // belong to this instance AND this task; unknown/restarted work stays paused.
+  const runtime = window.api?.isElectron === false ? runtimeSnapshot : null;
+  const runtimeEvents = [];
+  const runtimeTasks = new Map((runtime?.tasks || []).map(task => [task.index, task]));
   const firstId = Date.now();
-  activeDownloads = entries('active').filter(t => !t.isUpdate && !['completed','failed','cancelled'].includes(t.status)).map((t, i) => ({
-    ...t, originalIndex: firstId + i, status: 'paused', speed: '',
-    targetDir: t.targetDir || settings.defaultDir || '', restored: true
-  }));
+  activeDownloads = entries('active').filter(t => !t.isUpdate && !['completed','failed','cancelled'].includes(t.status)).map((t, i) => {
+    const targetDir = t.targetDir || settings.defaultDir || '';
+    const task = runtimeTasks.get(t.originalIndex);
+    const live = task && t.runtimeInstanceId === runtime.instanceId
+      && task.identity.name === t.name && task.identity.url === t.url && (task.identity.folder || '') === (t.folder || '') && task.identity.targetDir === targetDir ? task : null;
+    if (live) {
+      if (live.status) runtimeEvents.push(['status', live.status]);
+      if (live.progress) runtimeEvents.push(['progress', live.progress]);
+      return { ...t, targetDir, restored: false };
+    }
+    return { ...t, runtimeInstanceId: null, originalIndex: firstId + i, status: 'paused', phase: null, speed: '', targetDir, restored: true };
+  });
   extractionJobs = Object.fromEntries(entries('extraction').map((t, i) => {
     const id = 'restored-' + firstId + '-' + i;
     return [id, { ...t, id, paused: true, speed: '', saveDir: t.saveDir || settings.defaultDir || '', restored: true }];
   }));
   transfersReady = true;
+  runtimeEvents.sort((a, b) => a[1].runtimeSequence - b[1].runtimeSequence);
+  for (const [kind, data] of runtimeEvents) {
+    if (kind === 'status') handleDownloadStatus(data);
+    else handleDownloadProgress(data);
+  }
+  if (window.api?.isElectron === false) window.api.transferHistoryReady(runtime);
 }
 
 // 载入历史与并发数
@@ -3945,6 +3964,11 @@ async function initTransfersAndSettings(settings) {
 // ==========================================
 function handleDownloadStatus(data) {
   const { index, status, fileName, savePath } = data;
+  const runtimeItem = activeDownloads.find(d => d.originalIndex === index);
+  if (runtimeItem && data.runtimeInstanceId) {
+    if (runtimeItem.runtimeInstanceId && runtimeItem.runtimeInstanceId !== data.runtimeInstanceId) return;
+    runtimeItem.runtimeInstanceId = data.runtimeInstanceId;
+  }
   
   const queueIndex = currentQueue.findIndex(file => file.originalIndex === index);
   // 1. 更新下载中心的队列 UI
@@ -4058,8 +4082,13 @@ function handleDownloadStatus(data) {
 }
 window.api.onDownloadStatus(handleDownloadStatus);
 
-window.api.onDownloadProgress((data) => {
+function handleDownloadProgress(data) {
   const { index, percentage, speed, receivedBytes, totalBytes } = data;
+  const runtimeItem = activeDownloads.find(d => d.originalIndex === index);
+  if (runtimeItem && data.runtimeInstanceId) {
+    if (runtimeItem.runtimeInstanceId && runtimeItem.runtimeInstanceId !== data.runtimeInstanceId) return;
+    runtimeItem.runtimeInstanceId = data.runtimeInstanceId;
+  }
   const queueIndex = currentQueue.findIndex(file => file.originalIndex === index);
 
   // 1. 更新下载中心的队列 UI
@@ -4121,7 +4150,8 @@ window.api.onDownloadProgress((data) => {
     updateGlobalTotalSpeed();
     scheduleTransferSave();
   }
-});
+}
+window.api.onDownloadProgress(handleDownloadProgress);
 
 // External engines may go silent while reconnecting. Never leave their last
 // non-zero speed painted indefinitely when no new progress has arrived.

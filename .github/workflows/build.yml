@@ -26,6 +26,8 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: 安装 Node.js
         uses: actions/setup-node@v4
@@ -72,7 +74,9 @@ jobs:
           include-hidden-files: true
 
       - name: 依据 Git Tag 同步 package.json 版本号
-        run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
+        env:
+          BIODL_RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.BIODL_RELEASE_TAG; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
 
       - name: 写入构建期全局配置 (config.json)
         run: |
@@ -88,6 +92,11 @@ jobs:
         env:
           # 跳过代码签名（无开发者证书时）
           CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: 从 macOS 成品 app.asar 验证桌面下载
+        run: npm run test:desktop
+        env:
+          BIODL_TEST_ASAR: dist/mac-arm64/BioDownloader.app/Contents/Resources/app.asar
 
       - name: 验证成品热更新及二次启动
         run: node scripts/check-packaged-update.js dist/mac-arm64/BioDownloader.app
@@ -113,6 +122,8 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: 安装 Node.js
         uses: actions/setup-node@v4
@@ -156,7 +167,9 @@ jobs:
           include-hidden-files: true
 
       - name: 依据 Git Tag 同步 package.json 版本号
-        run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.GITHUB_REF_NAME; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
+        env:
+          BIODL_RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync('package.json')); const tag = process.env.BIODL_RELEASE_TAG; if (tag && tag.startsWith('v')) { pkg.version = tag.replace(/^v/, ''); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); console.log('Updated package.json version to:', pkg.version); }"
 
       - name: 写入构建期全局配置 (config.json)
         shell: pwsh
@@ -207,6 +220,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: '20'

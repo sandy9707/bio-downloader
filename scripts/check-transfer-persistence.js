@@ -21,7 +21,7 @@ const fixture = {
   extraction: [{ id: 'ex1', name: 'extracted.fastq', url: 'https://example.invalid/extracted', received: 128, total: 512, saveDir: 'E:\\extracted' }]
 };
 
-function harness(historyStore, cache = new Map()) {
+function harness(historyStore, cache = new Map(), web = null) {
   const events = {}, listeners = {}, messages = [];
   const context = vm.createContext({
     console: { error() {}, warn() {} }, Date, JSON, Object, Array,
@@ -34,7 +34,9 @@ function harness(historyStore, cache = new Map()) {
     window: {
       addEventListener: (name, fn) => { events[name] = fn; },
       api: {
-        getTransfersHistory: async () => historyStore.read(),
+        isElectron: !web,
+        transferHistoryReady: snapshot => { events.ready = snapshot; if (web?.onReady) web.onReady(context); },
+        getTransfersHistory: async () => ({ ...historyStore.read(), ...(web ? { runtimeSnapshot: web } : {}) }),
         saveTransfersHistory: async data => historyStore.save(JSON.parse(JSON.stringify(data))),
         flushTransfersHistory: data => historyStore.save(JSON.parse(JSON.stringify(data))),
         onDownloadStatus: fn => { listeners.status = fn; },
@@ -93,6 +95,32 @@ function harness(historyStore, cache = new Map()) {
   assert.equal(store.read().failed[0].fileObj.md5, active.md5);
   assert.equal(store.read().failed[0].verification.actualMd5, 'bad-checksum');
   assert.equal(store.read().failed[0].savePath, 'D:\\original\\bad.fastq.gz');
+
+  // Linux Web keeps only same-instance, identity-verified handles. Snapshot
+  // terminal events reconcile work completed while the browser was closed.
+  const liveFile = { ...fixture.active[0], runtimeInstanceId: 'service-a' };
+  const webHistory = { read: () => ({ exists: true, active: [liveFile], completed: [], failed: [], extraction: [] }), save: data => data };
+  const task = { index: 0, identity: { name: liveFile.name, url: liveFile.url, targetDir: liveFile.targetDir },
+    status: { index: 0, status: 'downloading', phase: 'connecting', runtimeInstanceId: 'service-a', runtimeSequence: 1 },
+    progress: { index: 0, receivedBytes: 768, totalBytes: 1024, runtimeInstanceId: 'service-a', runtimeSequence: 2 } };
+  const web = harness(webHistory, new Map(), { instanceId: 'service-a', sequence: 2, tasks: [task] });
+  await web.context.loadTransferHistory();
+  assert.equal(web.context.activeDownloads[0].originalIndex, 0);
+  assert.equal(web.context.activeDownloads[0].receivedBytes, 768);
+  assert.equal(web.context.activeDownloads[0].phase, 'transferring');
+  assert.equal(web.events.ready.instanceId, 'service-a');
+  const offline = harness(webHistory, new Map(), { instanceId: 'service-a', sequence: 3, tasks: [{ ...task, progress: null,
+    status: { index: 0, status: 'completed', savePath: 'D:\\original\\running.sra', runtimeInstanceId: 'service-a', runtimeSequence: 3 } }] });
+  await offline.context.loadTransferHistory();
+  assert.equal(offline.context.activeDownloads.length, 0);
+  assert.equal(offline.context.completedDownloads.length, 1);
+  const restartedWeb = harness(webHistory, new Map(), { instanceId: 'service-b', sequence: 2, tasks: [task] });
+  await restartedWeb.context.loadTransferHistory();
+  assert.equal(restartedWeb.context.activeDownloads[0].status, 'paused');
+  assert.notEqual(restartedWeb.context.activeDownloads[0].originalIndex, 0);
+  const wrongIdentity = harness(webHistory, new Map(), { instanceId: 'service-a', sequence: 2, tasks: [{ ...task, identity: { ...task.identity, url: 'different' } }] });
+  await wrongIdentity.context.loadTransferHistory();
+  assert.equal(wrongIdentity.context.activeDownloads[0].status, 'paused');
 
   // Persisted verification warnings must remain visible in the completed list.
   const cards = [];

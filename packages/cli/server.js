@@ -30,7 +30,9 @@ class BiodlServer {
     this.server = null;
     this.optimizationJob = null;
     this.pendingProgress = new Map();
-    this.latestStatuses = new Map();
+    this.runtimeInstanceId = crypto.randomBytes(16).toString('hex');
+    this.runtimeSequence = 0;
+    this.runtimeTasks = new Map();
     this.progressTimer = null;
     this.loadSessions();
 
@@ -58,11 +60,29 @@ class BiodlServer {
     } catch (e) {}
   }
 
+  runtimeSnapshot() {
+    return { instanceId: this.runtimeInstanceId, sequence: this.runtimeSequence, tasks: [...this.runtimeTasks.values()] };
+  }
+
+  registerRuntimeTasks(payload) {
+    for (const file of payload?.files || []) {
+      if (file.isUpdate || file.originalIndex == null) continue;
+      const index = file.originalIndex;
+      this.runtimeTasks.delete(index);
+      this.runtimeTasks.set(index, { index, identity: { name: file.name, url: file.url, folder: file.folder || '', targetDir: payload.targetDir } });
+      while (this.runtimeTasks.size > 2000) this.runtimeTasks.delete(this.runtimeTasks.keys().next().value);
+      this.broadcastSSE('download-status', { index, status: 'waiting' });
+    }
+  }
+
   broadcastSSE(event, data) {
-    if (event === 'download-status') {
-      this.latestStatuses.delete(data.index);
-      this.latestStatuses.set(data.index, data);
-      while (this.latestStatuses.size > 2000) this.latestStatuses.delete(this.latestStatuses.keys().next().value);
+    if (event === 'download-status' || event === 'download-progress') {
+      data = { ...data, runtimeInstanceId: this.runtimeInstanceId, runtimeSequence: ++this.runtimeSequence };
+      const task = this.runtimeTasks.get(data.index);
+      if (task) {
+        if (event === 'download-status') { task.status = data; task.progress = null; }
+        else task.progress = data;
+      }
     }
     if (event === 'download-progress') {
       this.pendingProgress.set(data.index, data);
@@ -74,7 +94,8 @@ class BiodlServer {
       }, 250);
       return;
     }
-    if (event === 'download-status' && ['completed','failed','cancelled','paused'].includes(data.status)) this.pendingProgress.delete(data.index);
+    // Every status is an ordering barrier, including connecting/verifying.
+    if (event === 'download-status') this.pendingProgress.delete(data.index);
     this.writeSSE(event, data);
   }
 
@@ -246,9 +267,17 @@ class BiodlServer {
         'X-Accel-Buffering': 'no'
       });
       res.write('retry: 3000\n\n');
-      for (const data of this.latestStatuses.values()) {
+      // Replay the latest phase and progress in sequence order; no asynchronous
+      // work occurs between this snapshot and subscribing to live events.
+      const replay = [];
+      for (const task of this.runtimeTasks.values()) {
+        if (task.status) replay.push(['download-status', task.status]);
+        if (task.progress) replay.push(['download-progress', task.progress]);
+      }
+      replay.sort((a, b) => a[1].runtimeSequence - b[1].runtimeSequence);
+      for (const [event, data] of replay) {
         if (res.writableLength > 512 * 1024) break;
-        res.write(`event: download-status\ndata: ${JSON.stringify(data)}\n\n`);
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       }
       this.sseClients.add(res);
       const heartbeat=setInterval(()=>{try{res.write(': heartbeat\n\n');}catch(_){}},15000);
@@ -323,7 +352,22 @@ class BiodlServer {
           }
           return this.sendJson(res, 202, { success: true, result: { optimizationJob: job.id } });
         }
-        const result = await main.callIpcHandler(channel, payload);
+        if (channel === 'save-transfers-history' && Array.isArray(payload?.active)) {
+          for (const item of payload.active) {
+            const task = this.runtimeTasks.get(item.originalIndex);
+            if (task && (!item.runtimeInstanceId || item.runtimeInstanceId === this.runtimeInstanceId) && task.identity.name === item.name && task.identity.url === item.url && task.identity.folder === (item.folder || '') && task.identity.targetDir === item.targetDir) item.runtimeInstanceId = this.runtimeInstanceId;
+          }
+        }
+        if (channel === 'start-download') this.registerRuntimeTasks(payload);
+        let result;
+        try { result = await main.callIpcHandler(channel, payload); }
+        catch (error) {
+          if (channel === 'start-download') {
+            for (const file of payload?.files || []) this.broadcastSSE('download-status', { index: file.originalIndex, status: 'failed', speed: error.message });
+          }
+          throw error;
+        }
+        if (channel === 'get-transfers-history') result = { ...result, runtimeSnapshot: this.runtimeSnapshot() };
         let createdSid = null;
         if ((channel === 'api-login' || channel === 'api-register' || channel === 'api-get-user-info') && result && result.success && result.token) {
           if (!session || session.token !== result.token) createdSid = this.createSession(res, result.token);

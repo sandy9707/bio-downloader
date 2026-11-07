@@ -1,5 +1,10 @@
 // Build an explicit allowlist; private backend, profiles and credentials are never packaged.
 const fs = require('fs'), path = require('path'), cp = require('child_process'), crypto = require('crypto');
+// This builder executes the packaged runtime and engines as a smoke test.
+// Refuse cross-host builds before touching dist rather than shipping Darwin Node.
+if (process.platform !== 'linux' || process.arch !== 'x64') {
+  throw new Error('Linux x64 packaging must run on a Linux x64 host; use the isolated Linux builder or release CI.');
+}
 const root = path.resolve(__dirname, '..'), version = require('../package.json').version;
 const out = path.join(root, 'dist'), bundle = path.join(out, 'BioDownloader-Linux-x64');
 fs.rmSync(bundle, { recursive: true, force: true });fs.mkdirSync(bundle, { recursive: true });

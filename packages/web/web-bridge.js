@@ -22,14 +22,66 @@
   let connectedSid = null;
   const pendingProgress = new Map();
   let progressTimer = null;
+  let transferHistoryReady = false;
+  let historyWatermark = null;
+  const earlyTransfers = new Map();
+  const lastTransferEvents = new Map();
+  function deliverTransfer(event, data) {
+    if (historyWatermark && data.runtimeInstanceId === historyWatermark.instanceId && data.runtimeSequence <= historyWatermark.sequence) return;
+    if (!transferHistoryReady) {
+      const entry = earlyTransfers.get(data.index) || {};
+      if (event === 'download-status') { entry.status = data; entry.progress = null; }
+      else entry.progress = data;
+      earlyTransfers.delete(data.index);
+      earlyTransfers.set(data.index, entry);
+      while (earlyTransfers.size > 2000) earlyTransfers.delete(earlyTransfers.keys().next().value);
+      return;
+    }
+    // Reconnect replay can otherwise regress a phase already delivered live.
+    const previous = lastTransferEvents.get(data.index);
+    if (previous && previous.instanceId === data.runtimeInstanceId && data.runtimeSequence <= previous.sequence) return;
+    lastTransferEvents.delete(data.index);
+    lastTransferEvents.set(data.index, { instanceId: data.runtimeInstanceId, sequence: data.runtimeSequence });
+    while (lastTransferEvents.size > 2000) lastTransferEvents.delete(lastTransferEvents.keys().next().value);
+    if (event === 'download-status') {
+      pendingProgress.delete(data.index);
+      for (const fn of listeners.downloadStatus) fn(data);
+      return;
+    }
+    pendingProgress.set(data.index, data);
+    while (pendingProgress.size > 2000) pendingProgress.delete(pendingProgress.keys().next().value);
+    if (!progressTimer) progressTimer = setTimeout(() => {
+      progressTimer = null;
+      const batch = [...pendingProgress.values()]; pendingProgress.clear();
+      for (const item of batch) for (const fn of listeners.downloadProgress) { try { fn(item); } catch (_) {} }
+    }, 250);
+  }
+  function markTransferHistoryReady(snapshot) {
+    historyWatermark = snapshot || null;
+    transferHistoryReady = true;
+    const replay = [];
+    for (const entry of earlyTransfers.values()) {
+      if (entry.status) replay.push(['download-status', entry.status]);
+      if (entry.progress) replay.push(['download-progress', entry.progress]);
+    }
+    earlyTransfers.clear();
+    replay.sort((a, b) => (a[1].runtimeSequence || 0) - (b[1].runtimeSequence || 0));
+    for (const [event, data] of replay) deliverTransfer(event, data);
+  }
   function connectSse() {
     const sid = localStorage.getItem('biodl_session');
+    if (connectedSid !== sid) {
+      clearTimeout(progressTimer); progressTimer = null;
+      pendingProgress.clear(); earlyTransfers.clear(); lastTransferEvents.clear();
+      historyWatermark = null;
+    }
     if (!sid) { if(sse)sse.close();sse=null;connectedSid=null;return; }
     if (sse && connectedSid === sid && sse.readyState !== 2) return;
     if (sse) sse.close();
     connectedSid = sid;
     const sseUrl = sid ? `/api/events?sid=${encodeURIComponent(sid)}` : '/api/events';
     sse = new EventSource(sseUrl);
+    const source = sse;
     sse.addEventListener('update-download-progress', (e) => {
       try { listeners.updateDownloadProgress.forEach(fn => fn(JSON.parse(e.data))); } catch (_) {}
     });
@@ -43,22 +95,15 @@
       try { listeners.clashValidationProgress.forEach(fn => fn(JSON.parse(e.data))); } catch (_) {}
     });
     sse.addEventListener('download-status', (e) => {
+      if (sse !== source) return;
       try {
-        const data = JSON.parse(e.data);
-        if (['completed','failed','cancelled','paused'].includes(data.status)) pendingProgress.delete(data.index);
-        listeners.downloadStatus.forEach(fn => fn(data));
+        deliverTransfer('download-status', JSON.parse(e.data));
       } catch (err) {}
     });
     sse.addEventListener('download-progress', (e) => {
+      if (sse !== source) return;
       try {
-        const data = JSON.parse(e.data);
-        pendingProgress.set(data.index, data);
-        while (pendingProgress.size > 2000) pendingProgress.delete(pendingProgress.keys().next().value);
-        if (!progressTimer) progressTimer = setTimeout(() => {
-          progressTimer = null;
-          const batch = [...pendingProgress.values()];pendingProgress.clear();
-          for (const item of batch) for (const fn of listeners.downloadProgress) { try { fn(item); } catch (_) {} }
-        }, 250);
+        deliverTransfer('download-progress', JSON.parse(e.data));
       } catch (err) {}
     });
     sse.addEventListener('curl-download-progress', (e) => {
@@ -207,6 +252,7 @@
   window.api = new Proxy({}, {
     get(target, prop) {
       if (prop === 'isElectron') return false;
+      if (prop === 'transferHistoryReady') return markTransferHistoryReady;
       // 监听器
       if (prop === 'onMd5VerificationProgress') return (cb) => listeners.md5Progress.push(cb);
       if (prop === 'onClashValidationProgress') return (cb) => { listeners.clashValidationProgress = [cb]; };
