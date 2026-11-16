@@ -5,19 +5,20 @@ const { bioSource } = require('./bio-transfer-guard');
 const { verifyFile } = require('./download-integrity');
 
 // One local disk reader at a time, independent of download scheduling/billing.
-function createManualMd5(reference) {
+function createManualMd5(reference, { getRepairProxy = () => false, repair = options => require('./fastq-repair-policy').repairMismatch(options) } = {}) {
   let active = null;
   return {
     cancel(id) {
       if (!active || active.id !== id) return false;
       active.cancelled = true;
+      active.controller.abort();
       active.interrupt?.();
       return true;
     },
-    async verify({ id, savePath, file }, notify = () => {}) {
+    async verify({ id, savePath, file, repair: repairRequested = false }, notify = () => {}) {
       if (active) throw new Error('已有 MD5 校验正在进行，请等待完成或停止校验');
       if (!id || typeof savePath !== 'string' || !savePath) throw new Error('缺少文件路径，无法校验');
-      const job = { id, cancelled: false };
+      const job = { id, cancelled: false, controller: new AbortController() };
       active = job;
       const checkControl = () => { if (job.cancelled) throw new Error('MD5 校验已停止'); };
       let lastProgress = 0, release;
@@ -34,7 +35,7 @@ function createManualMd5(reference) {
         ]);
         job.interrupt = null;
         checkControl();
-        const verification = await verifyFile(savePath, ref, {
+        let verification = await verifyFile(savePath, ref, {
           deep: true, computeWithoutReference: true, checkControl,
           onProgress(bytes, total) {
             const now = Date.now();
@@ -43,6 +44,18 @@ function createManualMd5(reference) {
             notify({ id, phase: 'hashing', bytes, total });
           }
         });
+        if (repairRequested && verification.status === 'mismatch') {
+          await downloadFiles.persistVerification(savePath, file.url, verification);
+          try {
+            verification = await repair({ file, filename: savePath, reference: ref, verification, deep: true,
+              proxy: getRepairProxy(file), signal: job.controller.signal, checkControl,
+              onProgress: progress => notify({ ...progress, id }) });
+          } catch (error) {
+            if (job.cancelled) return { cancelled: true };
+            if (!error.verification) throw error;
+            verification = error.verification;
+          }
+        }
         verification.checkedAt = new Date().toISOString();
         // Keep the downloader's existing-file decision aware of a manual MD5
         // mismatch. Never create a resume record or claim a partial file complete.

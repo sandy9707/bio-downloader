@@ -2655,7 +2655,10 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     releaseFile = downloadFiles.claimFile(savePath);
     const knownMismatch = await downloadFiles.priorMismatch(savePath, file.url);
     if (!downloadFiles.hasResume(savePath) && (file.redownloadMismatch || knownMismatch)) {
-      backupPath = await downloadFiles.preserveForRedownload(savePath);
+      // Eligible FASTQ mismatches get the same bounded local repair opportunity
+      // before any whole-file replacement. Explicit redownload remains opt-in.
+      const repairCandidate = !file.redownloadMismatch && require('./src/main/fastq-repair-policy').repairSource(file, { expectedSize: Number(file.size), expectedMd5: file.md5 }, { deep: true });
+      if (!repairCandidate) backupPath = await downloadFiles.preserveForRedownload(savePath);
       deepForFile = true;
     }
     engineForFile = selectEngine(file, getSettings(), savePath);
@@ -2674,7 +2677,8 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     };
     const integrityFields = () => ({ verification, md5: file.md5 || null, size: file.size, engine: engineForFile, backupPath });
     async function checkIntegrity(existing = false) {
-      activeIntegrityChecks.set(fileIndex, { wake: () => {} });
+      const repairController = new AbortController();
+      activeIntegrityChecks.set(fileIndex, { wake: () => {}, abort: () => repairController.abort() });
       let lastProgressAt = 0;
       try {
         await checkControl();
@@ -2697,6 +2701,23 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
             });
           }
         });
+        // Persist the diagnosed mismatch before any repair can be interrupted.
+        // Unknown/unfinished repair must never make a later quick-mode skip clean.
+        if (verification.status === 'mismatch') await downloadFiles.persistVerification(savePath, file.url, verification);
+        if (verification.status === 'mismatch' && !file.redownloadMismatch) {
+          // Do not infer bad offsets from a whole-file digest. The repair policy
+          // only fetches independently located, bounded ENA FASTQ candidates.
+          verification = await require('./src/main/fastq-repair-policy').repairMismatch({
+            file, filename: savePath, reference, verification, deep: deepForFile, checkControl, signal: repairController.signal,
+            proxy: !directDownload && clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false,
+            onProgress: progress => {
+              const labels = { 'repair-scan': '正在定位可修复区段…', 'repair-fetch': '正在补取损坏区段…',
+                'repair-final-md5': '正在复核修复后的全文 MD5…', 'repair-final-gzip': '正在复核文件结构…' };
+              sendStatus({ index: fileIndex, status: 'downloading', phase: 'verifying', savePath,
+                speed: labels[progress.phase] || '正在尝试局部修复…' });
+            }
+          });
+        }
         if (transport) verification.transport = transport;
         if (nativeResult) verification.transport = { status: 'range-verified', engine: 'native', boundaries: 'overlap-checked', remoteChecksumVerified: false };
         if (bioGuard) await bioGuard.complete(verification);
@@ -2765,7 +2786,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
           });
           return;
         } catch (error) {
-          if (error.verification?.status === 'mismatch') {
+          if (error.verification?.status === 'mismatch' && !error.preserveMismatch) {
             await checkControl();
             if (bioGuard) { await bioGuard.close(); bioGuard = null; }
             backupPath = await downloadFiles.preserveForRedownload(savePath);
@@ -3489,7 +3510,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       cancelled = true;
       // 确保被杀进程不再触发重试/保底;清除暂停标记,避免被挂起的任务取消后误报 paused
       for (const idx of [...activeAxelProcesses.keys(), ...activeNativeTransfers.keys()]) { cancelledFiles.add(idx); pausedAxelFiles.delete(idx); }
-      for (const check of activeIntegrityChecks.values()) check.wake();
+      for (const check of activeIntegrityChecks.values()) { check.abort?.(); check.wake(); }
       await Promise.all([...activeNativeTransfers.values()].map(task => task.cancel()));
       killAllAxelProcesses();
       finish({ success: true, cancelled: true });
@@ -3507,7 +3528,7 @@ ipcMain.handle('cancel-download', async (event, fileIndex) => {
     // 标记取消:无论进程是否正在跑(排队中同样生效),重试循环与保底引擎见到标记立即终止
     pausedAxelFiles.delete(fileIndex);
     cancelledFiles.add(fileIndex);
-    if (activeIntegrityChecks.has(fileIndex)) activeIntegrityChecks.get(fileIndex).wake();
+    if (activeIntegrityChecks.has(fileIndex)) { const check = activeIntegrityChecks.get(fileIndex); check.abort?.(); check.wake(); }
     if (activeNativeTransfers.has(fileIndex)) await activeNativeTransfers.get(fileIndex).cancel();
     const proc = activeAxelProcesses.get(fileIndex);
     if (proc) {
@@ -3519,7 +3540,7 @@ ipcMain.handle('cancel-download', async (event, fileIndex) => {
   } else {
     console.log('Cancelling all active downloads...');
     for (const idx of [...activeAxelProcesses.keys(), ...activeIntegrityChecks.keys(), ...activeNativeTransfers.keys()]) cancelledFiles.add(idx);
-    for (const check of activeIntegrityChecks.values()) check.wake();
+    for (const check of activeIntegrityChecks.values()) { check.abort?.(); check.wake(); }
     await Promise.all([...activeNativeTransfers.values()].map(task => task.cancel()));
     killAllAxelProcesses();
     return true;
@@ -3582,7 +3603,13 @@ ipcMain.handle('resume-download', async (event, fileIndex) => {
   return { success: true, resumed: false };
 });
 
-const manualMd5 = require('./src/main/manual-md5').createManualMd5(enaIntegrity.reference);
+const manualMd5 = require('./src/main/manual-md5').createManualMd5(enaIntegrity.reference, {
+  getRepairProxy: file => {
+    if (file?.networkMode === 'direct') return false;
+    if (!clashProcess) throw new Error('加速连接未启动，未进行局部补取；请先连接或明确选择直连');
+    return { protocol: 'http', host: '127.0.0.1', port: 43289 };
+  }
+});
 ipcMain.handle('verify-transfer-md5', (event, payload) => manualMd5.verify(payload, data => {
   if (!event.sender.isDestroyed?.()) event.sender.send('md5-verification-progress', data);
 }));

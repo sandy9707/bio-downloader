@@ -124,7 +124,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   await check('unknown-size.bin', { expected: null, size: 0, status: 'completed', verification: 'unchecked', charged: 1 });
 
   // Old histories/direct links without MD5 obtain the correct ENA mate reference.
-  await check('SRR123456_1.fastq.gz', { url: enaUrl('SRR123456'), expected: null, existing: bad, status: 'completed', verification: 'verified', charged: 1 });
+  await check('SRR123456_1.fastq.gz', { url: enaUrl('SRR123456'), expected: null, existing: bad, status: 'failed', verification: 'mismatch' });
   const metaBefore = metadataCalls;
   const secondMate = await check('SRR123456_2.fastq.gz', { url: enaUrl('SRR123456', 2), expected: null, existing: bad, status: 'completed', verification: 'verified' });
   assert.equal(metadataCalls, metaBefore, 'metadata must be cached across paired tasks');
@@ -181,6 +181,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   try {
     const quick = await check('quick-good.fastq.gz', { expected: null, status: 'completed', verification: 'quick-checked', charged: 1 });
     assert.equal(quick.verification.actualMd5, null);
+     assert.equal(quick.verification.md5Requested, false);
     assert.equal(quick.verification.sampledBytes, 18);
     await check('quick-bad-middle.fastq.gz', { expected: null, status: 'completed', verification: 'quick-checked', charged: 1 });
     await check('quick-bad-header.fastq.gz', { expected: null, verification: 'failed' });

@@ -15,4 +15,7 @@ for(const previous of ['2.2.7','2.2.8-preview.1','2.2.6-preview.1','2.2.3-previe
   assert.equal(c.compareVersions('2.2.9',previous),1);
   assert.equal(legacyCompare('2.2.9',previous),1);
 }
+assert.equal(c.compareVersions('2.2.10-preview.1','2.2.9'),1);
+assert.equal(legacyCompare('2.2.10-preview.1','2.2.9'),1);
+assert.equal(c.compareVersions('2.2.10','2.2.10-preview.1'),1);
 console.log('VERSION_ORDER_OK');

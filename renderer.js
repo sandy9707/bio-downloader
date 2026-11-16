@@ -1325,7 +1325,7 @@ async function startDownload(direct = false) {
     const ids = new Set(batch.map(file => file.originalIndex));
     const completed = completedDownloads.filter(item => ids.has(item.fileObj?.originalIndex));
     const failed = failedDownloads.filter(item => ids.has(item.originalIndex));
-    const warnings = completed.filter(item => ['unavailable', 'mismatch'].includes(item.verification?.status)).length;
+    const warnings = completed.filter(item => item.verification?.status === 'mismatch' || item.verification?.status === 'unavailable' && item.verification?.method === 'md5').length;
     if (!result?.cancelled) showToast(`本批下载结束：完成 ${completed.length} · 失败 ${failed.length}${warnings ? ' · MD5 待核对 ' + warnings : ''}`, failed.length || warnings ? 'warning' : 'info');
   } catch (error) {
     startupError = error;
@@ -3002,7 +3002,7 @@ function updateMd5Toolbar() {
   if (start) { start.style.display = currentTransferSubTab === 'completed' ? '' : 'none'; start.disabled = Boolean(manualMd5Run); }
   if (stop) stop.style.display = manualMd5Run ? '' : 'none';
 }
-async function runCompletedMd5(items) {
+async function runCompletedMd5(items, { repair = false } = {}) {
   if (manualMd5Run) return showToast('已有 MD5 校验正在进行，可等待完成或点击停止校验', 'info');
   if (!items.length) return showToast('没有待校验的已完成文件', 'info');
   const run = { cancelled: false, id: null, item: null };
@@ -3023,15 +3023,18 @@ async function runCompletedMd5(items) {
       renderCompletedList();
       try {
         const result = await window.api.verifyTransferMd5({
-          id: run.id, savePath: item.savePath,
+          id: run.id, savePath: item.savePath, repair,
           file: { ...item.fileObj, name: item.name, url: item.url || item.fileObj?.url,
-            size: item.size, md5: item.md5 || item.fileObj?.md5 || item.verification?.expectedMd5 }
+            size: item.size, networkMode: item.networkMode || item.fileObj?.networkMode,
+            md5: item.md5 || item.fileObj?.md5 || item.verification?.expectedMd5 }
         });
         if (result.cancelled) { run.cancelled = true; break; }
         item.verification = result.verification;
         if (item.verification.status === 'verified') verified++; else warning++;
       } catch (error) {
-        item.verification = { status: 'failed', reason: error.message }; warning++;
+        item.verification = item.verification?.status === 'mismatch'
+          ? { ...item.verification, reason: error.message }
+          : { status: 'failed', method: 'md5', md5Requested: true, reason: error.message }; warning++;
       } finally {
         delete item.md5Progress;
         syncTransfersToStorage(); renderCompletedList();
@@ -3043,10 +3046,29 @@ async function runCompletedMd5(items) {
 if (window.api.onMd5VerificationProgress) window.api.onMd5VerificationProgress(data => {
   if (!manualMd5Run || manualMd5Run.id !== data.id) return;
   manualMd5Run.item.md5Progress = data.phase === 'hashing'
-    ? `正在校验 MD5：${data.total ? Math.floor(data.bytes * 100 / data.total) : 100}%` : '正在获取参考 MD5…';
+    ? `正在校验 MD5：${data.total ? Math.floor(data.bytes * 100 / data.total) : 100}%` : data.phase?.startsWith('repair-') ? '正在尝试局部修复并复核…' : '正在获取参考 MD5…';
   renderCompletedList();
 });
 
+function completedMd5Reference(item) {
+  return /^[a-f0-9]{32}$/i.test(item.verification?.expectedMd5 || item.md5 || item.fileObj?.md5 || '');
+}
+function completedIntegrityLabel(item) {
+  const v = item.verification || {};
+  if (item.md5Progress) return item.md5Progress;
+  if (v.status === 'mismatch') return '已保存 · MD5 与参考值不一致，需核对';
+  if (v.status === 'failed') return '校验失败：' + (v.reason || '请重试');
+  if (v.status === 'verified') return v.repair?.status === 'verified' ? '局部修复完成 · MD5 与参考值一致' : 'MD5 与参考值一致';
+  if (v.md5Requested === true || v.method === 'md5') {
+    if (v.status === 'computed') return '已计算本地 MD5（无参考值，未比对）';
+    if (v.status === 'unavailable') return '已保存 · 本次 MD5 校验未完成';
+  }
+  return v.status === 'quick-checked' ? '下载完成 · 快速检查通过' : item.skip ? '大小匹配 (跳过)' : '下载完成';
+}
+async function repairCompletedFile(index) {
+  const item = completedDownloads[index];
+  if (item) await runCompletedMd5([item], { repair: true });
+}
 function renderCompletedList() {
   const container = document.getElementById('transferCompletedList');
   if (!container) return;
@@ -3088,16 +3110,17 @@ function renderCompletedList() {
         </div>
         <div class="transfer-item-meta">
           <span class="transfer-item-size">${formatBytes(item.size || 0)}</span>
-          <span class="transfer-item-status completed"${item.verification && ['unavailable', 'mismatch', 'computed', 'failed'].includes(item.verification.status) ? ' style="color: #d97706;"' : ''} title="${escapeHtml(item.verification && item.verification.reason || '')}">${item.md5Progress ? escapeHtml(item.md5Progress) : item.verification?.status === 'failed' ? '校验失败：' + escapeHtml(item.verification.reason || '请重试') : item.verification?.status === 'computed' ? '已计算 MD5，缺少参考值（未比对）' : item.verification && item.verification.status === 'mismatch' ? '已保存 · MD5 与参考值不一致，需核对' : item.verification && item.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : item.verification && item.verification.status === 'verified' ? 'MD5 与参考值一致' : item.verification && item.verification.status === 'quick-checked' ? (item.verification.transport?.engine === 'native' ? '分块与边界检查通过（未做 MD5）' : item.verification.transport ? '源文件抽样通过（未做 MD5）' : '快速检查通过（未做 MD5）') : item.skip ? '大小匹配 (跳过)' : '下载完成'}</span>
+          <span class="transfer-item-status completed"${['mismatch', 'failed'].includes(item.verification?.status) ? ' style="color:#b45309;"' : ''} title="${escapeHtml(['mismatch', 'failed'].includes(item.verification?.status) || item.verification?.method === 'md5' ? item.verification?.reason || '' : '')}">${escapeHtml(completedIntegrityLabel(item))}</span>
           ${item.verification?.actualMd5 ? `<span style="word-break:break-all;user-select:text;">本地 MD5：${escapeHtml(item.verification.actualMd5)}</span>` : ''}
-          ${item.verification?.status === 'unavailable' || item.verification?.status === 'computed' ? `<span>${escapeHtml(item.verification.reason || '缺少参考 MD5，可点击校验重试')}</span>` : ''}
+          ${item.verification?.method === 'md5' && ['unavailable', 'computed'].includes(item.verification.status) ? `<span>${escapeHtml(item.verification.reason || '')}</span>` : ''}
           ${item.backupPath ? `<span style="word-break:break-all;user-select:text;" title="${escapeHtml(item.backupPath)}">原文件已保留：${escapeHtml(item.backupPath)}</span>` : ''}
           <span class="transfer-item-time">${item.completedAt}</span>
         </div>
       </div>
       <div class="tl-actions">
         ${item.verification?.status === 'mismatch' ? `<button class="tl-btn primary" style="width:auto;padding:0 8px;" onclick="redownloadMismatch(${index})" ${item.md5Progress ? 'disabled' : ''}>重新下载</button>` : ''}
-        <button class="tl-btn primary" style="width:auto;padding:0 8px;" title="读取已有文件并立即校验 MD5，不重复下载" onclick="verifyCompletedMd5(${index})" ${item.md5Progress ? 'disabled' : ''}>校验 MD5</button>
+          ${item.verification?.status === 'mismatch' && completedMd5Reference(item) && /^https?:\/\/ftp\.sra\.ebi\.ac\.uk\/vol1\/fastq\//.test(item.url || item.fileObj?.url || '') ? `<button class="tl-btn primary" style="width:auto;padding:0 8px;" title="仅尝试可定位的少量区段；失败保留原文件，不自动重下" onclick="repairCompletedFile(${index})" ${item.md5Progress ? 'disabled' : ''}>尝试局部修复</button>` : ''}
+          ${completedMd5Reference(item) ? `<button class="tl-btn primary" style="width:auto;padding:0 8px;" title="读取已有文件并立即校验 MD5，不重复下载" onclick="verifyCompletedMd5(${index})" ${item.md5Progress ? 'disabled' : ''}>校验 MD5</button>` : ''}
         <button class="tl-btn primary" title="在文件夹中定位" onclick="openCompletedRecord(${index})">📂</button>
         <button class="tl-btn danger" title="删除记录" onclick="deleteCompletedRecord(${index})">🗑</button>
       </div>
@@ -3986,7 +4009,7 @@ function handleDownloadStatus(data) {
       }
     } else if (status === 'completed') {
       txt.className = 'item-status status-completed';
-      txt.innerText = data.verification && data.verification.status === 'mismatch' ? '已保存 · MD5 待核对' : data.verification && data.verification.status === 'unavailable' ? '已保存 · MD5 未核验' : '下载完成';
+      txt.innerText = data.verification && data.verification.status === 'mismatch' ? '已保存 · MD5 待核对' : data.verification?.method === 'md5' && data.verification.status === 'unavailable' ? '已保存 · 本次 MD5 校验未完成' : '下载完成';
       if (fill) fill.style.width = '100%';
       if (pct) pct.innerText = '100%';
       const speedEl = document.getElementById(`speed-text-${queueIndex}`);

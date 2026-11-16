@@ -158,6 +158,10 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
   assert.equal(charges,beforeDirectCharges,'explicit direct download must not consume acceleration traffic');
   assert.equal(await win.webContents.executeJavaScript(`completedDownloads.some(item=>item.name==='direct.bin')`),true);
   console.log('ELECTRON_DIRECT_NO_CONSUME_OK');
+   const integrityUI=await win.webContents.executeJavaScript(`(()=>{completedDownloads=[{name:'SRR-no-reference.sra',size:32768,completedAt:'fixture',verification:{status:'quick-checked',method:'quick',md5Requested:false}},{name:'mismatch.bin',size:32768,completedAt:'fixture',verification:{status:'mismatch',method:'md5',expectedMd5:'0'.repeat(32)}}];switchTransferSubTab('completed');renderCompletedList();return [...document.querySelectorAll('#transferCompletedList .transfer-item')].map(e=>e.innerText);})()`);
+   assert(!/未做 MD5|未核验|校验 MD5/.test(integrityUI[0]));assert(/不一致/.test(integrityUI[1]));
+   if(process.env.BIODL_UI_CAPTURE)fs.writeFileSync(process.env.BIODL_UI_CAPTURE,(await win.webContents.capturePage()).toPNG());
+   console.log('ELECTRON_OPTIONAL_MD5_UI_OK',JSON.stringify(integrityUI));
   console.log('ELECTRON_PAGINATION_STALL_OK',JSON.stringify(controls));
  console.log('ELECTRON_PROGRESS_OK',JSON.stringify(displayed));
  console.log('ELECTRON_SMOKE',JSON.stringify({mode,state,errors,charges}));

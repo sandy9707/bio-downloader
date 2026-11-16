@@ -91,7 +91,7 @@ async function verifyFile(filename, reference, { deep = false, computeWithoutRef
   const result = {
     status: 'unchecked', expectedSize: reference.expectedSize, actualSize: before.size,
     expectedMd5: reference.expectedMd5, actualMd5: null, reason: reference.reason || null,
-    method: deep ? 'md5' : 'quick', sampledBytes: 0
+    method: deep ? 'md5' : 'quick', md5Requested: Boolean(deep), sampledBytes: 0
   };
   function fail(message) {
     result.status = 'failed';
