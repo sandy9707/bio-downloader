@@ -175,11 +175,51 @@ program
     console.log(`✅ 登录成功\n${formatAccountInfo(info)}`);
   });
 
+async function projectFiles(accession, { source, run } = {}, forDownload = false) {
+  const result = await main.callIpcHandler('query-bioproject', { project: accession });
+  console.log(`${result.accession} · ${result.runs.length} 个 Run · ${result.files.length} 个公开文件`);
+  for (const detail of [result.message, result.officialUrl, result.applicationUrl]) if (detail) console.log(detail);
+  if (result.projects?.length) console.log('关联项目:', result.projects.join(', '));
+  if (result.access !== 'public' || !result.files.length) {
+    if (forDownload) throw Error('没有可加入下载队列的公开文件');
+    return [];
+  }
+  const wanted = result.files.map((file, index) => ({ file, index })).filter(({ file }) => !run || file.run === run.toUpperCase());
+  if (!wanted.length) throw Error('该项目中没有所选 Run 的文件');
+  const pages = new Set(wanted.map(({ index }) => Math.floor(index / result.pageSize)));
+  const indexes = new Set(wanted.map(({ index }) => index));
+  const files = [];
+  for (const page of pages) {
+    const rows = await main.callIpcHandler('probe-project-page', { queryId: result.queryId, page });
+    for (const { index, sources } of rows) {
+      if (!indexes.has(index)) continue;
+      const file = result.files[index];
+      const chosen = sources.find(candidate => {
+        if (!candidate.available) return false;
+        const address = new URL(candidate.url);
+        return !source || source === address.protocol.slice(0, -1) || source === address.host || source === candidate.url;
+      });
+      console.log(`${file.run || ''} ${file.name}`);
+      for (const s of sources) console.log(`  ${s === chosen ? '*' : '-'} ${s.url}  ${s.available ? s.latencyMs + ' ms' : s.reason}`);
+      if (chosen) files.push({ name: file.name, url: chosen.url, size: file.size || chosen.size, md5: file.md5, folder: file.run });
+    }
+  }
+  if (forDownload && files.length !== wanted.length) throw Error(`仅 ${files.length}/${wanted.length} 个文件有所选可用来源，未启动下载`);
+  return files;
+}
+
+program.command('project <accession>').description('查询项目及文件，显示各来源直连实测延迟与默认选择')
+  .option('--run <accession>', '只列出指定 Run 的文件')
+  .option('--source <protocol-host-or-url>', '指定来源协议（https / ftp）、域名或完整地址')
+  .action((accession, options) => projectFiles(accession, options));
+
 // 3. biodl get: 命令行单项或批量下载
 program
   .command('get <type> <accession>')
-  .description('快速解析并下载生信数据 (SRA / EBI / GEO / 直链)')
+  .description('快速解析并下载生信数据 (bioproject / SRA / EBI / GEO / 直链)')
    .option('-o, --output <dir>', '保存目录', path.join(os.homedir(), process.platform === 'win32' ? 'Desktop' : 'Downloads'))
+  .option('--source <protocol-host-or-url>', 'BioProject 文件来源协议、域名或地址（默认实测择优）')
+  .option('--run <accession>', 'BioProject 中要下载的 Run（默认全部）')
   .option('-c, --concurrent <number>', '并发下载数', 3)
   .option('--engine <name>', '本次 HTTP 下载引擎：native / aria2 / axel')
   .action(async (type, accession, options) => {
@@ -218,7 +258,9 @@ program
 
     console.log(`🔍 正在解析 ${realType} 编号: ${accession}...`);
     try {
-      const files = await main.callIpcHandler('check-download-size', { type: realType, inputVal: accession });
+      const files = ['bioproject', 'project'].includes(realType.toLowerCase())
+        ? await projectFiles(accession, options, true)
+        : await main.callIpcHandler('check-download-size', { type: realType, inputVal: accession });
       if (!files.length) {
         console.log('❌ 未找到可下载的文件');
         return;
@@ -254,6 +296,7 @@ program
       });
 
       if (!isProxyPortActive) {
+        if (['bioproject', 'project'].includes(realType.toLowerCase())) throw Error('加速代理尚未就绪，请检查后重试');
         console.warn('\n⚠️  【注意】本地加速代理端口 (127.0.0.1:43289) 未启动或连接不可达！');
         console.warn('   当前未能正确使用高速下载节点，已降级为【直连下载】。');
         console.warn('   由于国际学术数据库直连带宽限制，直连下载速度可能较慢。');

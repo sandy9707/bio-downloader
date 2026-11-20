@@ -1432,16 +1432,19 @@
 
       <div class="card">
         <div class="form-group" id="bioProjectPanel" style="padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-secondary);">
-          <label for="bioProjectInput">BioProject 查询 Run 编号</label>
-          <div class="dir-select-group" style="margin-top: 0.5rem; flex-wrap: wrap;">
-            <input type="text" id="bioProjectInput" placeholder="例如: PRJNA727404" value="PRJNA727404" oninput="this.value=BioDownloadSources.normalizeValue('bioproject',this.value)">
-            <button class="btn btn-secondary" id="bioProjectQueryBtn" onclick="queryBioProject()">查询 Project</button>
-          </div>
-          <div id="bioProjectResult" style="margin-top:0.6rem; font-size:0.82rem; color:var(--text-muted);">查询后可将全部 Run 采用为 SRA 或 EBI 下载。</div>
-          <textarea id="bioProjectRunsInput" rows="10" style="display:none; margin-top:0.75rem;" placeholder="查询到的 Run 编号会显示在这里，可在校验前继续编辑。"></textarea>
-          <div id="bioProjectAdoptActions" style="display:none; gap:0.6rem; flex-wrap:wrap; margin-top:0.75rem;">
-            <button class="btn btn-primary btn-sm" onclick="adoptBioProjectRuns('sra_raw')">校验 SRA 文件与大小</button>
-            <button class="btn btn-secondary btn-sm" onclick="adoptBioProjectRuns('ebi_raw')">校验 EBI 文件与大小</button>
+          <label for="bioProjectInput">项目或测序编号</label>
+          <form class="dir-select-group" style="flex-wrap:wrap" onsubmit="event.preventDefault();queryBioProject()">
+            <input type="text" id="bioProjectInput" placeholder="例如 PRJNA727404" value="PRJNA727404" oninput="resetProjectView()">
+            <button class="btn btn-secondary" id="bioProjectQueryBtn" type="submit">查询项目</button>
+          </form>
+          <div id="bioProjectResult" role="status" style="margin-top:0.6rem"></div>
+          <div id="bioProjectFiles" style="display:grid;gap:.5rem"></div>
+          <div id="bioProjectAdoptActions" style="display:none;gap:.5rem;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-secondary btn-sm" id="bioPrev" onclick="showProjectPage(projectView.page-1)">上一页</button>
+            <span id="bioPage"></span>
+            <button class="btn btn-secondary btn-sm" id="bioNext" onclick="showProjectPage(projectView.page+1)">下一页</button>
+            <button class="btn btn-secondary btn-sm" onclick="showProjectPage(projectView.page)">重测本页</button>
+            <button class="btn btn-primary btn-sm" id="bioAdopt" onclick="adoptBioProjectRuns()">将本页所选文件加入队列</button>
           </div>
         </div>
         <div class="form-group" id="group-sra_raw">

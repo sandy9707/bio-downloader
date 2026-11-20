@@ -18,6 +18,7 @@ function escapeHtml(s) {
 
 // 队列空态提示文案(随数据源切换,避免 Zenodo/HuggingFace/直链 下仍提示 SRA/EBI/GEO)
 function getQueueEmptyHint() {
+  if (currentDownloadType === 'bioproject') return '查询项目后，选择文件来源并加入队列。';
   const sharedSource = window.BioDownloadSources?.byId?.[currentDownloadType];
   if (sharedSource) return `${sharedSource.placeholder}，点击“检验下载大小”后生成下载队列`;
   const hints = {
@@ -1043,52 +1044,146 @@ async function openReleasePage() {
 // ==========================================
 // 【文件大小校验与渲染】
 // ==========================================
-// BioProject 查询: PRJNA/PRJEB/PRJDB → Run 列表，可明确采用为 SRA 或 EBI 下载
+let projectView = null;
+let projectGeneration = 0;
+const projectEl = id => document.getElementById(id);
+
+function resetProjectView() {
+  ++projectGeneration;
+  projectView = null;
+  projectEl('bioProjectFiles').replaceChildren();
+  projectEl('bioProjectResult').textContent = '';
+  projectEl('bioProjectAdoptActions').style.display = 'none';
+  projectEl('bioProjectQueryBtn').disabled = false;
+}
+
 async function queryBioProject() {
-  const input = document.getElementById('bioProjectInput');
-  const queryBtn = document.getElementById('bioProjectQueryBtn');
-  const resultEl = document.getElementById('bioProjectResult');
-  const runsInput = document.getElementById('bioProjectRunsInput');
-  const project = String(input?.value || '').trim().toUpperCase();
-  if (!project) {
-    showToast('请输入 BioProject 编号', 'error');
-    return;
-  }
-  if (input) input.value = project;
-  if (queryBtn) queryBtn.disabled = true;
-  if (resultEl) resultEl.textContent = `正在解析 ${project}...`;
+  resetProjectView();
+  const generation = projectGeneration;
+  const project = projectEl('bioProjectInput').value.trim().toUpperCase();
+  const status = projectEl('bioProjectResult');
+  if (!project) { status.textContent = '请输入项目或测序编号'; return; }
+  if (window.campusNotice && !(await window.campusNotice.beforeUse())) return;
+  if (generation !== projectGeneration) return;
+  projectEl('bioProjectQueryBtn').disabled = true;
+  status.textContent = `正在查询 ${project}…`;
   try {
-    const res = await window.api.queryBioProject(project);
-    window.bioProjectRuns = BioDownloadSources.applyRuns(runsInput, res.runs);
-    if (runsInput) runsInput.style.display = 'block';
-    if (resultEl) resultEl.textContent = `已解析 ${res.count} 个 Run。请选择采用为 SRA 或 EBI，随后可继续编辑编号并校验大小。`;
-    document.getElementById('bioProjectAdoptActions').style.display = 'flex';
-    showToast(`${project} 已解析 ${res.count} 个 Run`, 'success');
-  } catch (e) {
-    window.bioProjectRuns = [];
-    if (runsInput) { runsInput.value = ''; runsInput.style.display = 'none'; }
-    document.getElementById('bioProjectAdoptActions').style.display = 'none';
-    if (resultEl) resultEl.textContent = '查询失败：' + e.message;
-    showToast('BioProject 查询失败：' + e.message, 'error');
+    const result = await window.api.queryBioProject(project);
+    if (generation !== projectGeneration) return;
+    status.textContent = [result.message, `${result.runs.length} 个 Run，${result.files.length} 个公开文件`].filter(Boolean).join(' · ');
+    if (result.runs.length) {
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = '查看 Run 编号';
+      const runs = document.createElement('textarea');
+      runs.readOnly = true;
+      runs.setAttribute('aria-label', '项目 Run 编号');
+      BioDownloadSources.applyRuns(runs, result.runs);
+      details.append(summary, runs);
+      status.appendChild(details);
+    }
+    for (const [caption, url] of [['官方记录', result.officialUrl], ['访问申请', result.applicationUrl]]) {
+      if (!url || !/^https:\/\//i.test(url)) continue;
+      const link = document.createElement('button');
+      link.className = 'btn btn-secondary btn-sm';
+      link.textContent = caption;
+      link.onclick = () => window.api.openExternalUrl(url);
+      status.append(' ', link);
+    }
+    for (const accession of (result.projects || []).filter(id => id !== project)) {
+      const button = document.createElement('button');
+      button.textContent = accession;
+      button.onclick = () => { projectEl('bioProjectInput').value = accession; queryBioProject(); };
+      status.append(' ', button);
+    }
+    if (result.access !== 'public' || !result.files.length) return;
+    projectView = { result, page: 0, rows: [] };
+    await showProjectPage(0);
+  } catch (error) {
+    if (generation === projectGeneration) status.textContent = `查询失败：${error.message}`;
   } finally {
-    if (queryBtn) queryBtn.disabled = false;
+    if (generation === projectGeneration) projectEl('bioProjectQueryBtn').disabled = false;
   }
 }
 
-async function adoptBioProjectRuns(targetType) {
-  const runsInput = document.getElementById('bioProjectRunsInput');
-  const runs = BioDownloadSources.normalizeList('sra_raw', runsInput?.value || '');
-  if (!runs.length) {
-    showToast('请先查询 BioProject', 'warning');
-    return;
+async function showProjectPage(page) {
+  const view = projectView;
+  if (!view) return;
+  const { result } = view;
+  const pages = Math.ceil(result.files.length / result.pageSize);
+  if (page < 0 || page >= pages) return;
+  const ticket = view.ticket = Symbol();
+  view.page = page;
+  view.rows = [];
+  const list = projectEl('bioProjectFiles');
+  projectEl('bioProjectAdoptActions').style.display = 'flex';
+  projectEl('bioPrev').disabled = page === 0;
+  projectEl('bioNext').disabled = page + 1 >= pages;
+  projectEl('bioPage').textContent = `${page + 1} / ${pages}`;
+  projectEl('bioAdopt').disabled = true;
+  list.textContent = '正在实测本页文件来源的直连响应延迟…';
+  try {
+    const rows = await window.api.probeProjectPage(result.queryId, page);
+    if (projectView !== view || view.ticket !== ticket) return;
+    list.replaceChildren();
+    for (const { index, sources } of rows) {
+      const file = result.files[index];
+      const row = document.createElement('div');
+      const label = document.createElement('label');
+      const include = document.createElement('input');
+      include.type = 'checkbox';
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', `${file.name} 来源`);
+      select.style.maxWidth = '100%';
+      for (const source of sources) {
+        const option = document.createElement('option');
+        option.value = source.url;
+        option.disabled = !source.available;
+        option.textContent = `${new URL(source.url).origin} · ${source.available ? source.latencyMs + ' ms' : source.reason}`;
+        option.title = source.url;
+        select.appendChild(option);
+
+      }
+      const best = sources.find(source => source.available);
+      include.disabled = select.disabled = !best;
+      include.checked = Boolean(best);
+      if (best) { select.value = best.url; projectEl('bioAdopt').disabled = false; }
+      label.append(include, ` ${file.run || ''} · ${file.name} `);
+      if (best) {
+        row.prepend(label, select);
+      } else {
+        const failure = document.createElement('span');
+        failure.textContent = sources.length
+          ? sources.map(source => `${new URL(source.url).origin} · ${source.reason}`).join('；')
+          : '未找到可测来源';
+        row.prepend(label, failure);
+      }
+      list.appendChild(row);
+      view.rows.push({ file, include, select, sources });
+    }
+  } catch (error) {
+    if (projectView === view && view.ticket === ticket) list.textContent = `测速失败：${error.message}`;
   }
-  const target = document.getElementById('accInput-' + targetType);
-  const pill = document.querySelector(`.pill-btn[data-download-type="${targetType}"]`);
-  if (!target || !pill) return;
-  BioDownloadSources.applyRuns(target, runs);
-  switchDownloadType(pill, targetType);
-  showToast(`已采用 ${runs.length} 个 Run，正在校验 ${targetType === 'ebi_raw' ? 'EBI' : 'SRA'} 文件`, 'success');
-  await checkSizes();
+}
+
+function adoptBioProjectRuns() {
+  if (!projectView || currentDownloadType !== 'bioproject' || isDownloading) return;
+  let count = 0;
+  for (const { file, include, select, sources } of projectView.rows) {
+    const source = sources.find(candidate => candidate.available && candidate.url === select.value);
+    if (!include.checked || !source) continue;
+    const folder = file.run || '';
+    const existing = currentQueue.find(task => task.folder === folder && task.name === file.name);
+    const selected = { name: file.name, folder, url: source.url, md5: file.md5, size: file.size || source.size };
+    if (existing) Object.assign(existing, selected);
+    else currentQueue.push({ ...selected, originalIndex: currentQueue.length });
+    count++;
+  }
+  if (!count) return showToast('请勾选至少一个有可用来源的文件', 'warning');
+  renderQueue();
+  projectEl('downloadBtn').disabled = false;
+  projectEl('totalQueueSize').innerText = '预计共 ' + formatBytes(currentQueue.reduce((n, f) => n + Number(f.size || 0), 0));
+  showToast(`已采用 ${count} 个文件的所选来源，队列共 ${currentQueue.length} 项`, 'success');
 }
 
 // BioSample 查询: SAMN → SRA run 列表, 填入 SRA 输入框并核验大小
@@ -1210,7 +1305,7 @@ function renderQueue() {
     itemEl.id = `queue-item-${index}`;
     
     const sizeStr = file.size > 0 ? formatBytes(file.size) : '未知大小';
-    const folderStr = file.folder ? `<span style="background:var(--surface-subtle);padding:2px 6px;border-radius:4px;font-size:0.75rem;">目录: ${file.folder}</span>` : '';
+    const folderStr = file.folder ? `<span style="background:var(--surface-subtle);padding:2px 6px;border-radius:4px;font-size:0.75rem;">目录: ${escapeHtml(file.folder)}</span>` : '';
 
     let threads = 16;
     if (file.size) {

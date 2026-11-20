@@ -38,6 +38,12 @@ biodl status
 biodl update
 ```
 
+### BioProject
+
+Use `biodl project PRJNA727404` to list public files and measure the direct response time of each official source. The selected source for each file is marked `*`. Use `--run <accession>` to narrow the list and `--source https` or `--source ftp` to select a protocol. A hostname or complete source URL is also accepted.
+
+`biodl get bioproject PRJNA727404 --output /data/raw` starts the download. It accepts the same `--run` and `--source` options. In the Web UI, open BioProject, query the accession, review the choices for the current page, and add the checked files to the queue. The Web server measures latency from its own network connection.
+
 ## Updates
 
 - **CLI Update**: Run `./biodl update` to check, download, verify SHA-256, and safely upgrade in place without losing downloads or settings.

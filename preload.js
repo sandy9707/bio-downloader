@@ -51,6 +51,7 @@ contextBridge.exposeInMainWorld('api', {
   // 下载管理
   checkSize: (type, inputVal) => ipcRenderer.invoke('check-download-size', { type, inputVal }),
   queryBioProject: (project) => ipcRenderer.invoke('query-bioproject', { project }),
+  probeProjectPage: (queryId, page) => ipcRenderer.invoke('probe-project-page', { queryId, page }),
   queryBioSample: (biosample) => ipcRenderer.invoke('query-biosample', { biosample }),
   startDownload: (files, targetDir, token, maxConcurrent) => ipcRenderer.invoke('start-download', { files, targetDir, token, maxConcurrent }),
   verifyTransferMd5: (request) => ipcRenderer.invoke('verify-transfer-md5', request),

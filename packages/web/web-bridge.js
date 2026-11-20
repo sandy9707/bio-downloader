@@ -151,6 +151,7 @@
 
     checkSize: (type, inputVal) => ({ channel: 'check-download-size', payload: { type, inputVal } }),
     queryBioProject: (project) => ({ channel: 'query-bioproject', payload: { project } }),
+    probeProjectPage: (queryId, page) => ({ channel: 'probe-project-page', payload: { queryId, page } }),
     queryBioSample: (biosample) => ({ channel: 'query-biosample', payload: { biosample } }),
     verifyTransferMd5: (payload) => ({ channel: 'verify-transfer-md5', payload }),
     cancelTransferMd5: (payload) => ({ channel: 'cancel-transfer-md5', payload }),
