@@ -55,39 +55,25 @@ let lowPowerModeSetting = false;
 let stableModeSetting = false;
 
 // 存储下载中心不同 Tab 的独立状态，防止切换时状态丢失与互相覆盖
-const tabStates = {
-  bioproject: { queue: [], checkSizeBtnDisabled: true, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
-  sra_raw: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
-  ebi_raw: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
-  geo_suppl: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
-  zenodo: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
-  huggingface: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' },
-  links: { queue: [], checkSizeBtnDisabled: false, downloadBtnDisabled: true, downloadBtnDisplay: 'block', cancelBtnDisplay: 'none', totalQueueSize: '共 0 字节', queueHTML: '' }
-};
+const tabStates = Object.create(null);
 
 function saveCurrentTabState() {
-  if (!currentDownloadType || !tabStates[currentDownloadType]) return;
+  if (!currentDownloadType) return;
   tabStates[currentDownloadType] = {
     queue: [...currentQueue],
-    checkSizeBtnDisabled: document.getElementById('checkSizeBtn').disabled,
-    downloadBtnDisabled: document.getElementById('downloadBtn').disabled,
-    downloadBtnDisplay: document.getElementById('downloadBtn').style.display,
-    cancelBtnDisplay: document.getElementById('cancelBtn').style.display,
-    totalQueueSize: document.getElementById('totalQueueSize').innerText,
-    queueHTML: document.getElementById('queueList').innerHTML
+    queuePage
   };
 }
 
 function restoreTabState(type) {
-  const state = tabStates[type];
-  if (!state) return;
+  const state = tabStates[type] || { queue: [] };
   currentQueue = [...state.queue];
-  document.getElementById('checkSizeBtn').disabled = state.checkSizeBtnDisabled;
-  document.getElementById('downloadBtn').disabled = state.downloadBtnDisabled;
-  document.getElementById('downloadBtn').style.display = state.downloadBtnDisplay || 'block';
-  document.getElementById('cancelBtn').style.display = state.cancelBtnDisplay || 'none';
-  document.getElementById('totalQueueSize').innerText = state.totalQueueSize || '共 0 字节';
-  document.getElementById('queueList').innerHTML = state.queueHTML || '';
+  document.getElementById('checkSizeBtn').disabled = false;
+  document.getElementById('downloadBtn').style.display = 'block';
+  document.getElementById('cancelBtn').style.display = 'none';
+  queuePage = state.queuePage || 1;
+  editingIndex = -1;
+  renderQueue();
 }
 
 // ==========================================
@@ -1058,9 +1044,16 @@ function resetProjectView() {
 }
 
 async function queryBioProject() {
+  const project = projectEl('bioProjectInput').value.trim().toUpperCase();
+  const preferences = new Map();
+  for (const task of currentQueue) {
+    if (task.sourceSelection === 'manual') preferences.set(projectQueueKey(task), { manual: task.url });
+  }
+  if (projectView?.result.accession === project) {
+    for (const item of projectView.files.values()) preferences.set(projectQueueKey(item.file), { manual: item.manual, checked: item.checked });
+  }
   resetProjectView();
   const generation = projectGeneration;
-  const project = projectEl('bioProjectInput').value.trim().toUpperCase();
   const status = projectEl('bioProjectResult');
   if (!project) { status.textContent = '请输入项目或测序编号'; return; }
   if (window.campusNotice && !(await window.campusNotice.beforeUse())) return;
@@ -1070,7 +1063,7 @@ async function queryBioProject() {
   try {
     const result = await window.api.queryBioProject(project);
     if (generation !== projectGeneration) return;
-    status.textContent = [result.message, `${result.runs.length} 个 Run，${result.files.length} 个公开文件`].filter(Boolean).join(' · ');
+    status.textContent = [`当前范围 ${result.accession}`, result.message, `${result.runs.length} 个 Run，${result.files.length} 个公开文件`, result.partial ? '部分结果，可重新查询补全' : ''].filter(Boolean).join(' · ');
     if (result.runs.length) {
       const details = document.createElement('details');
       const summary = document.createElement('summary');
@@ -1090,14 +1083,19 @@ async function queryBioProject() {
       link.onclick = () => window.api.openExternalUrl(url);
       status.append(' ', link);
     }
-    for (const accession of (result.projects || []).filter(id => id !== project)) {
+    const parents = BioProjectSources.projectParentChoices(result);
+    if (parents.length) status.append(' 请选择一个父项目或 Study 以查看其文件：');
+    const related = parents.length ? parents : (result.projects || []).filter(id => id !== result.accession);
+    for (const accession of related) {
       const button = document.createElement('button');
-      button.textContent = accession;
-      button.onclick = () => { projectEl('bioProjectInput').value = accession; queryBioProject(); };
+      button.type = 'button';
+      button.className = 'btn btn-secondary btn-sm';
+      button.textContent = `查询 ${accession}`;
+      button.onclick = () => { projectEl('bioProjectInput').value = accession; return queryBioProject(); };
       status.append(' ', button);
     }
-    if (result.access !== 'public' || !result.files.length) return;
-    projectView = { result, page: 0, rows: [] };
+    if (parents.length || result.access !== 'public' || !result.files.length) return;
+    projectView = { result, preferences, page: 0, files: new Map(), pages: new Set(), strategy: projectEl('bioSourceStrategy').value || 'fastest' };
     await showProjectPage(0);
   } catch (error) {
     if (generation === projectGeneration) status.textContent = `查询失败：${error.message}`;
@@ -1106,84 +1104,162 @@ async function queryBioProject() {
   }
 }
 
-async function showProjectPage(page) {
+function projectChoice(item, strategy) {
+  return BioProjectSources.chooseProjectSource(item.file, item.sources, { manual: item.manual, strategy });
+}
+
+function projectSelectionStatus(view) {
+  let count = 0, blocked = 0;
+  for (const item of view.files.values()) {
+    if (!item.checked) continue;
+    count++;
+    if (!projectChoice(item, view.strategy).source) blocked++;
+  }
+  projectEl('bioSelectedCount').textContent = `跨页已选 ${count} 个文件` + (blocked ? `，${blocked} 个需重测或取消勾选` : '');
+  projectEl('bioAdopt').disabled = view.loading || !count || Boolean(blocked);
+}
+
+function changeProjectStrategy(strategy) {
+  if (!projectView) return;
+  projectView.strategy = BioProjectSources.checkStrategy(strategy);
+  if (projectView.pages.has(projectView.page)) renderProjectPage(projectView);
+  else projectSelectionStatus(projectView);
+}
+
+function renderProjectPage(view) {
+  const list = projectEl('bioProjectFiles');
+  list.replaceChildren();
+  const first = view.page * view.result.pageSize;
+  const end = Math.min(first + view.result.pageSize, view.result.files.length);
+  for (let index = first; index < end; index++) {
+    const item = view.files.get(index);
+    const { file, sources } = item;
+    const row = document.createElement('div');
+    const label = document.createElement('label');
+    const include = document.createElement('input');
+    include.type = 'checkbox';
+    include.checked = item.checked;
+    include.onchange = () => { item.checked = include.checked; projectSelectionStatus(view); };
+    label.append(include, ` ${file.run} · ${file.name} `);
+    const select = document.createElement('select');
+    select.setAttribute('aria-label', `${file.name} 来源`);
+    select.style.maxWidth = '100%';
+    const addOption = (value, caption, disabled) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = caption;
+      option.disabled = Boolean(disabled);
+      if (value) option.title = value;
+      select.appendChild(option);
+    };
+    const automatic = BioProjectSources.chooseProjectSource(file, sources, { strategy: view.strategy }).source;
+    const caption = s => `${new URL(s.url).protocol.slice(0, -1).toUpperCase()} · ${new URL(s.url).host} · ${s.available ? s.latencyMs + ' ms' : s.reason}`;
+    addOption('', automatic ? `自动 · ${caption(automatic)}` : '自动 · 无可用来源');
+    for (const source of sources) addOption(source.url, caption(source), !source.available);
+    if (item.manual && !sources.some(s => s.url === item.manual)) addOption(item.manual, `手选来源待核实 · ${item.manual}`, true);
+    select.value = item.manual;
+    const detail = document.createElement('small');
+    detail.style.display = 'block';
+    const update = () => {
+      const { source, reason } = projectChoice(item, view.strategy);
+      include.disabled = !source && !item.checked;
+      const failures = automatic ? '' : sources.map(s => s.reason).filter(Boolean).join('、');
+      detail.textContent = [file.format.toUpperCase(), source && formatBytes(source.size), reason, item.note, failures].filter(Boolean).join(' · ');
+    };
+    select.onchange = () => { item.manual = select.value; update(); projectSelectionStatus(view); };
+    update();
+    row.append(label, select, detail);
+    list.appendChild(row);
+  }
+  projectSelectionStatus(view);
+}
+
+async function showProjectPage(page, refresh = false) {
   const view = projectView;
   if (!view) return;
   const { result } = view;
   const pages = Math.ceil(result.files.length / result.pageSize);
-  if (page < 0 || page >= pages) return;
+  if (!Number.isSafeInteger(page) || page < 0 || page >= pages) return;
   const ticket = view.ticket = Symbol();
   view.page = page;
-  view.rows = [];
-  const list = projectEl('bioProjectFiles');
   projectEl('bioProjectAdoptActions').style.display = 'flex';
   projectEl('bioPrev').disabled = page === 0;
   projectEl('bioNext').disabled = page + 1 >= pages;
   projectEl('bioPage').textContent = `${page + 1} / ${pages}`;
-  projectEl('bioAdopt').disabled = true;
-  list.textContent = '正在实测本页文件来源的直连响应延迟…';
+  view.loading = false;
+  if (view.pages.has(page) && !refresh) return renderProjectPage(view);
+  view.pages.delete(page);
+  const first = page * result.pageSize, end = Math.min(first + result.pageSize, result.files.length);
+  for (let i = first; i < end; i++) {
+    const item = view.files.get(i);
+    if (item) item.sources = []; // A failed recheck must not reuse stale availability.
+  }
+  const list = projectEl('bioProjectFiles');
+  list.textContent = '正在逐文件核对本页来源的响应、格式和长度…';
+  view.loading = true;
+  projectSelectionStatus(view);
   try {
     const rows = await window.api.probeProjectPage(result.queryId, page);
     if (projectView !== view || view.ticket !== ticket) return;
-    list.replaceChildren();
-    for (const { index, sources } of rows) {
+    if (rows.length !== end - first || rows.some((row, i) => row.index !== first + i || !Array.isArray(row.sources))) throw Error('本页文件与探测结果不一致，请重测');
+    for (const { index, sources, note } of rows) {
       const file = result.files[index];
-      const row = document.createElement('div');
-      const label = document.createElement('label');
-      const include = document.createElement('input');
-      include.type = 'checkbox';
-      const select = document.createElement('select');
-      select.setAttribute('aria-label', `${file.name} 来源`);
-      select.style.maxWidth = '100%';
-      for (const source of sources) {
-        const option = document.createElement('option');
-        option.value = source.url;
-        option.disabled = !source.available;
-        option.textContent = `${new URL(source.url).origin} · ${source.available ? source.latencyMs + ' ms' : source.reason}`;
-        option.title = source.url;
-        select.appendChild(option);
-
-      }
-      const best = sources.find(source => source.available);
-      include.disabled = select.disabled = !best;
-      include.checked = Boolean(best);
-      if (best) { select.value = best.url; projectEl('bioAdopt').disabled = false; }
-      label.append(include, ` ${file.run || ''} · ${file.name} `);
-      if (best) {
-        row.prepend(label, select);
-      } else {
-        const failure = document.createElement('span');
-        failure.textContent = sources.length
-          ? sources.map(source => `${new URL(source.url).origin} · ${source.reason}`).join('；')
-          : '未找到可测来源';
-        row.prepend(label, failure);
-      }
-      list.appendChild(row);
-      view.rows.push({ file, include, select, sources });
+      const preference = view.preferences.get(projectQueueKey(file));
+      const item = view.files.get(index) || { file, manual: preference?.manual || '', checked: preference?.checked ?? Boolean(BioProjectSources.chooseProjectSource(file, sources).source) };
+      view.files.set(index, Object.assign(item, { sources, note }));
     }
+    view.pages.add(page);
+    view.loading = false;
+    renderProjectPage(view);
   } catch (error) {
-    if (projectView === view && view.ticket === ticket) list.textContent = `测速失败：${error.message}`;
+    if (projectView === view && view.ticket === ticket) {
+      view.loading = false;
+      list.textContent = `来源核验失败：${error.message}`;
+      projectSelectionStatus(view);
+    }
   }
 }
 
-function adoptBioProjectRuns() {
-  if (!projectView || currentDownloadType !== 'bioproject' || isDownloading) return;
-  let count = 0;
-  for (const { file, include, select, sources } of projectView.rows) {
-    const source = sources.find(candidate => candidate.available && candidate.url === select.value);
-    if (!include.checked || !source) continue;
-    const folder = file.run || '';
-    const existing = currentQueue.find(task => task.folder === folder && task.name === file.name);
-    const selected = { name: file.name, folder, url: source.url, md5: file.md5, size: file.size || source.size };
-    if (existing) Object.assign(existing, selected);
-    else currentQueue.push({ ...selected, originalIndex: currentQueue.length });
-    count++;
+function projectQueueKey(task) {
+  const run = task.run || task.folder;
+  if (!run) return null;
+  let name = task.sourceName;
+  if (!name) {
+    // Earlier queue entries only stored the Run folder and official URL. Even
+    // their editable local filename can already differ from the source name.
+    try { name = decodeURIComponent(new URL(task.url).pathname.split('/').pop()); } catch { name = task.name; }
+    if (name === run) name = `${run}.sra`;
   }
-  if (!count) return showToast('请勾选至少一个有可用来源的文件', 'warning');
+  const format = task.format || (/\.(?:fq|fastq)\.gz$/i.test(name) ? 'fastq' : /\.sra$/i.test(name) ? 'sra' : '');
+  return format && name ? JSON.stringify([run, format, name]) : null;
+}
+
+function adoptBioProjectRuns() {
+  const view = projectView;
+  if (!view || view.loading || currentDownloadType !== 'bioproject' || isDownloading) return;
+  const selections = [];
+  for (const item of view.files.values()) {
+    if (!item.checked) continue;
+    const { source } = projectChoice(item, view.strategy);
+    if (!source) return showToast(`请重测 ${item.file.name}、更换手选来源或取消勾选`, 'warning');
+    selections.push(BioProjectSources.queueFile(item.file, source, view.result, { manual: item.manual, strategy: view.strategy }));
+  }
+  if (!selections.length) return showToast('请勾选至少一个有可用来源的文件', 'warning');
+  const existing = new Map(currentQueue.map(task => [projectQueueKey(task), task]));
+  let added = 0;
+  for (const selected of selections) {
+    const key = projectQueueKey(selected), previous = existing.get(key);
+    if (previous) Object.assign(previous, selected, { name: previous.name });
+    else {
+      const task = { ...selected, originalIndex: currentQueue.length };
+      currentQueue.push(task);
+      existing.set(key, task);
+      added++;
+    }
+  }
   renderQueue();
-  projectEl('downloadBtn').disabled = false;
   projectEl('totalQueueSize').innerText = '预计共 ' + formatBytes(currentQueue.reduce((n, f) => n + Number(f.size || 0), 0));
-  showToast(`已采用 ${count} 个文件的所选来源，队列共 ${currentQueue.length} 项`, 'success');
+  showToast(`已追加 ${added} 个文件，${selections.length - added} 个已在队列中`, 'success');
 }
 
 // BioSample 查询: SAMN → SRA run 列表, 填入 SRA 输入框并核验大小
@@ -1211,7 +1287,9 @@ async function queryBioSample() {
   }
 }
 
-async function checkSizes() {  const input = document.getElementById('accInput-' + currentDownloadType);
+async function checkSizes() {
+  const type = currentDownloadType;
+  const input = document.getElementById('accInput-' + type);
   if (window.campusNotice && !(await window.campusNotice.beforeUse())) return;
   if (input && window.BioDownloadSources) input.value = BioDownloadSources.normalizeList(currentDownloadType, input.value).join('\n');
   const inputVal = input?.value.trim() || '';
@@ -1221,7 +1299,6 @@ async function checkSizes() {  const input = document.getElementById('accInput-'
   }
 
   const checkBtn = document.getElementById('checkSizeBtn');
-  const downloadBtn = document.getElementById('downloadBtn');
   
   checkBtn.disabled = true;
   checkBtn.innerText = '正在核对校验中...';
@@ -1236,22 +1313,25 @@ async function checkSizes() {  const input = document.getElementById('accInput-'
       }
     }
 
-    const allFiles = await window.api.checkSize(currentDownloadType, inputVal);
-    const blockedLinks = allFiles.filter((f) => f.blocked);
-    currentQueue = allFiles.filter((f) => !f.blocked);
-    currentQueue.forEach((file, idx) => {
-      file.originalIndex = idx;
-    });
+    const allFiles = await window.api.checkSize(type, inputVal);
+    if (type !== currentDownloadType) return;
+    const blockedLinks = allFiles.filter(file => file.blocked);
+    const found = allFiles.filter(file => !file.blocked);
+    const key = file => JSON.stringify([file.folder || '', file.sourceName || file.name, file.url]);
+    const existing = new Map(currentQueue.map(file => [key(file), file]));
+    for (const file of found) {
+      const previous = existing.get(key(file));
+      if (previous) Object.assign(previous, file, { name: previous.name });
+      else {
+        file.sourceName = file.name;
+        existing.set(key(file), file);
+        currentQueue.push(file);
+      }
+    }
     renderQueue();
 
-    // 计算总大小并更新
-    const totalBytes = currentQueue.reduce((acc, f) => acc + (f.size || 0), 0);
-    const totalEl = document.getElementById('totalQueueSize');
-    if (totalEl) totalEl.innerText = currentQueue.length > 0 ? '预计共 ' + formatBytes(totalBytes) : '共 0 字节';
-
-    if (currentQueue.length > 0) {
-      downloadBtn.disabled = false;
-      showToast(`扫描完毕！共发现 ${currentQueue.length} 个可下载任务`, 'success');
+    if (found.length > 0) {
+      showToast(`扫描完毕，查到 ${found.length} 项，队列共 ${currentQueue.length} 项`, 'success');
     } else if (blockedLinks.length === 0) {
       showToast('未发现任何对应的数据文件，请核对输入', 'error');
     }
@@ -1278,14 +1358,41 @@ async function chooseStagingDir() {
   document.getElementById('settingsStagingDir').value=dir;await saveStagingSettings();
 }
 window.saveStagingSettings=saveStagingSettings;window.chooseStagingDir=chooseStagingDir;
-const queueSelected = new Set();
+// Selection follows the queue row across pages, tab switches and local renames.
+const queueExcluded = new WeakSet();
+function selectedQueueFiles() { return currentQueue.filter(file => !queueExcluded.has(file)); }
+function syncQueueActions() {
+  const count = selectedQueueFiles().length;
+  for (const [id, label] of [['downloadBtn','加速下载'], ['directDownloadBtn','直连下载']]) {
+    const button = document.getElementById(id);
+    if (!button) continue;
+    button.disabled = isDownloading || count === 0;
+    button.textContent = `${label}已选 ${count} 项`;
+  }
+}
 function changeQueuePage(page) { queuePage = Math.max(1, Math.min(Math.ceil(currentQueue.length / 50) || 1, Number(page) || 1));renderQueue(); }
-function selectQueueItem(index, checked) { const file = currentQueue[index];if (checked) queueSelected.add(file);else queueSelected.delete(file); }
-function queueSelection(all) { currentQueue.slice((queuePage-1)*50,queuePage*50).forEach(file=>all?queueSelected.add(file):queueSelected.delete(file));renderQueue(); }
-function removeQueueSelected() { currentQueue=currentQueue.filter(file=>!queueSelected.has(file));queueSelected.clear();renderQueue(); }
+function selectQueueItem(index, checked) {
+  const file = currentQueue[index];
+  if (!file) return;
+  if (checked) queueExcluded.delete(file); else queueExcluded.add(file);
+  syncQueueActions();
+}
+function queueSelection(checked, scope = 'page') {
+  const rows = scope === 'all' ? currentQueue : currentQueue.slice((queuePage - 1) * 50, queuePage * 50);
+  for (const file of rows) {
+    if (checked) queueExcluded.delete(file); else queueExcluded.add(file);
+  }
+  renderQueue();
+}
+function removeQueueSelected() {
+  currentQueue = currentQueue.filter(file => queueExcluded.has(file));
+  renderQueue();
+}
 window.changeQueuePage=changeQueuePage;window.selectQueueItem=selectQueueItem;window.queueSelection=queueSelection;window.removeQueueSelected=removeQueueSelected;
 function renderQueue() {
-  for (const file of queueSelected) if (!currentQueue.includes(file)) queueSelected.delete(file);
+  syncQueueActions();
+  const total = document.getElementById('totalQueueSize');
+  if (total) total.innerText = currentQueue.length ? '预计共 ' + formatBytes(currentQueue.reduce((sum, file) => sum + (Number(file.size) || 0), 0)) : '共 0 字节';
   const listEl = document.getElementById('queueList');
   listEl.innerHTML = '';
 
@@ -1296,7 +1403,7 @@ function renderQueue() {
 
   queuePage=Math.min(queuePage,Math.ceil(currentQueue.length/50)||1);
   const controls=document.createElement('div');
-  controls.innerHTML=`<button onclick="queueSelection(true)">全选本页</button> <button onclick="queueSelection(false)">取消本页</button> <button onclick="removeQueueSelected()">移除选中</button> <button onclick="changeQueuePage(${queuePage-1})" ${queuePage<=1?'disabled':''}>上一页</button> ${queuePage}/${Math.ceil(currentQueue.length/50)} <button onclick="changeQueuePage(${queuePage+1})" ${queuePage*50>=currentQueue.length?'disabled':''}>下一页</button>`;
+  controls.innerHTML=`<button onclick="queueSelection(true)">全选本页</button> <button onclick="queueSelection(false)">取消本页</button> ${currentQueue.length > 50 ? `<button onclick="queueSelection(true,'all')">全选所有页</button> <button onclick="queueSelection(false,'all')">取消所有页</button>` : ''} <button onclick="removeQueueSelected()">移除选中</button> <button onclick="changeQueuePage(${queuePage-1})" ${queuePage<=1?'disabled':''}>上一页</button> ${queuePage}/${Math.ceil(currentQueue.length/50)} <button onclick="changeQueuePage(${queuePage+1})" ${queuePage*50>=currentQueue.length?'disabled':''}>下一页</button>`;
   listEl.appendChild(controls);
   currentQueue.slice((queuePage-1)*50,queuePage*50).forEach((file, position) => {
     const index=(queuePage-1)*50+position;
@@ -1330,7 +1437,7 @@ function renderQueue() {
 
     itemEl.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center;">
-        <input type="checkbox" aria-label="选择下载项目" ${queueSelected.has(file)?'checked':''} onchange="selectQueueItem(${index},this.checked)">
+        <input type="checkbox" aria-label="选择下载项目" ${queueExcluded.has(file)?'':'checked'} onchange="selectQueueItem(${index},this.checked)">
         <div class="item-meta" style="flex-grow:1;">
           ${index === editingIndex
             ? `<input id="rename-input-${index}" class="rename-input" style="font-size:0.95rem;padding:2px 6px;border-radius:4px;border:1px solid var(--primary);background:rgba(255,255,255,0.1);color:inherit;width:100%;" value="${escapeHtml(file.name)}" onkeydown="if(event.key==='Enter'){commitRename(${index});}else if(event.key==='Escape'){cancelRename();}" onblur="commitRename(${index})" />`
@@ -1380,8 +1487,11 @@ async function startDownload(direct = false) {
   // Capture before any asynchronous connection work or navigation. Keep unique
   // transfer IDs so old pause/cancel flags cannot affect a new batch.
   const dir = defaultDir, token = currentUser.token;
-  const queue = currentQueue.filter(file => (typeof queueSelected === 'undefined' || !queueSelected.size || queueSelected.has(file)) && !activeDownloads.some(task =>
-    task.url === file.url && task.name === file.name && task.targetDir === dir));
+  const selected = selectedQueueFiles();
+  if (!selected.length) return showToast('请先勾选需要下载的文件', 'info');
+  const queue = selected.filter(file => !activeDownloads.some(task =>
+    task.name === file.name && task.targetDir === dir && (task.folder || '') === (file.folder || '') &&
+    (task.url === file.url || (file.run && task.run === file.run && file.sourceName && task.sourceName === file.sourceName))));
   if (!queue.length) return showToast('这些文件已在传输列表，请在那里继续或恢复下载', 'info');
   const totalBytes = queue.reduce((sum, file) => sum + (Number(file.size) || 0), 0);
   const remaining = currentUser.trafficLimit - currentUser.trafficConsumed;
@@ -1398,11 +1508,11 @@ async function startDownload(direct = false) {
   if (errorBox) { errorBox.hidden = true; errorBox.textContent = ''; }
   try {
     document.getElementById('checkSizeBtn').disabled = true;
-    document.getElementById('downloadBtn').disabled = true;
+    syncQueueActions();
     if (!direct && !(await ensureTransferConnection())) return;
     for (const file of queue) {
       file.originalIndex = allocateTransferId();
-      const task = { ...file, networkMode: direct ? 'direct' : file.networkMode, targetDir: dir, percentage: 0, status: 'waiting', speed: direct ? '直连排队中（不扣加速流量）' : '排队中...' };
+      const task = { ...file, networkMode: direct ? 'direct' : 'accelerated', targetDir: dir, percentage: 0, status: 'waiting', speed: direct ? '直连排队中（不扣加速流量）' : '排队中...' };
       batch.push(task);
     }
     activeDownloads.push(...batch);
@@ -1441,7 +1551,7 @@ async function startDownload(direct = false) {
     document.getElementById('checkSizeBtn').disabled = false;
     document.getElementById('downloadBtn').style.display = 'block';
     document.getElementById('cancelBtn').style.display = 'none';
-    document.getElementById('downloadBtn').disabled = !currentQueue.length;
+    syncQueueActions();
     try { await refreshUserInfo(); } catch (_) {}
   }
 }
@@ -1466,7 +1576,7 @@ function acceptDesktopCommand(request) {
       const files = await window.api.checkSize(types[request.type], request.accession);
       if (!files?.length) throw new Error('未解析到下载文件');
       if (!(await ensureTransferConnection())) throw new Error('GUI加速器未连接');
-      for (const file of files) batch.push({ ...file, originalIndex: allocateTransferId(), targetDir: request.output, status: 'waiting', percentage: 0, speed: 'CLI提交 · 排队中' });
+      for (const file of files) batch.push({ ...file, networkMode: 'accelerated', originalIndex: allocateTransferId(), targetDir: request.output, status: 'waiting', percentage: 0, speed: 'CLI提交 · 排队中' });
       activeDownloads.push(...batch);
       syncTransfersToStorage();
       renderDownloadingList();updateTransferCounts();switchTab('transfers-tab');switchTransferSubTab('downloading');
@@ -2313,6 +2423,10 @@ function switchAuthTab(tab) {
   const tabForgot = document.getElementById('tab-btn-forgot');
   
   const groupUsername = document.getElementById('group-username');
+  const username = document.getElementById('authUsername');
+  const labelUsername = document.getElementById('label-username');
+  if (username) username.placeholder = tab === 'register' ? '请输入用户名' : '请输入用户名或邮箱';
+  if (labelUsername) labelUsername.textContent = tab === 'register' ? '用户名' : '用户名或邮箱';
   const groupEmail = document.getElementById('group-email');
   const groupCode = document.getElementById('group-code');
   const groupPassword = document.getElementById('group-password');
@@ -2601,6 +2715,7 @@ async function downloadSingle(index) {
   file.originalIndex = allocateTransferId();
   const fileId = file.originalIndex;
   file.targetDir = defaultDir;
+  file.networkMode = 'accelerated';
   file.percentage = 0;
   file.status = 'waiting';
   file.speed = '排队中...';
@@ -2629,7 +2744,7 @@ async function downloadSingle(index) {
   } finally {
     if (singleBtn) singleBtn.disabled = false;
     document.getElementById('checkSizeBtn').disabled = false;
-    document.getElementById('downloadBtn').disabled = false;
+    syncQueueActions();
     
     // 刷新(已暂停的任务须保留卡片与断点,等待用户恢复,不能移除)
     const still = activeDownloads.find(d => d.originalIndex === fileId);
@@ -3044,7 +3159,8 @@ async function queueMismatches(items) {
   if (!items.length) return showToast('没有 MD5 不一致的文件；未校验文件请先校验 MD5', 'info');
   mismatchQueueBusy = true;
   try {
-    if (!(await ensureTransferConnection())) return;
+    if (!currentUser?.token) { showToast('请登录账户后重下', 'error'); switchTab('profile-tab'); return; }
+    let connectionReady;
     const groups = new Map(), seen = new Set(activeDownloads.map(item => transferPathKey(item.savePath || (item.targetDir + '/' + (item.folder ? item.folder + '/' : '') + item.name))));
     let count = 0;
     for (const item of items) {
@@ -3052,16 +3168,25 @@ async function queueMismatches(items) {
       const savePath = item.savePath || '', sep = Math.max(savePath.lastIndexOf('/'), savePath.lastIndexOf('\\'));
       const url = item.url || item.fileObj?.url, key = transferPathKey(savePath);
       if (sep < 0 || !url || seen.has(key)) continue;
+      const networkMode = item.fileObj?.networkMode || item.networkMode || 'accelerated';
+      if (networkMode !== 'direct') {
+        if (connectionReady === undefined) connectionReady = await ensureTransferConnection();
+        if (!connectionReady) continue;
+      }
       seen.add(key);
       const dir = savePath.slice(0, sep + 1);
       const file = { ...item.fileObj, name: savePath.slice(sep + 1), url, size: item.size,
+        networkMode, downloadEngine: item.fileObj?.downloadEngine || item.engine,
         md5: item.verification.expectedMd5 || item.md5 || item.fileObj?.md5,
         folder: '', targetDir: dir, savePath, originalIndex: allocateTransferId(),
         redownloadMismatch: true, status: 'waiting', speed: '等待重新下载…' };
       if (!groups.has(dir)) groups.set(dir, []);
       groups.get(dir).push(file); activeDownloads.push(file); count++;
     }
-    if (!count) return showToast('文件已在队列中，或缺少原链接/保存路径', 'info');
+    if (!count) {
+      if (connectionReady !== false) showToast('文件已在队列中，或缺少原链接/保存路径', 'info');
+      return;
+    }
     renderDownloadingList(); updateTransferCounts(); syncTransfersToStorage(); switchTransferSubTab('downloading');
     showToast(`已加入 ${count} 个重下任务；原文件保留在下载目录的 .biodl-replaced 文件夹`, 'info');
     for (const [dir, files] of groups) {
@@ -3107,7 +3232,8 @@ async function runCompletedMd5(items, { repair = false } = {}) {
   try {
     // Metadata can use the accelerator when logged in. Local hashing still works
     // offline; without an official checksum it is never labelled verified.
-    if (currentUser?.token && !window.campusNotice?.requiresAcknowledgment() && !(await window.api.getClashStatus())) {
+    const usesAccelerator = items.some(item => (item.fileObj?.networkMode || item.networkMode) !== 'direct');
+    if (usesAccelerator && currentUser?.token && !window.campusNotice?.requiresAcknowledgment() && !(await window.api.getClashStatus())) {
       try { await window.api.startClash(currentUser.token); } catch (_) {}
     }
     for (const item of items) {
@@ -3153,7 +3279,13 @@ function completedIntegrityLabel(item) {
   if (item.md5Progress) return item.md5Progress;
   if (v.status === 'mismatch') return '已保存 · MD5 与参考值不一致，需核对';
   if (v.status === 'failed') return '校验失败：' + (v.reason || '请重试');
-  if (v.status === 'verified') return v.repair?.status === 'verified' ? '局部修复完成 · MD5 与参考值一致' : 'MD5 与参考值一致';
+  if (v.status === 'verified') {
+    const expected = String(v.expectedMd5 || '').toLowerCase();
+    if (v.method === 'md5' && /^[a-f0-9]{32}$/.test(expected) && expected === String(v.actualMd5 || '').toLowerCase()) {
+      return v.repair?.status === 'verified' ? '局部修复完成 · MD5 与参考值一致' : 'MD5 与参考值一致';
+    }
+    return '已保存 · 历史记录缺少完整的 MD5 比对结果';
+  }
   if (v.md5Requested === true || v.method === 'md5') {
     if (v.status === 'computed') return '已计算本地 MD5（无参考值，未比对）';
     if (v.status === 'unavailable') return '已保存 · 本次 MD5 校验未完成';
@@ -3640,31 +3772,14 @@ async function ensureTransferConnection() {
 
 async function retryFailedDownload(index) {
   const item = failedDownloads[index];
-  if (!item || (item.networkMode !== 'direct' && item.fileObj?.networkMode !== 'direct' && !(await ensureTransferConnection()))) return;
+  if (!item) return;
+  if (!currentUser?.token) { showToast('请登录账户后重试下载', 'error'); switchTab('profile-tab'); return; }
+  if (item.networkMode !== 'direct' && item.fileObj?.networkMode !== 'direct' && !(await ensureTransferConnection())) return;
   const oldFile = item.fileObj || {};
   const dir = oldFile.targetDir || item.targetDir || item.saveDir || defaultDir;
   if (!dir) return showToast('请先选择下载保存目录', 'error');
-  if (/^https:\/\/sra-pub-run-odp\.s3\.amazonaws\.com\/sra\/(ERR|DRR)\d+\//i.test(oldFile.url || item.url || '')) {
-    try {
-      const accession = (oldFile.url || item.url).split('/')[4];
-      const resolved = await window.api.checkSize('ebi_raw', accession);
-      if (!resolved?.length) throw new Error('ENA 未返回文件列表');
-      const files = resolved.map(source => ({ ...source, networkMode: oldFile.networkMode || item.networkMode, originalIndex: allocateTransferId(), targetDir: dir, status: 'waiting' }));
-      const pos = failedDownloads.indexOf(item);
-      if (pos < 0) return;
-      failedDownloads.splice(pos, 1);
-      activeDownloads.push(...files);
-      renderFailedList();renderDownloadingList();updateTransferCounts();switchTransferSubTab('downloading');
-      await window.api.startDownload(files, dir, currentUser.token, maxConcurrentDownloadsSetting);
-    } catch (error) {
-      if (!failedDownloads.includes(item)) {
-        failedDownloads.unshift(item);
-        renderFailedList();updateTransferCounts();
-      }
-      showToast('重新查询或启动 ENA 文件失败，原失败记录已保留：' + error.message, 'error');
-    }
-    return;
-  }
+  // Retrying an archived SRA row must keep its original object. Users may
+  // separately query the Run and explicitly select individual FASTQ files.
   const position = failedDownloads.indexOf(item);
   if (position < 0) return; // A second click must not queue the same failed record twice.
   failedDownloads.splice(position, 1);
@@ -3682,6 +3797,8 @@ async function retryFailedDownload(index) {
     return;
   }
   const file = { ...item, ...oldFile, name:oldFile.name || item.name, url:oldFile.url || item.url,
+    downloadEngine: oldFile.downloadEngine || oldFile.engine || item.engine,
+    networkMode: oldFile.networkMode || item.networkMode || 'accelerated',
     originalIndex:allocateTransferId(), targetDir:dir, status:'waiting', speed:'准备重试...' };
   activeDownloads.push(file);
   renderDownloadingList(); updateTransferCounts();
@@ -3775,7 +3892,12 @@ async function resumeTransferFile(fileId) {
   updateTransferCounts();
   showToast(`正在恢复 ${file.name},从断点继续下载...`, 'info');
   try {
-    await window.api.startDownload([{ name: file.name, url: file.url, size: file.size || 0, md5: file.md5, folder: file.folder, type: file.type, originalIndex: file.originalIndex, redownloadMismatch: file.redownloadMismatch, backupPath: file.backupPath }], dir, currentUser.token, maxConcurrentDownloadsSetting);
+    // The host selects the network route from networkMode and interprets checkpoints
+    // using the original engine. Preserve file identity and the user's choices.
+    const resumedFile = { ...file, downloadEngine: file.engine || file.downloadEngine, networkMode: file.networkMode || 'accelerated' };
+    const result = await window.api.startDownload([resumedFile], dir, currentUser.token, maxConcurrentDownloadsSetting);
+    for (const outcome of result?.outcomes || []) handleDownloadStatus(outcome);
+    if (result?.success === false) throw new Error(result.error || '恢复失败，请重试');
   } catch (e) {
     file.status = 'paused'; file.speed = '';
     renderDownloadingList(); updateTransferCounts();
@@ -4148,7 +4270,8 @@ function handleDownloadStatus(data) {
         folder: activeItem.folder,
         type: activeItem.type,
         md5: activeItem.md5, verification: activeItem.verification, engine: activeItem.engine, backupPath: activeItem.backupPath,
-        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir, redownloadMismatch: activeItem.redownloadMismatch, backupPath: activeItem.backupPath, networkMode: activeItem.networkMode }
+        fileObj: { name: activeItem.name, sourceName: activeItem.sourceName, run: activeItem.run, project: activeItem.project, format: activeItem.format, transport: activeItem.transport, sourceSelection: activeItem.sourceSelection,
+          url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir, redownloadMismatch: activeItem.redownloadMismatch, backupPath: activeItem.backupPath, networkMode: activeItem.networkMode, downloadEngine: activeItem.engine || activeItem.downloadEngine }
       };
       completedDownloads = completedDownloads.filter(item => !savePath || transferPathKey(item.savePath) !== transferPathKey(savePath));
       completedDownloads.unshift(completedItem);
@@ -4166,7 +4289,8 @@ function handleDownloadStatus(data) {
         folder: activeItem.folder,
         type: activeItem.type,
         savePath: savePath || '', md5: activeItem.md5, verification: activeItem.verification, engine: activeItem.engine, backupPath: activeItem.backupPath,
-        fileObj: { name: activeItem.name, url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir, redownloadMismatch: activeItem.redownloadMismatch, backupPath: activeItem.backupPath, networkMode: activeItem.networkMode }
+        fileObj: { name: activeItem.name, sourceName: activeItem.sourceName, run: activeItem.run, project: activeItem.project, format: activeItem.format, transport: activeItem.transport, sourceSelection: activeItem.sourceSelection,
+          url: activeItem.url, size: activeItem.size, md5: activeItem.md5, folder: activeItem.folder, type: activeItem.type, originalIndex: activeItem.originalIndex, targetDir: activeItem.targetDir, redownloadMismatch: activeItem.redownloadMismatch, backupPath: activeItem.backupPath, networkMode: activeItem.networkMode, downloadEngine: activeItem.engine || activeItem.downloadEngine }
       };
       failedDownloads.unshift(failedItem);
       activeDownloads = activeDownloads.filter(d => d.originalIndex !== index);

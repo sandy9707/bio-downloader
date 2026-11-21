@@ -12,7 +12,11 @@ const root=fs.mkdtempSync(path.join(os.tmpdir(),'biodl-install-测试-'));
  const up=require(helper),content=path.join(root,'content'),resources=path.join(root,'resources'),profile=path.join(root,'profile');
  for(const p of [content,resources,profile])fs.mkdirSync(p);
  fs.writeFileSync(path.join(content,'package.json'),JSON.stringify({version:'9.0.0-preview.1'}));fs.writeFileSync(path.join(content,'main.js'),'void 0;');fs.writeFileSync(path.join(content,'index.html'),'<html></html>');
- const patch=path.join(root,'patch.asar');await asar.createPackage(content,patch);
+ const patch=path.join(root,'patch.asar');
+ // ASAR 3 returns its output stream as soon as it calls end(). Wait for
+ // the final write before hashing and signing this temporary fixture.
+ const archiveOutput=await asar.createPackage(content,patch);
+ if (archiveOutput?.once) await require('node:stream/promises').finished(archiveOutput);
  const sha256=crypto.createHash('sha256').update(fs.readFileSync(patch)).digest('hex');
  const manifest={version:'9.0.0-preview.1',sha256,signature:crypto.sign(null,Buffer.from(sha256),privateKey).toString('base64')};
  const target=path.join(resources,'app.asar');fs.writeFileSync(target,'original');

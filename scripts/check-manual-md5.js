@@ -30,5 +30,11 @@ const verify=file=>engine.callIpcHandler('verify-transfer-md5',{id:'test-'+(++id
   vm.runInContext(source.slice(source.indexOf('// Manual MD5 checks'),source.indexOf('function renderCompletedList()')),context);
   await context.verifyAllCompletedMd5();assert.equal(requests.length,2);assert.equal(items[0].verification.status,'verified');assert.equal(items[1].verification.status,'verified');assert.ok(saved.length);
   assert.ok(items.every(item=>!item.md5Progress));assert.equal(items[0].verification.actualMd5,expected);
+  const label = verification => context.completedIntegrityLabel({ verification });
+  assert.match(label({status:'quick-checked',method:'quick'}),/快速检查/);
+  assert.match(label({status:'verified',actualMd5:expected}),/缺少/);
+  assert.match(label({status:'computed',method:'md5',actualMd5:expected}),/未比对/);
+  assert.match(label({status:'failed',method:'md5',reason:'EIO'}),/EIO/);
+  assert.match(label({status:'verified',method:'md5',expectedMd5:expected,actualMd5:expected}),/与参考值一致/);
   console.log('手动 MD5 回归通过：已有文件、开关关闭也可主动校验、正确/错误/无参考、进度取消、禁止重入、路径丢失、历史列表变化、持久化、不下载不计费');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>fs.rmSync(temp,{recursive:true,force:true}));

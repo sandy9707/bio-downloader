@@ -2248,26 +2248,17 @@ ipcMain.handle('check-download-size', async (event, { type, inputVal }) => {
     files.push(...results);
   } else if (type === 'ebi_raw' || type === 'ena_raw') {
     const promises = ids.map(async (acc) => {
+      const run = acc.toUpperCase();
+      if (!/^[SED]RR\d+$/.test(run)) throw new Error(`${acc} 不是有效的 SRR、ERR 或 DRR 编号`);
       try {
-        const enaFiles = await enaIntegrity.list(acc);
-        if (enaFiles.length) {
-          const subPromises = enaFiles.map(async (file) => ({
-            ...file, folder: acc, size: file.size || await headRequestSize(file.url)
-          }));
-          return await Promise.all(subPromises);
-        } else {
-          if (!/^SRR\d+$/i.test(acc)) throw new Error(`${acc} 暂未取得 ENA 文件列表，请稍后重试，不能自动构造 AWS SRA 地址`);
-          // 回退 AWS SRA
-          const url = `https://sra-pub-run-odp.s3.amazonaws.com/sra/${acc}/${acc}`;
-          const size = await headRequestSize(url);
-          return [{ name: acc, url, size }];
-        }
-      } catch (e) {
-        if (!/^SRR\d+$/i.test(acc)) throw new Error(`${acc} 的 ENA 文件查询失败：${e.message}；请重试检验下载大小`);
-        // 回退 AWS SRA
-        const url = `https://sra-pub-run-odp.s3.amazonaws.com/sra/${acc}/${acc}`;
-        const size = await headRequestSize(url);
-        return [{ name: acc, url, size }];
+        const enaFiles = await enaIntegrity.list(run);
+        if (!enaFiles.length) throw new Error('官方尚未返回 FASTQ 文件清单');
+        if (enaFiles.some(file => file.folder !== run)) throw new Error('官方文件与所查 Run 归属不符');
+        return await Promise.all(enaFiles.map(async file => ({
+          ...file, folder: run, size: file.size || await headRequestSize(file.url)
+        })));
+      } catch (error) {
+        throw new Error(`${run} 的 ENA FASTQ 查询失败（${error.message}）。请重试检验下载大小，或明确改选 SRA 容器后重新检验。`);
       }
     });
     const results = await Promise.all(promises);
@@ -2487,43 +2478,16 @@ const projectService = require('./packages/cli/project-sources').createProjectSe
       }
       return axios.request({ url, ...options, proxy: false });
     }
-  }),
-  (url, options) => axios.head(url, { ...options, proxy: false })
+  })
 );
 ipcMain.handle('query-bioproject', (_event, { project }) => projectService.query(project));
 ipcMain.handle('probe-project-page', (_event, payload) => projectService.probe(payload));
 
-// --- BioSample 查询: 输入 SAMN 编号 → 返回关联 SRA run (SRR) 列表 ---
-ipcMain.handle('query-biosample', async (event, { biosample }) => {
-  const acc = String(biosample || '').trim();
-  if (!acc) throw new Error('请输入 BioSample 编号 (SAMN...)');
-  const proxyOpts = clashProcess ? { proxy: { protocol: 'http', host: '127.0.0.1', port: 43289 } } : false;
-
-  // 1. esearch: SAMN → SRA 记录 uid 列表
-  const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=sra&term=${encodeURIComponent(acc)}&retmode=json&retmax=200`;
-  const searchRes = await axios.get(searchUrl, { timeout: 20000, ...(proxyOpts ? { proxy: proxyOpts.proxy } : {}) });
-  const idList = (searchRes.data?.esearchresult?.idlist) || [];
-  if (idList.length === 0) throw new Error(`未找到 BioSample ${acc} 关联的 SRA 记录`);
-
-  // 2. esummary: 拿每个 SRA 记录的 runs (SRR)
-  const runs = [];
-  const batchSize = 50;
-  for (let i = 0; i < idList.length; i += batchSize) {
-    const batch = idList.slice(i, i + batchSize);
-    const sumUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=sra&id=${batch.join(',')}&retmode=json`;
-    const sumRes = await axios.get(sumUrl, { timeout: 20000, ...(proxyOpts ? { proxy: proxyOpts.proxy } : {}) });
-    const result = sumRes.data?.result || {};
-    for (const uid of (result.uids || [])) {
-      const rec = result[uid];
-      if (!rec || !rec.runs) continue;
-      // 解析 runs XML: <Run acc="SRR..." .../>
-      const runMatches = String(rec.runs).matchAll(/<Run\s+acc="([^"]+)"/g);
-      for (const m of runMatches) runs.push(m[1]);
-    }
-  }
-
-  if (runs.length === 0) throw new Error(`BioSample ${acc} 未找到可下载的 SRA run`);
-  return { biosample: acc, runs: [...new Set(runs)], count: new Set(runs).size };
+ipcMain.handle('query-biosample', (_event, { biosample }) => {
+  const proxy = clashProcess ? {protocol:'http', host:'127.0.0.1', port:43289} : false;
+  return require('./src/main/biosample-runs').lookupBioSample(biosample, {
+    get: (url, options) => axios.get(url, {...options, proxy})
+  });
 });
 ipcMain.handle('start-download', async (event, { files, targetDir, token, maxConcurrent }) => {
   if (!Array.isArray(files) || !files.length) throw new Error('下载队列为空，请先检验链接生成任务');
@@ -2638,6 +2602,9 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     let verification = null, releaseFile = null, backupPath = file.backupPath || null;
     let engineForFile, axelBin, deepForFile = deepIntegrityCheck || Boolean(file.redownloadMismatch || file.backupPath);
     try {
+    const {transferRoute, pinSelectedFile} = require('./src/main/bio-transfer-guard');
+    const route = transferRoute(file, Boolean(clashProcess));
+    const proxy = route.proxy;
     if (usingStaging && await require('./src/main/staging-delivery').available(staging) < Number(file.size) + 64*1048576) throw new Error('中转剩余空间不足，已保留断点');
     releaseFile = downloadFiles.claimFile(savePath);
     const knownMismatch = await downloadFiles.priorMismatch(savePath, file.url);
@@ -2696,7 +2663,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
           // only fetches independently located, bounded ENA FASTQ candidates.
           verification = await require('./src/main/fastq-repair-policy').repairMismatch({
             file, filename: savePath, reference, verification, deep: deepForFile, checkControl, signal: repairController.signal,
-            proxy: !directDownload && clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false,
+            proxy,
             onProgress: progress => {
               const labels = { 'repair-scan': '正在定位可修复区段…', 'repair-fetch': '正在补取损坏区段…',
                 'repair-final-md5': '正在复核修复后的全文 MD5…', 'repair-final-gzip': '正在复核文件结构…' };
@@ -2731,15 +2698,16 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
       }
     }
 
-    const guardedUrl = bioSource(file.url);
+    const guardedUrl = route.selected ? route.guardedUrl : bioSource(file.url);
     async function prepareGuard() {
+    if (route.selected && !guardedUrl && engineForFile !== 'native') await pinSelectedFile(savePath, file.url, engineForFile);
     if (guardedUrl && !file.isUpdate && engineForFile !== 'native') {
       activeIntegrityChecks.set(fileIndex, { wake: () => {} });
       try {
         sendStatus({ index: fileIndex, fileName: file.name, status: 'downloading', phase: 'verifying', speed: '正在核对源文件与断点…', savePath });
         bioGuard = await createBioTransferGuard({
-          url: guardedUrl, filename: savePath, expectedSize: file.size, engine: engineForFile,
-          proxy: !directDownload && clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false,
+          url: guardedUrl, identityUrl: route.selected ? bioSource(file.url) || file.url : guardedUrl, filename: savePath, expectedSize: file.size, engine: engineForFile,
+          proxy,
           checkControl,
           isPaused: () => pausedAxelFiles.has(fileIndex),
           onDiagnostic: recordDiagnostic,
@@ -2796,13 +2764,15 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
     let preservePartialFile = false;
 
     const env = { ...process.env };
-    if (!directDownload && clashProcess !== null) {
-      env.http_proxy = 'http://127.0.0.1:43289';
-      env.https_proxy = 'http://127.0.0.1:43289';
-      env.all_proxy = 'http://127.0.0.1:43289';
-      env.HTTP_PROXY = 'http://127.0.0.1:43289';
-      env.HTTPS_PROXY = 'http://127.0.0.1:43289';
-      env.ALL_PROXY = 'http://127.0.0.1:43289';
+    if (proxy) {
+      if (route.accelerated) { delete env.no_proxy; delete env.NO_PROXY; }
+      const address = `${proxy.protocol}://${proxy.host}:${proxy.port}`;
+      env.http_proxy = address;
+      env.https_proxy = address;
+      env.all_proxy = address;
+      env.HTTP_PROXY = address;
+      env.HTTPS_PROXY = address;
+      env.ALL_PROXY = address;
     } else {
       delete env.http_proxy;
       delete env.https_proxy;
@@ -2832,7 +2802,7 @@ ipcMain.handle('start-download', async (event, { files, targetDir, token, maxCon
           maxRedirects: 5, signal: controller.signal,
           headers: { 'Accept-Encoding': 'identity' }, decompress: false,
           validateStatus: status => status === 200,
-          proxy: env.http_proxy ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false
+          proxy
         });
         const ct = String(response.headers['content-type'] || '').toLowerCase();
         if (ct.includes('text/html') && !/\.(html?|xhtml)$/i.test(path.basename(savePath))) {
@@ -3071,13 +3041,13 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
       }
 
       try {
-        const isFtpProtocol = file.isFtp || String(file.url).startsWith('ftp://') || String(file.url).startsWith('ftps://');
-        const isSftpProtocol = file.isSftp || String(file.url).startsWith('sftp://');
+        const isFtpProtocol = (!route.selected && file.isFtp) || String(file.url).startsWith('ftp://') || String(file.url).startsWith('ftps://');
+        const isSftpProtocol = (!route.selected && file.isSftp) || String(file.url).startsWith('sftp://');
 
         if (engineForFile === 'native') {
           const task = startNativeDownload({ url: file.url, filename: savePath, connections: Math.min(16, threads),
             expectedSize: file.size || undefined,
-            proxy: !directDownload && clashProcess ? { protocol: 'http', host: '127.0.0.1', port: 43289 } : false }, data => {
+            proxy }, data => {
             if (data.type === 'progress') event.sender.send('download-progress', { index: fileIndex, engine: 'native', ...data, connectionLimit: Math.min(16, threads), speed: (data.speedBps / 1024).toFixed(1) + ' KB/s' });
             if (data.type === 'state' && data.phase !== 'paused') sendStatus({ index: fileIndex, status: 'downloading', phase: data.phase === 'checking-local' ? 'verifying' : 'connecting', savePath,
               speed: data.phase === 'checking-local' ? '正在核对本地断点分块…' : data.phase === 'waiting-lock' ? '正在等待上次下载释放文件锁…' : '正在连接下载源…' });
@@ -3096,7 +3066,7 @@ async function downloadFileWithPlugin({ file, fileIndex, savePath, env, logStrea
           if (process.platform === 'linux') ariaEnv.LD_LIBRARY_PATH = [path.join(path.dirname(binary), 'lib'), ariaEnv.LD_LIBRARY_PATH].filter(Boolean).join(':');
           let lastAriaProgressLog = 0;
           await runAria({ binary, url: bioGuard ? bioGuard.url : file.url, filename: savePath, threads, env: ariaEnv,
-            proxy: bioGuard || isFtpProtocol || isSftpProtocol ? '' : env.http_proxy || '',
+            proxy: bioGuard || (!route.accelerated && (isFtpProtocol || isSftpProtocol)) ? '' : env.http_proxy || '',
             log: line => { if (logStream && !logStream.writableEnded) logStream.write(redactDiagnostic(line)); },
             onProcess: proc => {
               activeAxelProcesses.set(fileIndex, proc);

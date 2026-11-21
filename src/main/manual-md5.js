@@ -44,7 +44,7 @@ function createManualMd5(reference, { getRepairProxy = () => false, repair = opt
             notify({ id, phase: 'hashing', bytes, total });
           }
         });
-        if (repairRequested && verification.status === 'mismatch') {
+        if (repairRequested && verification.status === 'mismatch' && require('./fastq-repair-policy').repairSource(file, ref, {deep:true})) {
           await downloadFiles.persistVerification(savePath, file.url, verification);
           try {
             verification = await repair({ file, filename: savePath, reference: ref, verification, deep: true,

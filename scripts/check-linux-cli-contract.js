@@ -26,6 +26,11 @@ require('assert/strict').equal(migrateEngineSettings({nativeDownloadEngines:{htt
 require('assert/strict').equal(migrateEngineSettings({downloadEngines:{http:'axel'}}).downloadEngines.http,'axel');
 if (defaults.http !== 'aria2' || selectEngine({url:'https://example.org/a'}) !== 'aria2') throw new Error('新安装默认aria2，保留专属内核可选');
 if (selectEngine({url:'https://example.org/a'}, {downloadEngines:{http:'axel'}}) !== 'axel') throw new Error('必须保留 Axel 切换');
+const assert = require('node:assert/strict');
+const settings = { downloadEngines: { http: 'axel' } };
+assert.equal(selectEngine({url:'https://example.org/a',downloadEngine:'native'}, settings), 'native');
+assert.equal(selectEngine({url:'https://example.org/b'}, settings), 'axel');
+assert.throws(() => selectEngine({url:'sftp://example.org/a',downloadEngine:'native'}, settings));
 for (const pattern of [/systemBinaryPath/, /toolId \+ 'Path'/, /plugin-set-path/]) {
   if (!pattern.test(main)) throw new Error(`插件路径选择契约缺失: ${pattern}`);
 }

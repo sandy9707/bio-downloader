@@ -34,7 +34,9 @@ function selectEngine(file, settings = {}, filename) {
   const config = { ...defaults, ...settings.downloadEngines };
   const protocol = new URL(file.url).protocol;
   const group = ({ 'ftp:': 'ftp', 'sftp:': 'sftp', 'ftps:': 'ftps' }[protocol]) || (bioSource(file.url) ? 'bio' : 'http');
-  const engine = config[group] === 'inherit' ? config.http : config[group];
+  // On-disk checkpoints take precedence above. An explicit choice belongs to
+  // this transfer only, including a task resumed after an application restart.
+  const engine = file.downloadEngine || (config[group] === 'inherit' ? config.http : config[group]);
   const choices = ['ftp', 'sftp'].includes(group) ? ['aria2', 'curl'] : group === 'ftps' ? ['curl'] : ['native', 'aria2', 'axel'];
   if (!choices.includes(engine)) throw new Error('该协议不支持所选下载器，请在设置中调整下载引擎');
   return engine;

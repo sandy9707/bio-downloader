@@ -5,6 +5,27 @@ const {app,BrowserWindow,ipcMain,session}=require('electron');app.setAppPath(app
 if(appRoot!==root){Object.defineProperty(app,'isPackaged',{value:true});Object.defineProperty(process,'resourcesPath',{value:path.dirname(appRoot)});assert.equal(process.resourcesPath,path.dirname(appRoot));}
 const axios=require(path.join(appRoot,'node_modules/axios/dist/node/axios.cjs'));axios.get=async()=>({data:{success:false,error:'Offline test fixture'}});let charges=0,remoteCommand=null,remoteAck=false;axios.post=async(url,body)=>{if(url.includes('/api/desktop-control/')){if(body.ack?.id===remoteCommand?.id){remoteAck=true;return {data:{success:true,command:null}};}return {data:{success:true,command:remoteCommand}};}assert(url.endsWith('/api/user/consume'));charges++;return {data:{success:true}}};
 const mode='fixed';
+// Simulate the app proxy inside the test process only. Forward exclusively to
+// the ephemeral fixture origin, using the same explicit proxy path as production.
+const proxied = new Set();
+const proxyServer = http.createServer((req, res) => {
+ let dest;
+ try { dest = new URL(req.url); } catch { res.writeHead(400).end(); return; }
+ if (dest.origin !== `http://127.0.0.1:${server.address().port}`) { res.writeHead(403).end(); return; }
+ proxied.add(dest.pathname);
+ const upstream = http.request(dest,{method:req.method,headers:req.headers}, reply => {
+   res.writeHead(reply.statusCode, reply.headers); reply.pipe(res);
+ });
+ upstream.on('error', () => res.destroy()); res.on('close', () => upstream.destroy()); req.pipe(upstream);
+});
+const guard = require(path.join(appRoot,'src/main/bio-transfer-guard.js'));
+const normalRoute = guard.transferRoute;
+guard.transferRoute = (file, running) => {
+ const local = new URL(file.url).origin === `http://127.0.0.1:${server.address().port}`;
+ const route = normalRoute(file, running || local);
+ if (local && route.proxy) route.proxy = {...route.proxy,port:proxyServer.address().port};
+ return route;
+};
 require(path.join(appRoot,'main.js'));
 ipcMain.removeHandler('clash-status');ipcMain.handle('clash-status',()=>true);
 let slowTransfer=true;
@@ -13,6 +34,7 @@ const bytes=Buffer.alloc(32768,42),server=http.createServer((req,res)=>{const by
 const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000);
 (async()=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ await new Promise(r=>proxyServer.listen(0,'127.0.0.1',r));
  await app.whenReady();
  const win=BrowserWindow.getAllWindows()[0];win.webContents.setBackgroundThrottling(false); await new Promise(r=>win.webContents.once('did-finish-load',r));
  await new Promise(r=>setTimeout(r,1000));
@@ -20,7 +42,7 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
  const files=Array.from({length:3},(_,i)=>({name:`test${i}.bin`,url:`http://127.0.0.1:${server.address().port}/${i}`,size:bytes.length,md5:crypto.createHash('md5').update(bytes).digest('hex')}));
  await win.webContents.executeJavaScript(`currentUser={token:'fixture',trafficLimit:1e12,trafficConsumed:0};defaultDir=${JSON.stringify(path.join(dir,'下载 files'))};currentQueue=${JSON.stringify(files)};renderQueue();document.getElementById('downloadBtn').disabled=false;document.getElementById('downloadBtn').click();`);
  let state;
- for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,200));state=await win.webContents.executeJavaScript(`({downloading:isDownloading,active:activeDownloads.map(f=>({name:f.name,status:f.status})),completed:completedDownloads.length,failed:failedDownloads.length,toast:document.getElementById('notificationToast').innerText})`);if(state.completed===3||!state.downloading)break;}
+ for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,200));state=await win.webContents.executeJavaScript(`({downloading:isDownloading,active:activeDownloads.map(f=>({name:f.name,status:f.status})),completed:completedDownloads.length,failed:failedDownloads.length,reasons:failedDownloads.map(f=>f.failedReason),toast:document.getElementById('notificationToast').innerText})`);if(state.completed===3||!state.downloading)break;}
  assert.equal(state.completed,3,JSON.stringify({state,errors}));
   assert.equal(await win.webContents.executeJavaScript(`completedDownloads.every(f=>f.engine==='aria2')`),true);assert.equal(charges,3);assert.match(state.toast,/完成 3/);
  if(mode==='fixed'){
@@ -123,7 +145,11 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
   const queueCheck=await win.webContents.executeJavaScript(`(()=>{
     currentQueue=Array.from({length:1501},(_,i)=>({name:'q'+i,url:'https://example.test/'+i,size:100}));
     renderQueue();const first=document.querySelectorAll('#queueList .queue-item').length;
-    queueSelection(true);changeQueuePage(2);selectQueueItem(50,true);removeQueueSelected();
+    queueSelection(false,'all');const zero=['downloadBtn','directDownloadBtn'].every(id=>document.getElementById(id).disabled);
+    if(!zero) throw Error('撤销全部勾选后，两种批量下载均应停用');
+    queueSelection(true);changeQueuePage(2);selectQueueItem(50,true);
+    if(!document.getElementById('downloadBtn').textContent.includes('51')) throw Error('跨页仅选中了 51 项');
+    removeQueueSelected();
     return {first,remaining:currentQueue.length,cards:document.querySelectorAll('#queueList .queue-item').length};
   })()`);
   assert.deepEqual(queueCheck,{first:50,remaining:1450,cards:50});
@@ -154,15 +180,23 @@ const timeout=setTimeout(()=>{console.error('SMOKE_TIMEOUT');app.exit(2)},60000)
   await win.webContents.executeJavaScript('window.api.saveSettings({desktopRemoteEnabled:false})');
   console.log('ELECTRON_WEBSITE_GUI_SHARED_OK');
   const beforeDirectCharges=charges;
-  await win.webContents.executeJavaScript(`(async()=>{await window.api.saveSettings({stagingEnabled:false});currentQueue=[{name:'direct.bin',url:'http://127.0.0.1:${server.address().port}/direct',size:32768}];queueSelected.clear();const oldQuota=currentUser.trafficLimit;currentUser.trafficLimit=0;try{await startDownload(true);}finally{currentUser.trafficLimit=oldQuota;}})()`);
+  await win.webContents.executeJavaScript(`(async()=>{await window.api.saveSettings({stagingEnabled:false});currentQueue=[{name:'direct.bin',url:'http://127.0.0.1:${server.address().port}/direct',size:32768}];renderQueue();const oldQuota=currentUser.trafficLimit;currentUser.trafficLimit=0;try{await startDownload(true);}finally{currentUser.trafficLimit=oldQuota;}})()`);
   assert.equal(charges,beforeDirectCharges,'explicit direct download must not consume acceleration traffic');
   assert.equal(await win.webContents.executeJavaScript(`completedDownloads.some(item=>item.name==='direct.bin')`),true);
-  console.log('ELECTRON_DIRECT_NO_CONSUME_OK');
+  const restoredDir=path.join(dir,'restored-direct');
+   const restored={name:'renamed.bin',sourceName:'original.bin',url:`http://127.0.0.1:${server.address().port}/restored`,size:bytes.length,md5:crypto.createHash('md5').update(bytes).digest('hex'),folder:'run',targetDir:restoredDir,networkMode:'direct',engine:'aria2',originalIndex:9117,status:'paused'};
+   const receiptRestored=await win.webContents.executeJavaScript(`(async()=>{activeDownloads.push(${JSON.stringify(restored)});await Promise.all([resumeSingleDownload(9117),resumeSingleDownload(9117)]);return completedDownloads.filter(row=>row.fileObj?.originalIndex===9117)})()`);
+   assert.equal(receiptRestored.length,1);assert.equal(receiptRestored[0].engine,'aria2');assert.equal(receiptRestored[0].fileObj.networkMode,'direct');
+   assert.equal(receiptRestored[0].fileObj.sourceName,restored.sourceName);assert.equal(charges,beforeDirectCharges);
+   assert.deepEqual(fs.readFileSync(path.join(restoredDir,'run','renamed.bin')),bytes);
+   console.log('ELECTRON_DIRECT_NO_CONSUME_OK');
    const integrityUI=await win.webContents.executeJavaScript(`(()=>{completedDownloads=[{name:'SRR-no-reference.sra',size:32768,completedAt:'fixture',verification:{status:'quick-checked',method:'quick',md5Requested:false}},{name:'mismatch.bin',size:32768,completedAt:'fixture',verification:{status:'mismatch',method:'md5',expectedMd5:'0'.repeat(32)}}];switchTransferSubTab('completed');renderCompletedList();return [...document.querySelectorAll('#transferCompletedList .transfer-item')].map(e=>e.innerText);})()`);
    assert(!/未做 MD5|未核验|校验 MD5/.test(integrityUI[0]));assert(/不一致/.test(integrityUI[1]));
    if(process.env.BIODL_UI_CAPTURE)fs.writeFileSync(process.env.BIODL_UI_CAPTURE,(await win.webContents.capturePage()).toPNG());
    console.log('ELECTRON_OPTIONAL_MD5_UI_OK',JSON.stringify(integrityUI));
   console.log('ELECTRON_PAGINATION_STALL_OK',JSON.stringify(controls));
  console.log('ELECTRON_PROGRESS_OK',JSON.stringify(displayed));
+ assert(['/0','/1','/2','/slow'].every(p=>proxied.has(p)),JSON.stringify([...proxied]));
+ assert(!proxied.has('/direct') && !proxied.has('/restored'),'direct transfers must bypass the fixture proxy');
  console.log('ELECTRON_SMOKE',JSON.stringify({mode,state,errors,charges}));
-})().catch(e=>{console.error('ELECTRON_SMOKE_ERROR',e.message);process.exitCode=1}).finally(()=>{clearTimeout(timeout);server.closeAllConnections();server.close();app.exit(process.exitCode||0)});
+})().catch(e=>{console.error('ELECTRON_SMOKE_ERROR',e.message);process.exitCode=1}).finally(()=>{clearTimeout(timeout);proxyServer.closeAllConnections();proxyServer.close();server.closeAllConnections();server.close();app.exit(process.exitCode||0)});

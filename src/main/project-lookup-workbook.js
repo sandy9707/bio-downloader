@@ -30,23 +30,31 @@ function workbookRows(input, load) {
 function enrichFiles(input, files) {
   const {load} = require('cheerio');
   const objects = new Map(files.map(file => [new URL(file.url).pathname, file]));
-  for (const [columns = [], ...rows] of workbookRows(input, load)) {
+  const conflicts = new Set();
+  for (const [head = [], ...rows] of workbookRows(input, load)) {
+    const columns = head.map(name => String(name).trim().replace(/\s+/g,' '));
     if (!columns.includes('Run data file type')) continue;
     for (const row of rows) {
       const run = row[columns.indexOf('Accession')];
-      for (const mate of [1, 2, 3]) {
-        const name = row[columns.indexOf(`Read filename ${mate}`)];
-        const md5 = row[columns.indexOf(`Read file${mate} MD5`)];
-        const raw = row[columns.indexOf(`DownLoad Read file${mate}`)];
+      for (let col = 0; col < columns.length; col++) {
+        // Some official sheets repeat the download column's heading and its R1
+        // URL in the R2 block. Associate attributes by adjacent NAMED cells.
+        if (!/^Read filename \d+$/i.test(columns[col]) || !/^Read file\d+ MD5$/i.test(columns[col+1]) || !/^DownLoad Read file\d+$/i.test(columns[col+2])) continue;
+        const name = row[col], digest = row[col+1], raw = row[col+2];
+        if (typeof raw !== 'string' || /[\\\x00-\x1f]|\/(?:\.|%2e){1,2}(?:\/|$)|%2f|%5c/i.test(raw)) continue;
         let url;
         try { url = new URL(raw); } catch { continue; }
-        const directory = url.pathname.slice(0, url.pathname.lastIndexOf('/')+1);
-        const file = objects.get(directory + name);
-        if (!file || file.run !== run || file.name !== name || url.protocol !== 'ftp:' || !['download.big.ac.cn','download.cncb.ac.cn'].includes(url.hostname) || url.username || url.password || url.port || url.hash || url.search) continue;
-        if (/^[0-9a-f]{32}$/i.test(md5)) file.md5 = md5.toLowerCase();
-        if (url.pathname === directory + name && url.href !== file.url && !file.alternatives.includes(url.href)) file.alternatives.push(url.href);
+        if (!['ftp:','https:'].includes(url.protocol) || !['download.big.ac.cn','download.cncb.ac.cn'].includes(url.hostname) || url.username || url.password || url.port || url.hash || url.search) continue;
+        const linked = objects.get(url.pathname);
+        const file = objects.get(url.pathname.slice(0,url.pathname.lastIndexOf('/')+1) + name);
+        if (!file || file.run !== run || file.name !== name || linked?.run !== run) continue;
+        if (linked === file && url.href !== file.url && !file.alternatives.includes(url.href)) file.alternatives.push(url.href);
+        if (!/^[0-9a-f]{32}$/i.test(digest) || conflicts.has(file)) continue;
+        if (file.md5 && file.md5 !== digest.toLowerCase()) { file.md5 = ''; conflicts.add(file); }
+        else file.md5 = digest.toLowerCase();
       }
     }
   }
+  return conflicts.size;
 }
 module.exports = {enrichFiles, workbookRows};

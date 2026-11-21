@@ -8,7 +8,7 @@ const lists = (rows, count=rows.length) => mock(url => url.pathname.endsWith('/c
 const study = {secondary_study_accession:'SRP123',study_accession:'PRJNA9',run_accession:'SRR1'};
 const ena = 'ftp.sra.ebi.ac.uk/vol1/fastq/SRR1';
 const human = 'https://ngdc.cncb.ac.cn/gsa-human/browse/';
-const projectPage = (mode, html='') => `<html><h1>HRA123</h1><table><tr><th>Access type</th><td>${mode}</td></tr></table>${html}</html>`;
+const projectPage = (mode, html='') => `<html><table><tr><th>Accession</th><td>HRA123</td></tr><tr><th>Access type</th><td>${mode}</td></tr></table>${html}</html>`;
 const index = (path, rows) => `<html><title>Index of ${path}</title><h1>Index of ${path}</h1><pre>${rows.map(([name, size]) => `<a href="${name}">${name}</a> 08-Jul-2025 10:07 ${size}\n`).join('')}</pre></html>`;
 
 test('exact Study and submission queries, aligned bytes and checksums', async () => {
@@ -54,27 +54,28 @@ test('HRR relates to the published project, restricts files to that Run, and pai
 test('file index returns only entries published beneath the exact project/run path', async () => {
   const base = '/gsa-human/HRA123/';
   const get = mock(url => {
-    if (url.hostname.startsWith('ngdc.')) return '<title>SecurityCheck</title>';
+    if (url.hostname.startsWith('ngdc.')) return projectPage('Open Access');
     if (url.pathname===base) return index(base,[['HRR2/','-'],['../','-']]);
     return index(base+'HRR2/',[['R1.fq.gz',110],['R2.fastq.gz',120],['else.xml',90],['../other.fastq.gz',10]]);
   });
   const r = await lookupProject('HRA123',{get});
   assert.deepEqual(r.files.map(f=>f.size),[110,120]); assert.equal(r.access,'public'); assert.equal(r.files[0].alternatives.length,0);
 });
-test('transient index failure retries once, cached HRR membership is revalidated online', async () => {
+test('cached HRR parent only navigates, later access decision and membership are revalidated', async () => {
   const path = '/gsa-human/HRA789/', run = 'HRR789';
-  let requests = 0;
   const get = mock(url => {
-    if (url.hostname.startsWith('ngdc.')) return '<title>SecurityCheck</title>';
+    if (url.pathname.endsWith(run)) throw Object.assign(Error('timed out'),{code:'ETIMEDOUT'});
+    if (url.href === human+'HRA789') return projectPage('Open Access').replace('HRA123','HRA789');
     if (url.pathname === path) return index(path, [[`${run}/`,'-']]);
-    if (!requests++) throw new Error('temporary disconnect');
-    return index(path+run+'/', [['read.fq.gz',12]]);
+    assert.equal(url.pathname,path+run+'/'); return index(path+run+'/', [['read.fq.gz',12]]);
   });
   assert.equal((await lookupProject('HRA789',{get})).files.length,1);
   const answer = await lookupProject(run,{get});
-  assert.deepEqual(answer.projects,['HRA789']); assert.deepEqual(answer.runs,[run]); assert.equal(requests,3);
-  const restricted = await lookupProject(run, {get:mock(url => url.pathname.endsWith(run) ? '<title>SecurityCheck</title>' : projectPage('Controlled Access').replace('HRA123','HRA789'))});
-  assert.equal(restricted.access,'controlled'); assert.equal(restricted.files.length,0);
+  assert.deepEqual(answer.projects,['HRA789']); assert.deepEqual(answer.runs,[run]);
+  const calls = [];
+  const restricted = await lookupProject(run, {get:mock(url => { calls.push(url.href); return '<title>SecurityCheck</title>'; })});
+  assert.equal(restricted.access,'unknown'); assert.equal(restricted.providerBlocked,true); assert.deepEqual(restricted.files,[]);
+  assert.deepEqual(calls,[human+'runDetail/'+run]);
 });
 test('HIR has its own official guidance, and an ambiguous access record yields no downloads', async () => {
   const r = await lookupProject('HIR222',{get:()=>assert.fail('unexpected request')});

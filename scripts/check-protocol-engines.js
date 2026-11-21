@@ -38,9 +38,9 @@ const timeout=setTimeout(()=>{console.error('Protocol test timeout');process.exi
 (async()=>{
  main.ensureBinaries();await new Promise(r=>ftp.listen(0,'127.0.0.1',r));await new Promise(r=>sftp.listen(0,'127.0.0.1',r));
  let index=0;
- for(const [protocol,engine] of [['ftp','aria2'],['sftp','aria2'],['ftp','curl']]){
+ for(const [protocol,engine,selected] of [['ftp','aria2'],['sftp','aria2'],['ftp','curl'],['ftp','aria2',true],['ftp','curl',true]]){
   await main.callIpcHandler('save-settings',{downloadEngines:{[protocol]:engine},deepIntegrityCheck:true});
-  const file={name:`${protocol}-${engine}.bin`,url:`${protocol}://fixture:fixture@127.0.0.1:${(protocol==='ftp'?ftp:sftp).address().port}/fixture.bin`,size:bytes.length,md5:crypto.createHash('md5').update(bytes).digest('hex'),originalIndex:++index};
+  const file={name:`${selected?'selected-':''}${protocol}-${engine}.bin`,...(selected ? {transport:protocol,sourceSelection:'manual',networkMode:'direct'} : {}),url:`${protocol}://fixture:fixture@127.0.0.1:${(protocol==='ftp'?ftp:sftp).address().port}/fixture.bin`,size:bytes.length,md5:crypto.createHash('md5').update(bytes).digest('hex'),originalIndex:++index};
   await main.callIpcHandler('start-download',{files:[file],targetDir:temp,token:'fixture',maxConcurrent:1});
   const final=events.filter(d=>d.index===index&&['completed','failed'].includes(d.status)).at(-1);
   assert.equal(final?.status,'completed',JSON.stringify(final));assert.equal(final.engine,engine);assert.equal(final.verification.status,'verified');assert.deepEqual(fs.readFileSync(final.savePath),bytes);

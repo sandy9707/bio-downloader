@@ -1,48 +1,179 @@
 'use strict';
-const { randomUUID } = require('crypto');
-const { performance } = require('perf_hooks');
+const { createHash, randomUUID } = require('node:crypto');
+const { performance } = require('node:perf_hooks');
+const { promisify } = require('node:util');
+const execFile = promisify(require('node:child_process').execFile);
+const { gunzipSync, constants } = require('node:zlib');
+const axios = require('axios');
+const { load } = require('cheerio');
+const { isDomestic, projectParentChoices } = require('../../shared/project-source-policy');
 
-const execFile = require('util').promisify(require('child_process').execFile);
 const PAGE_SIZE = 10;
+const SAMPLE_BYTES = 65536;
+const CNCB = 'https://ngdc.cncb.ac.cn';
+const plainUrl = u => !u.username && !u.password && !u.port && !u.hash && !u.search;
 
-async function ftpSize(url) {
-  const { stdout } = await execFile('curl', ['-q', '--globoff', '--proto', '=ftp', '--noproxy', '*',
-    '--silent', '--fail', '--head', '--max-time', '6', '--', url],
-    { timeout: 7000, windowsHide: true, maxBuffer: 16384 });
-  return Number(/^Content-Length:\s*(\d+)/im.exec(stdout)?.[1]);
+function matchesFile(file, url) {
+  const name = url.pathname.split('/').pop();
+  if (!plainUrl(url) || !['https:', 'ftp:'].includes(url.protocol)) return false;
+  if (file.format === 'fastq') return name === file.name && /\.(?:fastq|fq)\.gz$/i.test(name);
+  // The object in NCBI SDL may be extensionless. Its accession and type are explicit.
+  return file.format === 'sra' && file.name === `${file.run}.sra` && (name === file.name || name === file.run);
 }
 
-async function measure(file, url, head, ftp) {
-  const candidate = { url, available: false, latencyMs: null };
+async function ftpSample(url) {
+  const args = ['-q', '--globoff', '--proto', '=ftp', '--noproxy', '*', '--silent', '--show-error', '--fail', '--max-time', '6'];
+  const options = { timeout: 7000, windowsHide: true, maxBuffer: SAMPLE_BYTES + 4096 };
+  const head = await execFile('curl', [...args, '--head', '--', url], options);
+  const size = Number(/^Content-Length:\s*(\d+)/im.exec(head.stdout)?.[1]);
+  if (!Number.isSafeInteger(size) || size <= 0) throw Error('FTP 未能确认文件总长度');
+  const end = Math.min(size, SAMPLE_BYTES) - 1;
+  const { stdout } = await execFile('curl', [...args, '--range', `0-${end}`, '--', url], { ...options, encoding: 'buffer' });
+  return { size, bytes: stdout };
+}
+
+async function httpSample(url, get, knownSize) {
+  const end = Math.min(knownSize || SAMPLE_BYTES, SAMPLE_BYTES) - 1;
+  const res = await get(url, { timeout: 6000, proxy: false, maxRedirects: 0, decompress: false,
+    responseType: 'arraybuffer', maxContentLength: SAMPLE_BYTES, validateStatus: () => true,
+    headers: { Range: `bytes=0-${end}`, 'Accept-Encoding': 'identity' } });
+  const h = res.headers || {};
+  if (res.status !== 206 && res.status !== 200) throw Error(`HTTP ${res.status}`);
+  if (/text\/html|(?:application|text)\/(?:[^;]+\+)?(?:xml|json)/i.test(h['content-type'] || '') ||
+      (h['content-encoding'] && h['content-encoding'].toLowerCase() !== 'identity')) throw Error('响应为网页、错误文档或经过内容转码');
+  const bytes = Buffer.from(res.data);
+  if (res.status === 200) {
+    if (h['content-range'] || Number(h['content-length']) !== bytes.length || bytes.length > SAMPLE_BYTES) throw Error('未确认完整的小文件响应或有效分段');
+    return { size: bytes.length, bytes };
+  }
+  const range = /^bytes 0-(\d+)\/(\d+)$/.exec(h['content-range']);
+  const size = Number(range?.[2]);
+  if (!range || Number(range[1]) !== Math.min(end, size - 1) || bytes.length !== Number(range[1]) + 1 ||
+      (h['content-length'] != null && Number(h['content-length']) !== bytes.length)) throw Error('分段或文件总长度不符');
+  return { size, bytes };
+}
+
+function validateSample(file, { size, bytes }) {
+  if (!Number.isSafeInteger(size) || size <= 0 || (file.size > 0 && size !== Number(file.size)) ||
+      !Buffer.isBuffer(bytes) || bytes.length !== Math.min(SAMPLE_BYTES, size)) throw Error('文件长度未确认或与清单不符');
+  if (file.format === 'sra') {
+    if (bytes.toString('ascii', 0, 8) !== 'NCBI.sra') throw Error('未读到 SRA 容器文件头');
+  } else if (file.format === 'fastq') {
+    let prefix;
+    try {
+      prefix = gunzipSync(bytes, { maxOutputLength: 8 * 1024 * 1024,
+        ...(bytes.length < size ? { finishFlush: constants.Z_SYNC_FLUSH } : {}) }).toString('latin1');
+    } catch { throw Error('未读到有效的 gzip 文件头'); }
+    const [id, sequence, plus, quality] = prefix.split(/\r?\n/, 4);
+    if (!/^@\S/.test(id) || !sequence || !plus?.startsWith('+') || quality?.length !== sequence.length) throw Error('文件头未确认完整 FASTQ 记录');
+  } else throw Error('未支持该文件格式');
+  if (bytes.length === size && file.md5 && createHash('md5').update(bytes).digest('hex') !== file.md5.toLowerCase()) throw Error('文件 MD5 与官方清单不符');
+}
+
+async function measure(file, url, get, ftp) {
+  const source = { url, name: file.name, run: file.run, format: file.format, available: false, latencyMs: null };
   try {
     const address = new URL(url);
-    if (!['https:', 'ftp:'].includes(address.protocol) || address.username || address.password) throw Error('不支持此地址');
+    if (!matchesFile(file, address)) throw Error('地址与官方文件名或格式不符');
     const start = performance.now();
-    let size;
-    if (address.protocol === 'ftp:') {
-      try { size = await ftp(url); } catch { throw Error('FTP 未能确认文件大小'); }
-    } else {
-      const response = await head(url, { timeout: 6000, maxRedirects: 0, headers: { 'Accept-Encoding': 'identity' }, validateStatus: () => true });
-      if (response.status !== 200) throw Error(`HTTP ${response.status}`);
-      const type = String(response.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
-      if (!['application/octet-stream', 'binary/octet-stream', 'application/gzip', 'application/x-gzip', 'application/x-compressed', 'application/x-zip-compressed', 'application/zip', 'application/x-tar'].includes(type)) throw Error('未返回二进制文件');
-      size = Number(response.headers['content-length']);
-    }
-    if (!Number.isSafeInteger(size) || !(size > 0) || (file.size > 0 && size !== Number(file.size))) throw Error('文件长度未确认或不符');
+    const sample = address.protocol === 'ftp:' ? await ftp(url) : await httpSample(url, get, file.size);
     const latencyMs = Math.max(1, Math.round(performance.now() - start));
-    return { url, available: true, latencyMs, size };
+    validateSample(file, sample);
+    return { source: { ...source, available: true, size: sample.size, latencyMs }, bytes: sample.bytes };
   } catch (error) {
-    return { ...candidate, reason: error.message };
+    return { source: { ...source, reason: error.message } };
   }
 }
 
-function createProjectService(lookup, head, ftp = ftpSize) {
-  const projects = new Map();
+// As in Lite's native CNCB discovery, follow only links published by the
+// official search and its unique INSDC Run detail. Never construct file URLs.
+function cncbDiscovery(get) {
+  let lane = Promise.resolve(), retryAt = 0;
+  async function links(url, referer) {
+    const res = await get(url, { proxy: false, maxRedirects: 0, timeout: 3500, maxContentLength: 2 * 1024 * 1024,
+      responseType: 'text', headers: { Accept: 'text/html', ...(referer ? { Referer: referer } : {}) } });
+    if (res.status !== 200 || typeof res.data !== 'string') throw Error('未取得官方记录');
+    if (/SecurityCheck|Verifying your browser|<title>[^<]*(?:captcha|安全验证)/i.test(res.data)) throw Error('官方页面要求浏览器验证');
+    const $ = load(res.data), base = new URL($('base[href]').first().attr('href') || url, url);
+    const urls = new Set();
+    $('a[href]').each((_, a) => {
+      try { const link = new URL($(a).attr('href'), base); if (plainUrl(link)) urls.add(link.href); } catch { /* unrelated link */ }
+    });
+    return [...urls].map(href => new URL(href));
+  }
+  async function discover(run) {
+    if (Date.now() < retryAt) return { note: '国内镜像查询暂缓，请稍后重测' };
+    const search = `${CNCB}/gsa/search?searchTerm=${run}`;
+    try {
+      const path = new RegExp(`^/gsa/browse/insdc/[SED]RA\\d+/${run}/?$`);
+      const refs = (await links(search)).filter(u => u.origin === CNCB && path.test(u.pathname));
+      if (refs.length !== 1) return { note: '国内官方搜索未确认唯一对应的 Run 详情' };
+      const urls = (await links(refs[0].href, search)).filter(u => u.protocol === 'https:' &&
+        ['download.cncb.ac.cn', 'download2.cncb.ac.cn'].includes(u.host) && u.pathname.split('/').includes(run));
+      return { urls, detail: refs[0].href };
+    } catch (error) {
+      // Keep the public metadata lane bounded and respect upstream backoff.
+      const status = error.response?.status;
+      if ([429, 503].includes(status)) {
+        const after = error.response?.headers?.['retry-after'];
+        const until = /^\d+$/.test(after) ? Date.now() + Number(after) * 1000 : Date.parse(after);
+        retryAt = Number.isFinite(until) ? Math.max(Date.now() + 1000, until) : Date.now() + 60000;
+      } else if (!status) retryAt = Date.now() + 15000;
+      return { note: `国内镜像记录暂未核实（${status ? 'HTTP ' + status : error.message}）` };
+    }
+  }
+  return run => {
+    const pending = lane.then(() => discover(run));
+    lane = pending.catch(() => {});
+    return pending;
+  };
+}
+
+async function inspectFile(file, get, ftp, discovery) {
+  const urls = [...new Set([file.url, ...(file.alternatives || [])].filter(Boolean))];
+  const [original, record] = await Promise.all([Promise.all(urls.map(url => measure(file, url, get, ftp))), discovery]);
+  const sources = original.map(result => result.source);
+  const reference = original.find(result => result.source.available);
+  if (reference && original.some(result => result.source.available &&
+      (reference.source.size !== result.source.size || !reference.bytes.equals(result.bytes)))) {
+    for (const { source } of original) {
+      if (source.available) Object.assign(source, { available: false, reason: '官方来源之间的文件长度或已读内容不一致' });
+    }
+  }
+  let note = record?.note || '';
+  if (record?.urls) {
+    const mirrors = record.urls.filter(u => {
+      if (!matchesFile(file, u) || urls.includes(u.href)) return false;
+      const segments = u.pathname.split('/');
+      if (file.format === 'fastq') return !segments.some(p => /^sra$/i.test(p));
+      return u.host === 'download2.cncb.ac.cn' && new RegExp(`^/INSDC\\d*/SRA/[^/]+/[^/]+/${file.run}//?${file.run}(?:\\.sra)?$`).test(u.pathname);
+    });
+    if (!file.size) note = '官方清单缺少精确长度，不能确认跨库同文件镜像';
+    else if (mirrors.length !== 1) note = mirrors.length ? '国内详情有多个同名位置，未确认唯一同文件镜像' : '国内详情未列出此格式的同文件链接';
+    else {
+      const measured = await measure(file, mirrors[0].href, get, ftp);
+      const s = measured.source;
+      if (s.available) {
+        // A published mirror link, matching known length, format and either an
+        // entire small file's official MD5 or the exact original binary prefix.
+        const matched = (measured.bytes.length === file.size && !!file.md5) ||
+          original.some(result => result.source.available && result.bytes.equals(measured.bytes));
+        if (!matched) Object.assign(s, { available: false, reason: '未与原文件核实相同的文件头或官方摘要' });
+        else s.officialUrl = record.detail;
+      }
+      sources.push(s);
+    }
+  }
+  return { sources, note };
+}
+
+function createProjectService(lookup, { get = (url, options) => axios.get(url, options), ftp = ftpSample } = {}) {
+  const projects = new Map(), discover = cncbDiscovery(get);
   async function query(project) {
     const result = await lookup(project);
     const files = result.access === 'public' ? result.files || [] : [];
     const queryId = randomUUID();
-    if (files.length) {
+    if (files.length && !projectParentChoices(result).length) {
       projects.set(queryId, files);
       if (projects.size > 16) projects.delete(projects.keys().next().value);
     }
@@ -50,18 +181,18 @@ function createProjectService(lookup, head, ftp = ftpSize) {
   }
   async function probe({ queryId, page = 0 }) {
     const files = projects.get(queryId);
-    if (!files) throw Error('查询结果已过期，请重新查询');
+    if (!files) throw Error('请先选择明确的查询范围或重新查询项目');
     if (!Number.isSafeInteger(page) || page < 0 || page * PAGE_SIZE >= files.length) throw Error('无效页码');
-    const rows = files.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((file, i) => ({ index: page * PAGE_SIZE + i, sources: [] }));
-    const tasks = rows.flatMap(row => {
-      const file = files[row.index];
-      return [...new Set([file.url, ...(file.alternatives || [])].filter(Boolean))].map((url, i) => async () => { row.sources[i] = await measure(file, url, head, ftp); });
-    });
+    const first = page * PAGE_SIZE, pageFiles = files.slice(first, first + PAGE_SIZE);
+    const rows = new Array(pageFiles.length), discoveries = new Map();
     let next = 0;
-    await Promise.all(Array.from({ length: Math.min(6, tasks.length) }, async () => {
-      while (next < tasks.length) await tasks[next++]();
+    await Promise.all(Array.from({ length: Math.min(3, rows.length) }, async () => {
+      while (next < rows.length) {
+        const i = next++, file = pageFiles[i];
+        if (/^[SED]RR\d+$/.test(file.run) && !isDomestic(file.url) && !discoveries.has(file.run)) discoveries.set(file.run, discover(file.run));
+        rows[i] = { index: first + i, ...await inspectFile(file, get, ftp, discoveries.get(file.run)) };
+      }
     }));
-    for (const row of rows) row.sources.sort((a, b) => Number(b.available) - Number(a.available) || a.latencyMs - b.latencyMs);
     return rows;
   }
   return { query, probe };

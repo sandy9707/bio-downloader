@@ -11,6 +11,7 @@ function harness(startDownload) {
     ensureTransferConnection: async()=>true, allocateTransferId:()=>++id, formatBytes:String,
     switchTab:tab=>calls.push(tab), switchTransferSubTab(){}, renderDownloadingList(){}, updateTransferCounts(){}, refreshUserInfo:async()=>{},
     showToast:(...m)=>messages.push(m) });
+  vm.runInContext(source.slice(source.indexOf('const queueExcluded'),source.indexOf('window.changeQueuePage=')),context);
   vm.runInContext(source.slice(source.indexOf('async function startDownload('),source.indexOf('let desktopSubmission')),context);
   return {context,elements,messages,calls};
 }
@@ -36,6 +37,19 @@ function harness(startDownload) {
   assert.equal(starts,1);
   assert.ok(ok.context.activeDownloads[0].originalIndex>9999);
   const empty=harness(async()=>{throw Error('must not start');});empty.context.currentQueue=[];await empty.context.startDownload();assert.equal(empty.calls.length,0);
+  const zero=harness(async()=>assert.fail('zero selection started a download'));
+  zero.context.selectQueueItem(0,false);
+  await zero.context.startDownload();await zero.context.startDownload(true);
+  assert.equal(zero.context.activeDownloads.length,0);assert.equal(zero.calls.length,0);assert.match(zero.messages.at(-1)[0],/勾选/);
+
+  const picked=[];
+  const pages=harness(async files=>picked.push(...files.map(f=>f.name)));
+  pages.context.currentQueue=Array.from({length:101},(_,i)=>({name:`row-${i}`,url:`https://example.invalid/${i}`}));
+  pages.context.renderQueue=()=>pages.context.syncQueueActions();
+  pages.context.queuePage=1;pages.context.queueSelection(false,'all');
+  pages.context.selectQueueItem(1,true);pages.context.changeQueuePage(3);pages.context.selectQueueItem(100,true);
+  assert.match(pages.elements.get('directDownloadBtn').textContent,/2 项/);
+  await pages.context.startDownload(true);assert.deepEqual(picked,['row-1','row-100']);
 
   const temp=fs.mkdtempSync(path.join(os.tmpdir(),'biodl-batch-'));
   process.env.BIODL_DATA_DIR=path.join(temp,'profile');

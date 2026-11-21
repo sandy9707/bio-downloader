@@ -26,7 +26,7 @@ function projectRecord(html, accession, projectUrl) {
     return {access:'controlled', status:clean(value.text()), applicationUrl:applicationUrl || projectUrl};
   }
   if (!/^(?:open access|open|开放访问|公开访问)$/i.test(text)) throw failure('HRA_ACCESS_UNKNOWN', '项目访问方式未确认');
-  const download = $('.panel,.panel-info').filter((_, el) => /^(?:数据下载|Data Download|Download Data)$/i.test(clean($(el).children('.panel-heading').text())));
+  const download = $('.panel,.panel-info').filter((_, el) => /^(?:数据下载|Data(?:set)? Download|Download Data)$/i.test(clean($(el).children('.panel-heading').text())));
   const published = download.find('a[href]').toArray().some(a => [ARCHIVE + accession, `ftp://download.big.ac.cn/gsa-human/${accession}`].includes(($(a).attr('href') || '').replace(/\/$/, '')));
   if (!published) throw failure('HRA_UNAVAILABLE', '项目标记为开放，但官网未开放数据下载入口');
   return {access:'open', status:'Open access', workbookUrl:publishedWorkbook($, accession)};
@@ -48,13 +48,33 @@ function publishedWorkbook($, accession) {
 // This is the Browse page's filtered workbook for its “Available” tab, not a
 // directory probe. An empty result (e.g. registration pending) cannot grant access.
 function catalogueRecord(bytes, accession, projectUrl) {
-  const rows = workbookRows(bytes, load).find(sheet => sheet[0]?.includes('Study') && sheet[0].includes('Access'));
+  const sheets = workbookRows(bytes, load).filter(sheet => sheet[0]?.includes('Study') && sheet[0].includes('Access'));
+  const [rows] = sheets;
   const column = name => rows?.[0]?.indexOf(name);
-  if (rows?.length !== 2 || rows[1][column('Study')] !== accession) throw failure('HRA_ACCESS_UNKNOWN', '官方可获取项目表未返回唯一匹配编号，访问状态未知');
+  if (sheets.length !== 1 || rows.length !== 2 || ['Study','Access'].some(key=>rows[0].filter(h=>h===key).length !== 1) || rows[1][column('Study')] !== accession) throw failure('HRA_ACCESS_UNKNOWN', '官方可获取项目表未返回唯一匹配编号，访问状态未知');
   const access = clean(rows[1][column('Access')]);
   if (/^Control(?:led)?$/i.test(access)) return {access:'controlled', status:'受控访问，请在官方项目页查看申请状态', applicationUrl:projectUrl};
   if (access !== 'Open') throw failure('HRA_ACCESS_UNKNOWN', '官方可获取项目表未确认访问方式');
   return {access:'open', status:'Open access'};
 }
 
-module.exports = {projectRecord, catalogueRecord};
+// Older public record pages expose the same two fields in a labelled table.
+// Page titles and abstract text alone cannot supply an access declaration.
+function tableRecord($, accession, projectUrl) {
+  const values = [];
+  for (const section of $('table,dl').toArray()) {
+    const fields = $(section).find('th,dt').toArray().filter(el => $(el).closest('table,dl')[0] === section)
+      .map(el => [clean($(el).text()).replace(/[:：]$/, ''), clean($(el).next().text())]);
+    const ids = fields.filter(([key]) => /^(?:Accession(?: number| ID)?|GSA(?:-Human)? accession|项目编号|数据集编号)$/i.test(key));
+    if (ids.length !== 1 || ids[0][1] !== accession) continue;
+    for (const [key,value] of fields) if (/^(?:(?:Data )?Access(?: type| mode| status)?|数据访问类型|访问类型|访问权限)$/i.test(key)) values.push(value);
+  }
+  if (!values.length) throw failure('HRA_ACCESS_UNKNOWN', '官方表格未明确确认该项目的访问方式');
+  if (values.some(v=>/^(?:controlled(?: access)?|restricted(?: access)?|受控(?:访问)?)$/i.test(v))) {
+    const applicationUrl = $('a[href]').toArray().map(a=>{ try { return new URL($(a).attr('href'), projectUrl).href; } catch { return ''; } }).find(u => [SITE+'request/'+accession, SITE+'apply/'+accession].includes(u));
+    return {access:'controlled', status:'官方记录为受控访问，请从项目页申请数据访问。', applicationUrl:applicationUrl || projectUrl};
+  }
+  if (!values.every(v=>/^(?:open(?: access)?|public(?: access)?|开放(?:访问)?|公开(?:访问)?)$/i.test(v))) throw failure('HRA_ACCESS_UNKNOWN', '项目访问方式未确认');
+  return {access:'open', status:'Open access'};
+}
+module.exports = {projectRecord, catalogueRecord, tableRecord};

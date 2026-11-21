@@ -93,6 +93,16 @@ jobs:
           # 跳过代码签名（无开发者证书时）
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
+      - name: 从已打包安装介质完整下载 EBI 并独立校验 MD5
+        run: node scripts/check-packaged-live-ebi.js
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaged-ebi-macos
+          path: .evidence/packaged-live-ebi-*.json
+          if-no-files-found: error
+          include-hidden-files: true
+
       - name: 从 macOS 成品 app.asar 验证桌面下载
         run: npm run test:desktop
         env:
@@ -187,6 +197,16 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
+      - name: 从已打包安装介质完整下载 EBI 并独立校验 MD5
+        run: node scripts/check-packaged-live-ebi.js
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaged-ebi-windows
+          path: .evidence/packaged-live-ebi-*.json
+          if-no-files-found: error
+          include-hidden-files: true
+
       - name: 从 Windows 成品 app.asar 运行下载与插件测试
         run: npm run test:desktop
         env:
@@ -265,6 +285,16 @@ jobs:
         run: npm run build:linux
         env:
           BIODL_NODE_RUNTIME: /tmp/biodl-baseline/BioDownloader-Linux-x64/runtime/node
+      - name: 从已打包安装介质完整下载 EBI 并独立校验 MD5
+        run: node scripts/check-packaged-live-ebi.js
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaged-ebi-linux
+          path: .evidence/packaged-live-ebi-*.json
+          if-no-files-found: error
+          include-hidden-files: true
+
       - name: 验证新包和 2.0.49 原地升级
         run: node scripts/check-linux-upgrade.js /tmp/biodl-baseline/BioDownloader-Linux-x64 "dist/BioDownloader-Linux-x64-$(node -p "require('./package.json').version").tar.gz"
       - uses: actions/upload-artifact@v4

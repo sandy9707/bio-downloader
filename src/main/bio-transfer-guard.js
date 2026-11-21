@@ -28,6 +28,39 @@ function bioSource(value) {
   } catch (_) { return null; }
 }
 
+// Keep the requested transport separate from the historical content identity.
+// In particular, an FTP URL cannot be sent through the HTTP range gateway.
+function transferRoute(file, appProxyRunning) {
+  const selected = Boolean(file.sourceSelection);
+  const protocol = new URL(file.url).protocol.slice(0, -1);
+  if (selected && (!['http', 'https', 'ftp'].includes(protocol) || protocol !== file.transport)) {
+    throw new Error('所选地址与传输协议不符，请重新选择该文件的下载来源');
+  }
+  const accelerated = file.networkMode === 'accelerated' || (selected && file.networkMode !== 'direct');
+  if (accelerated && !['http', 'https'].includes(protocol)) {
+    throw new Error('当前加速连接仅支持 HTTP(S)，请改选同文件的 HTTPS 来源，或明确选择直连');
+  }
+  if (accelerated && !appProxyRunning) throw new Error('加速连接尚未启动，请连接加速器，或明确选择直连后重试');
+  const legacy = bioSource(file.url);
+  const proxy = file.networkMode !== 'direct' && appProxyRunning ? {protocol:'http', host:'127.0.0.1', port:43289} : false;
+  return { selected, accelerated, proxy, guardedUrl: selected ? (protocol === 'ftp' ? null : legacy && file.url) : legacy };
+}
+
+// Raw protocol engines have no HTTP gateway to validate an old checkpoint.
+// Pin their exact upstream URL in the existing sidecar before starting them.
+async function pinSelectedFile(filename, url, engine) {
+  const sidecar = filename + '.biodl.json';
+  const sourceKey = sha(url);
+  if (fs.existsSync(sidecar)) {
+    const stat = await fs.promises.stat(sidecar);
+    const old = stat.size <= 1024 * 1024 && JSON.parse(await fs.promises.readFile(sidecar, 'utf8'));
+    if (old?.sourceKey !== sourceKey || old.engine !== engine || !old.selectedPlain) throw new Error('所选来源与原下载断点不符，原文件已保留，请恢复原任务或更换目录');
+    return;
+  }
+  if (['', '.st', '.aria2'].some(suffix => fs.existsSync(filename + suffix))) throw new Error('已有文件缺少所选来源的断点记录，请恢复原任务或更换目录，原文件已保留');
+  await atomicWrite(sidecar, JSON.stringify({version:1, engine, sourceKey, selectedPlain:true}));
+}
+
 function sampleWindows(size) {
   if (size <= SAMPLE_BYTES * SAMPLE_COUNT) return [{ offset: 0, length: size }];
   const length = Math.min(SAMPLE_BYTES, size), offsets = new Set();
@@ -117,14 +150,14 @@ function validateResponse(response, start, end, size, identity) {
   return +m[3];
 }
 
-async function createBioTransferGuard({ url, filename, expectedSize, proxy = false, onFatal = () => {}, onDiagnostic = () => {}, isPaused = () => false, checkControl = async () => {}, timeout = 20000, onBytes = () => {}, engine = 'axel' }) {
+async function createBioTransferGuard({ url, identityUrl = url, filename, expectedSize, proxy = false, onFatal = () => {}, onDiagnostic = () => {}, isPaused = () => false, checkControl = async () => {}, timeout = 20000, onBytes = () => {}, engine = 'axel' }) {
   let lockKey = path.resolve(filename);
   if (process.platform === 'win32') lockKey = lockKey.toLowerCase();
   if (activeFiles.has(lockKey)) throw new Error('同一目标文件已有下载任务，请等待或暂停原任务');
   activeFiles.add(lockKey);
   const sidecar = filename + '.biodl.json', statePath = filename + (engine === 'aria2' ? '.aria2' : '.st');
   const parseState = engine === 'aria2' ? parseAriaState : parseAxelState;
-  const sourceKey = sha(url), controllers = new Set(), sockets = new Set();
+  const sourceKey = sha(identityUrl), controllers = new Set(), sockets = new Set();
   let closed = false, fatal = null, server = null, checkpointTimer = null, checkpointBusy = false;
   let saveChain = Promise.resolve(), sampledBytes = 0, networkSampleBytes = 0;
   let interruptedResponses = 0;
@@ -237,7 +270,7 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
       state = JSON.parse(await fs.promises.readFile(sidecar, 'utf8'));
       // 2.0.44 forced the same ENA archive path to HTTPS.
       // Still validate size, generation and completed-range samples below.
-      const oldEnaKey = url.startsWith('http://ftp.sra.ebi.ac.uk/') && sha(url.replace(/^http:/, 'https:'));
+      const oldEnaKey = identityUrl.startsWith('http://ftp.sra.ebi.ac.uk/') && sha(identityUrl.replace(/^http:/, 'https:'));
       if (state.version !== 1 || (state.sourceKey !== sourceKey && state.sourceKey !== oldEnaKey)) throw fail('同名文件属于不同的下载链接，不能跳过或混合续传');
       if (!state.completed && (state.engine || 'axel') !== engine) throw fail('原任务属于另一下载器，请使用原下载器继续断点');
       state.engine = engine;
@@ -352,4 +385,4 @@ async function createBioTransferGuard({ url, filename, expectedSize, proxy = fal
   } catch (error) { diagnostic('prepare-failed', { stage: 'source-or-checkpoint', error: errorDetails(error), preserved: true }); await close().catch(() => {}); throw error; }
 }
 
-module.exports = { bioSource, createBioTransferGuard, parseAxelState, parseAriaState, sampleWindows, validateResponse };
+module.exports = { bioSource, transferRoute, pinSelectedFile, createBioTransferGuard, parseAxelState, parseAriaState, sampleWindows, validateResponse };

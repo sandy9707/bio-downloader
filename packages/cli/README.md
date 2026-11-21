@@ -40,9 +40,20 @@ biodl update
 
 ### BioProject
 
-Use `biodl project PRJNA727404` to list public files and measure the direct response time of each official source. The selected source for each file is marked `*`. Use `--run <accession>` to narrow the list and `--source https` or `--source ftp` to select a protocol. A hostname or complete source URL is also accepted.
+`biodl project` lists public Run files for the accession you enter. It accepts a project, Study, sample, experiment or Run. If a record points to several parent projects or Studies, choose one of the listed accessions and query it explicitly.
 
-`biodl get bioproject PRJNA727404 --output /data/raw` starts the download. It accepts the same `--run` and `--source` options. In the Web UI, open BioProject, query the accession, review the choices for the current page, and add the checked files to the queue. The Web server measures latency from its own network connection.
+```bash
+biodl project PRJNA727404 --run SRR14424777 --strategy fastest
+biodl project CRR077958 --strategy domestic-first
+biodl project HRA006275 --run HRR1476867 --source https
+biodl get bioproject PRJNA727404 --run SRR14424777 --strategy domestic-first --output /data/raw
+```
+
+`fastest` is the Pro default. It picks the shortest measured response time for **each file**. The desktop or Linux server requests a bounded file prefix to check format and total length against any published size. The reported milliseconds cover that direct probe. `domestic-first` prefers a verified CNCB location for the same file, then uses the fastest verified alternative. Each row shows the selected URL (`*`) and explains a single usable source or a missing domestic match. SRA containers and FASTQ mates are separate files.
+
+`--source` overrides the strategy. Use a protocol, hostname or complete URL. A download starts only when every requested file has a verified match for the choice. `get` uses acceleration by default. To use your own connection, add `--direct`. `--engine native|aria2|axel` applies to the current HTTP tasks.
+
+In the desktop or Web **BioProject** panel, choose a strategy and review the checked files across pages. A per-file choice stays in effect until you switch that file back to automatic selection. Add the selection to append files to the queue. Adding the same Run file again updates its source and preserves its local filename.
 
 ## Updates
 

@@ -1432,20 +1432,30 @@
 
       <div class="card">
         <div class="form-group" id="bioProjectPanel" style="padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-secondary);">
-          <label for="bioProjectInput">项目或测序编号</label>
+          <label for="bioProjectInput">项目、Study、样本、实验或 Run 编号</label>
           <form class="dir-select-group" style="flex-wrap:wrap" onsubmit="event.preventDefault();queryBioProject()">
-            <input type="text" id="bioProjectInput" placeholder="例如 PRJNA727404" value="PRJNA727404" oninput="resetProjectView()">
+            <input type="text" id="bioProjectInput" placeholder="例如 PRJNA727404、SRP318499、HRA006275 或 CRR077958" value="PRJNA727404" oninput="resetProjectView()">
             <button class="btn btn-secondary" id="bioProjectQueryBtn" type="submit">查询项目</button>
           </form>
+          <div class="dir-select-group" style="align-items:center;flex-wrap:wrap;margin-top:.6rem">
+            <label for="bioSourceStrategy">自动选源</label>
+            <select id="bioSourceStrategy" onchange="changeProjectStrategy(this.value)">
+              <option value="fastest" selected>响应最快</option>
+              <option value="domestic-first">国内优先</option>
+            </select>
+            <small>按同一文件的直连响应时间选择，可逐文件手选。</small>
+          </div>
           <div id="bioProjectResult" role="status" style="margin-top:0.6rem"></div>
           <div id="bioProjectFiles" style="display:grid;gap:.5rem"></div>
           <div id="bioProjectAdoptActions" style="display:none;gap:.5rem;align-items:center;flex-wrap:wrap">
             <button class="btn btn-secondary btn-sm" id="bioPrev" onclick="showProjectPage(projectView.page-1)">上一页</button>
             <span id="bioPage"></span>
             <button class="btn btn-secondary btn-sm" id="bioNext" onclick="showProjectPage(projectView.page+1)">下一页</button>
-            <button class="btn btn-secondary btn-sm" onclick="showProjectPage(projectView.page)">重测本页</button>
-            <button class="btn btn-primary btn-sm" id="bioAdopt" onclick="adoptBioProjectRuns()">将本页所选文件加入队列</button>
+            <button class="btn btn-secondary btn-sm" onclick="showProjectPage(projectView.page,true)">重测本页</button>
+            <span id="bioSelectedCount" role="status"></span>
+            <button class="btn btn-primary btn-sm" id="bioAdopt" onclick="adoptBioProjectRuns()">将跨页所选文件加入队列</button>
           </div>
+          <script src="shared/project-source-policy.js"></script>
         </div>
         <div class="form-group" id="group-sra_raw">
           <label>请输入 SRA 原始数据编号 (多项使用换行或空格分隔)
@@ -1493,8 +1503,8 @@
 
         <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
           <button class="btn btn-primary" id="checkSizeBtn" onclick="checkSizes()">检验下载大小</button>
-          <button class="btn btn-success" id="downloadBtn" onclick="startDownload()" disabled>开始加速下载</button>
-          <button class="btn btn-secondary" id="directDownloadBtn" onclick="startDownload(true)" title="不经过应用加速器，不扣加速流量；速度取决于本地网络和源站">直连下载（不扣加速流量）</button>
+          <button class="btn btn-success" id="downloadBtn" onclick="startDownload()" disabled>加速下载已选 0 项</button>
+          <button class="btn btn-secondary" id="directDownloadBtn" onclick="startDownload(true)" title="直连按本地网络和源站的速度下载，免加速流量" disabled>直连下载已选 0 项</button>
           <button class="btn btn-danger" id="cancelBtn" onclick="cancelDownload()" style="display:none;">取消下载</button>
         </div>
       </div>
@@ -1640,8 +1650,8 @@
         </div>
         
         <div class="form-group" id="group-username">
-          <label>账号/用户名</label>
-          <input type="text" id="authUsername" placeholder="请输入用户名..." onkeydown="if(event.key==='Enter')submitAuthForm()">
+          <label id="label-username" for="authUsername">用户名或邮箱</label>
+          <input type="text" id="authUsername" placeholder="请输入用户名或邮箱" onkeydown="if(event.key==='Enter')submitAuthForm()">
         </div>
         
         <div class="form-group" id="group-email" style="display:none;">

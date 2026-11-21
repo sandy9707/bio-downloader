@@ -1,140 +1,210 @@
 'use strict';
+const {projectRecord, catalogueRecord, tableRecord} = require('./project-lookup-access');
+const {HOME, challenge, anchors, detailId, fileAt, runParents, detailFiles, runTable, doc} = require('./project-lookup-human-files');
+const {publicIndex} = require('./project-lookup-index');
+const {enrichFiles} = require('./project-lookup-workbook');
+const {missingMates} = require('./project-lookup-pairs');
 
-const { load } = require('cheerio');
-const origin = 'https://ngdc.cncb.ac.cn';
-const home = `${origin}/gsa-human/`;
-// Cache membership only. Every lookup obtains current access and file evidence.
+// A remembered parent is a navigation hint. Every query obtains fresh access
+// evidence and confirms that the selected Run still belongs to the project.
 const recentRuns = new Map();
-function remember(result, hra) {
-  for (const id of result.runs) {
-    recentRuns.delete(id);
-    recentRuns.set(id, hra);
+function remember(hra, runs) {
+  for (const run of runs) {
+    recentRuns.delete(run); recentRuns.set(run, hra);
     if (recentRuns.size > 4096) recentRuns.delete(recentRuns.keys().next().value);
   }
-  return result;
 }
-const runPath = /^\/gsa-human\/browse\/runDetail\/(HRR\d+)\/?$/;
-const projectPath = /^\/gsa-human\/browse\/(HRA\d+)\/?$/;
-
-function links($, page) {
-  const result = [];
-  $('a[href]').each((_, elem) => {
-    try { result.push({url:new URL($(elem).attr('href'), page), text:$(elem).text().trim()}); } catch { /* unrelated malformed link */ }
-  });
-  return result;
-}
-function fieldValues($, pattern) {
-  const values = [];
-  $('th,td,dt,label,strong,b,span,div').each((_, el) => {
-    const node = $(el);
-    if (node.children().length || !pattern.test(node.text().trim().replace(/[:：]\s*$/, ''))) return;
-    const text = node.next().text().trim() || (node[0].next?.type === 'text' && node[0].next.data.trim());
-    if (text) values.push(text);
-  });
-  return [...new Set(values)];
-}
-function humanFiles(anchors, hra, run, found) {
-  for (const {url} of anchors) {
-    if (!['https:','ftp:'].includes(url.protocol) || !['download.cncb.ac.cn','download.big.ac.cn'].includes(url.hostname) || url.port || url.username || url.password || url.search || url.hash) continue;
-    const match = /^\/gsa-human\/(HRA\d+)\/(HRR\d+)\/([\w.-]+\.(?:fastq|fq)\.gz)$/i.exec(url.pathname);
-    if (!match || match[1] !== hra || (run && match[2] !== run)) continue;
-    const file = found.get(url.pathname) || {run:match[2],name:match[3],urls:new Set()};
-    file.urls.add(url.href);
-    found.set(url.pathname, file);
+function blockedBody(body) {
+  if (Buffer.isBuffer(body) || ArrayBuffer.isView(body) || body instanceof ArrayBuffer) {
+    const bytes = Buffer.from(body);
+    if (bytes.length >= 4 && bytes.readUInt32LE(0) === 0x04034b50) return false;
+    body = bytes.toString('utf8');
   }
-}
-function checkedDoc(html) {
-  if (typeof html !== 'string' || /<title>\s*SecurityCheck|Verifying your browser|captcha/i.test(html) || !/<\/html>/i.test(html)) return null;
-  return load(html);
-}
-async function lookupHuman(base, request, signal) {
-  const {accession} = base;
-  if (/^HIR/.test(accession)) return {...base, officialUrl:home, message:'请在 GSA-Human 核实 HIR 编号及其所属项目，可使用官方 HRA 或 HRR 编号查询。'};
-  const run = /^HRR/.test(accession) ? accession : null;
-  const runUrl = run ? `${home}browse/runDetail/${run}` : null;
-  let hra = accession, runLinks;
-  if (run) {
-    let detail;
-    try { detail = checkedDoc(await request(runUrl, {maxRedirects:0})); }
-    catch (error) { if (signal?.aborted || !recentRuns.has(run)) throw error; }
-    if (detail) runLinks = links(detail, runUrl);
-    const projects = new Set(), fileProjects = new Set();
-    for (const {url} of runLinks || []) {
-      const project = url.origin === origin && projectPath.exec(url.pathname)?.[1];
-      const file = ['https://download.cncb.ac.cn','ftp://download.big.ac.cn'].includes(url.origin) && /^\/gsa-human\/(HRA\d+)\/(HRR\d+)\//.exec(url.pathname);
-      if (project) projects.add(project);
-      if (file && file[2] === run) fileProjects.add(file[1]);
+  if (typeof body === 'string') {
+    if (challenge(body) || /^\s*(?:HTTP\s+)?(?:401 Unauthorized|403 Forbidden|429 Too Many Requests|Access Denied|Forbidden)(?:[\s.!:：]|$)/i.test(body)) return true;
+    if (body.trimStart().startsWith('{')) {
+      try { return blockedBody(JSON.parse(body)); } catch { /* non-JSON metadata */ }
     }
-    if (!projects.size) for (const id of fileProjects) projects.add(id);
-    if (!projects.size && recentRuns.has(run)) projects.add(recentRuns.get(run));
-    if (projects.size !== 1) return {...base, officialUrl:runUrl, message:'官方 Run 页面未确认所属 HRA 项目，可先查询 HRA 项目编号，再查询当前 HRR。'};
-    [hra] = projects;
+    return false;
   }
-  const officialUrl = `${home}browse/${hra}`;
-  const pending = {...base, officialUrl, message:'尚未确认项目的官方访问状态，请在 GSA-Human 项目页核实。'};
-  let html;
-  try { html = await request(officialUrl, {maxRedirects:0}); }
-  catch (error) {
-    if (signal?.aborted) throw error;
-    if (error.response?.status && error.response.status < 500) return pending;
+  if (!body || typeof body !== 'object') return false;
+  const status = Number(body.statusCode || body.status || body.code);
+  const marker = [body.code,body.message,body.error].filter(v=>typeof v==='string').join(' ');
+  return [401,403,407,429,451,503].includes(status) || challenge(marker) || /captcha|verification.required|access.denied|forbidden|安全验证|人机验证|拒绝访问/i.test(marker);
+}
+function isTransportFailure(error) {
+  return !error.response && ['ECONNRESET','ECONNABORTED','ETIMEDOUT','EAI_AGAIN','ERR_NETWORK'].includes(error.code);
+}
+function requestReader(request, signal) {
+  let stopped;
+  function stop(reason) {
+    stopped = Object.assign(Error(reason), {code:'HRA_STOP'});
+    throw stopped;
   }
-  const $ = checkedDoc(html);
-  if (!$ || $('input#idacc').length) {
-    const {projectRecord, catalogueRecord} = require('./project-lookup-access');
-    let record;
-    if ($) {
-      try { record = projectRecord(html, hra, officialUrl); } catch { return pending; }
-    } else {
-      let bytes;
-      try {
-        bytes = await request(home+'file/downLoadFilterFiles', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, data:new URLSearchParams({accession:hra,pageNo:'1'}).toString(), responseType:'arraybuffer', timeout:10000, maxRedirects:0});
-      } catch (error) { if (signal?.aborted) throw error; if ([401,403,429].includes(error.response?.status)) return pending; }
-      if (bytes && Buffer.from(bytes).subarray(0,2).toString() === 'PK') {
-        try { record = catalogueRecord(bytes, hra, officialUrl); } catch { return pending; }
-      }
-    }
-    if (record?.access === 'controlled') return {...pending, projects:[hra], access:'controlled', applicationUrl:record.applicationUrl, message:record.status};
-    const result = await require('./project-lookup-index').publicIndex(pending, hra, run, request, signal);
-    if (record?.workbookUrl && result.files.length) {
-      try { require('./project-lookup-workbook').enrichFiles(await request(record.workbookUrl, {responseType:'arraybuffer', maxContentLength:4*1024*1024, maxRedirects:0}), result.files); }
-      catch (error) { if (signal?.aborted) throw error; }
-    }
-    return remember(result, hra);
-  }
-  const anchors = links($, officialUrl);
-  const ids = fieldValues($, /^(?:Accession(?: number| ID)?|GSA(?:-Human)? accession|项目编号|数据集编号)$/i);
-  const headings = $('h1,h2,h3,h4,title').text();
-  const identity = ids.includes(hra) || (!ids.length && new RegExp(`\\b${hra}\\b`).test(headings));
-  if (!identity) return pending;
-  const values = fieldValues($, /^(?:(?:Data )?Access(?: type| mode| status)?|数据访问类型|访问类型|访问权限)$/i);
-  const controlled = values.some(v => /^(?:controlled(?: access)?|restricted(?: access)?|受控(?:访问)?)(?:\s*\([^)]*\))?$/i.test(v));
-  if (controlled) {
-    const apply = anchors.find(x => x.url.origin === origin && /apply|request access|申请/i.test(x.text) && /^\/(?:gsa-human|dac|gsa)\//.test(x.url.pathname));
-    return {...pending, projects:[hra], access:'controlled', applicationUrl:apply?.url.href || officialUrl, message:'官方记录为受控访问，请从项目页申请数据访问。'};
-  }
-  if (!values.length || values.some(v => !/^(?:open(?: access)?|public(?: access)?|开放(?:访问)?|公开(?:访问)?)$/i.test(v))) return pending;
-  const found = new Map();
-  humanFiles(anchors, hra, run, found);
-  const detailUrls = new Map();
-  for (const {url} of anchors) {
-    const id = url.origin === origin && runPath.exec(url.pathname)?.[1];
-    if (id && (!run || run === id)) detailUrls.set(id, `${home}browse/runDetail/${id}`);
-  }
-  if (run && !detailUrls.has(run) && ![...found.values()].some(f => f.run === run)) return pending;
-  let partial = false;
-  for (const [id, url] of detailUrls) {
+  return async (url, options = {}) => {
     signal?.throwIfAborted();
-    try {
-      const doc = runLinks ? null : checkedDoc(await request(url));
-      if (!runLinks && !doc) { partial = true; continue; }
-      humanFiles(runLinks || links(doc, url), hra, id, found);
-    } catch (error) { if (signal?.aborted) throw error; partial = true; }
-  }
-  const files = [...found.values()].map(f => {
-    const [url, ...alternatives] = [...f.urls].sort((a,b) => Number(b.startsWith('https:')) - Number(a.startsWith('https:')));
-    return {run:f.run, name:f.name, url, alternatives, size:0, md5:'', format:'fastq'};
-  });
-  const runs = [...new Set([...detailUrls.keys(), ...files.map(f => f.run)])];
-  return remember({...base, projects:[hra], officialUrl, access:'public', runs, files, message:`官方开放访问。已取得 ${runs.length} 个 Run、${files.length} 个公开文件。${partial ? '部分 Run 详情未能读取。' : ''}`}, hra);
+    if (stopped) throw stopped;
+    let body;
+    try { body = await request(url, {timeout:10000, maxRedirects:0, maxContentLength:4*1024*1024, ...options}); }
+    catch (error) {
+      if (signal?.aborted) throw error;
+      const status = error.response?.status;
+      if ([401,403,407,429,451,503].includes(status) || (status >= 300 && status < 400)) stop(`官方返回 HTTP ${status}，已停止本次查询`);
+      if (error.code === 'HRA_STOP' || blockedBody(error.response?.data) || challenge(error.message)) stop('官网要求验证或限制访问，已停止本次查询');
+      throw error;
+    }
+    if (blockedBody(body) || (options.method === 'HEAD' && /html/i.test(body?.['content-type'] || ''))) stop('官网要求验证或返回访问限制页面，已停止本次查询');
+    return body;
+  };
 }
-module.exports = { lookupHuman };
+async function accessRecord(hra, read, signal) {
+  const url = HOME+'browse/'+hra;
+  let html;
+  try { html = await read(url, {headers:{Referer:HOME+'browse/', Accept:'text/html'}}); }
+  catch (error) {
+    if (signal?.aborted || !isTransportFailure(error)) throw error;
+    // A transport failure with no response is distinct from a provider refusal.
+    // The official Available export must itself affirm this exact accession.
+    const filters = {accession:hra, status:'3', tab:'1', publishTime:'', open:'', platform:'', sample:'', dataType:''};
+    const bytes = await read(HOME+'file/downLoadFilterFiles', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded', Referer:HOME+'browse/'}, data:new URLSearchParams(filters).toString(), responseType:'arraybuffer'});
+    const record = catalogueRecord(bytes, hra, url);
+    return {...record, accession:hra, modern:true};
+  }
+  const $ = doc(html);
+  if (!$) throw Error('官方项目页面不完整，访问方式未确认');
+  const modern = $('input#idacc').length > 0;
+  return {...(modern ? projectRecord(html,hra,url) : tableRecord($,hra,url)), accession:hra, modern, $};
+}
+
+// Directory sizes may be absent when the official index is temporarily down.
+// A normal HEAD on an already published object can confirm its full byte length.
+async function fillMissingSizes(files, read, signal) {
+  const deadline = Date.now() + 12000;
+  for (const file of files) {
+    if (file.size || !file.url.startsWith('https:')) continue;
+    const timeout = Math.min(2500, deadline - Date.now());
+    if (timeout <= 0) break;
+    try {
+      const h = await read(file.url, {method:'HEAD', timeout, decompress:false, headers:{'Accept-Encoding':'identity'}});
+      if (!h || typeof h !== 'object') continue;
+      const type = h['content-type'] || '';
+      if (/html|xml|json|^text\//i.test(type)) break;
+      if (h['content-range'] || (h['content-encoding'] && h['content-encoding'] !== 'identity')) continue;
+      const length = h['content-length'];
+      if (/^\d+$/.test(length) && Number.isSafeInteger(Number(length))) file.size = Number(length);
+    } catch (error) {
+      if (signal?.aborted || error.code === 'HRA_STOP') throw error;
+    }
+  }
+}
+
+async function openFiles(record, selected, runDoc, read, signal, workbook) {
+  const hra = record.accession, page = HOME+'browse/'+hra, warnings = new Set();
+  const warn = msg => warnings.add(msg);
+  const runs = new Set(), objects = new Map(), publishedDetails = new Set(), excluded = new Set();
+  let table = null, archiveBlocked = false;
+  const inScope = run => !selected || run === selected;
+  const add = file => {
+    if (!file || !inScope(file.run) || excluded.has(file.run)) return;
+    const key = file.run+'/'+file.name;
+    if (table && !table.files.has(key)) return;
+    runs.add(file.run);
+    const f = objects.get(key) || {run:file.run,name:file.name,urls:new Set(),size:0,md5:''};
+    if (file.size && f.size && file.size !== f.size) throw Error('官方清单的文件大小不一致，请重试');
+    if (file.md5 && f.md5 && file.md5 !== f.md5) throw Error('官方清单的文件 MD5 不一致，请重试');
+    f.size ||= file.size; f.md5 ||= file.md5; f.urls.add(file.url); objects.set(key,f);
+  };
+  if (record.modern && !selected) {
+    try { table = await runTable(hra, read); }
+    catch (error) {
+      if (signal?.aborted || ['HRA_IDENTITY','HRA_STOP'].includes(error.code)) throw error;
+      warn('官方 Run 分页暂不可用，文件总数待复核');
+    }
+    if (table) for (const run of table.runs) { runs.add(run); publishedDetails.add(run); }
+  }
+  if (record.$) for (const {url} of anchors(record.$, record.$.root(),page)) {
+    const run = detailId(url);
+    if (run && inScope(run) && (!table || table.runs.has(run))) { runs.add(run); publishedDetails.add(run); }
+    if (!record.modern) add(fileAt(url,hra,selected));
+  }
+  if (selected && runDoc) { runs.add(selected); publishedDetails.add(selected); }
+  // A validated Run table/crumb publishes the detail route. Do not guess links
+  // to other runs on a single-Run lookup or keep querying a challenged route.
+  let detailUnavailable = 0;
+  for (const run of publishedDetails) {
+    try {
+      const $ = runDoc || doc(await read(HOME+'browse/runDetail/'+run, {responseType:'text',headers:{Referer:page,Accept:'text/html'}}));
+      if (!$) throw Error('Run 详情不完整');
+      for (const file of detailFiles($,hra,run)) add(file);
+    } catch (error) {
+      if (signal?.aborted || error.code === 'HRA_STOP') throw error;
+      if (error.code === 'HRA_IDENTITY') {
+        excluded.add(run); warn(`${run} 的官方详情归属或下载栏不符，已排除`);
+      } else { detailUnavailable++; break; }
+    }
+  }
+  if (detailUnavailable) warn('部分 Run 详情暂不可用，仅保留其他官方清单已确认的地址');
+  if (record.modern || !objects.size || !publishedDetails.size) {
+    const archive = await publicIndex(record, selected, read, warn, signal);
+    archiveBlocked = archive.archiveBlocked;
+    for (const run of archive.runs) if (!table || table.runs.has(run)) runs.add(run);
+    for (const file of archive.files) add(file);
+  }
+  const files = [];
+  for (const f of objects.values()) {
+    if (excluded.has(f.run)) continue;
+    const [url, ...alternatives] = [...f.urls].sort((a,b) => Number(b.startsWith('https:')) - Number(a.startsWith('https:')));
+    files.push({run:f.run, name:f.name, url, alternatives, size:f.size || 0, md5:f.md5 || '', format:'fastq'});
+  }
+  if (files.length && (workbook || record.workbookUrl)) {
+    try {
+      const bytes = workbook || await read(record.workbookUrl, {responseType:'arraybuffer',headers:{Referer:page}});
+      if (enrichFiles(bytes,files)) warn('官方清单存在相互冲突的 MD5，已清除相关参考值');
+    } catch (error) { if (signal?.aborted || error.code === 'HRA_STOP') throw error; warn('项目工作簿未能核实'); }
+  }
+  if (!archiveBlocked && record.modern) await fillMissingSizes(files,read,signal);
+  const missingSizes = files.filter(f=>!f.size).length, missingHashes = files.filter(f=>!f.md5).length;
+  if (missingSizes || missingHashes) warn(`已核实精确大小 ${files.length-missingSizes}/${files.length} 个，官方 MD5 ${files.length-missingHashes}/${files.length} 个`);
+  const byRun = new Map();
+  for (const file of files) { if (!byRun.has(file.run)) byRun.set(file.run, []); byRun.get(file.run).push(file); }
+  const missingRuns = [...runs].filter(run=>!byRun.has(run)).length;
+  const missingEnds = [...byRun.values()].filter(group=>missingMates(group)).length;
+  if (missingRuns) warn(`${missingRuns} 个 Run 尚未取得文件清单`);
+  if (missingEnds) warn(`${missingEnds} 个 Run 的配对文件缺端`);
+  if (table && files.length !== table.files.size) warn(`已取得 ${files.length}/${table.files.size} 个 FASTQ，清单不完整`);
+  if (selected && !runs.has(selected)) warn('当前项目清单未确认所查 Run');
+  const message = `官方声明开放访问。已查到 ${runs.size} 个 Run、${files.length} 个 FASTQ。` + [...warnings].map(s=>s+'。').join('');
+  return {runs:[...runs], files, partial:Boolean(warnings.size), message};
+}
+
+async function lookupHuman(base, request, signal, workbook) {
+  const id = base.accession, selected = /^HRR/.test(id) ? id : null;
+  if (/^HIR/.test(id)) return {...base, officialUrl:HOME, message:'请在 GSA-Human 核实 HIR 编号及其所属库，可使用官方 HRA 或 HRR 编号查询。'};
+  let hra = id, runDoc, officialUrl = HOME+'browse/'+(selected ? 'runDetail/'+selected : hra);
+  const read = requestReader(request, signal);
+  try {
+    if (selected) {
+      try {
+        runDoc = doc(await read(officialUrl, {headers:{Referer:HOME+'browse/',Accept:'text/html'}}));
+        if (!runDoc) throw Error('官方 Run 页面不完整');
+      } catch (error) {
+        if (signal?.aborted || !isTransportFailure(error) || !recentRuns.has(selected)) throw error;
+      }
+      const projects = runDoc ? runParents(runDoc,selected) : recentRuns.has(selected) ? [recentRuns.get(selected)] : [];
+      if (projects.length !== 1) return {...base, projects, officialUrl, message:projects.length ? '官方记录列出多个父项目，请选择项目查看。' : '官方 Run 页未确认所属项目，请核对 HRA 或重试。'};
+      [hra] = projects;
+      officialUrl = HOME+'browse/'+hra;
+    }
+    const record = await accessRecord(hra, read, signal);
+    if (record.access === 'controlled') return {...base, projects:[hra], officialUrl, access:'controlled', applicationUrl:record.applicationUrl || officialUrl, message:record.status};
+    if (record.access !== 'open') throw Error('官方尚未声明该项目为开放访问');
+    const result = await openFiles(record,selected,runDoc,read,signal,workbook);
+    remember(hra,result.runs);
+    return {...base, ...result, projects:[hra], officialUrl, access:'public'};
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    const reason = error.response?.status === 404 ? '官方未找到该记录' : error.message;
+    return {...base, officialUrl, partial:true, providerBlocked:error.code === 'HRA_STOP', message:`本次未能核实官方项目记录：${reason}。请打开官方记录或稍后重试。`};
+  }
+}
+module.exports = {lookupHuman};

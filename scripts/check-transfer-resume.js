@@ -22,6 +22,14 @@ function harness(overrides={}) {
   assert.equal(starts[0][2],'original-dir');
   assert.equal(starts[0][1][0].md5,task.md5,'resume must retain checksum across application restarts');
   assert.ok(h.calls.indexOf('connect')<h.calls.indexOf(starts[0]),'accelerator must reconnect before download');
+  const direct=harness({getClashStatus:async()=>assert.fail('direct resume must retain the original route')});
+  const original={...task, status:'paused', originalIndex:11, networkMode:'direct', engine:'native', folder:'run', sourceName:'official.fastq.gz', transport:'https'};
+  direct.context.activeDownloads.push(original);
+  await Promise.all([direct.context.resumeSingleDownload(11),direct.context.resumeSingleDownload(11)]);
+  const restarts=direct.calls.filter(call=>Array.isArray(call)&&call[0]==='download');
+  assert.equal(restarts.length,1);assert.equal(restarts[0][2],original.targetDir);
+  for (const key of ['networkMode','url','name','folder','originalIndex','md5','sourceName','transport']) assert.equal(restarts[0][1][0][key],original[key],key);
+  assert.equal(restarts[0][1][0].downloadEngine,'native');
   h.api.startDownload=async()=>{throw Error('fixture startup failure');};task.status='paused';
   await h.context.resumeSingleDownload(9);
   assert.equal(task.status,'paused');assert.equal(task.receivedBytes,100);
@@ -38,6 +46,23 @@ function harness(overrides={}) {
   assert.equal(h.context.activeDownloads[1].targetDir,'failed-dir');
   assert.equal(h.context.activeDownloads[1].md5,task.md5,'retry must retain the expected checksum');
   assert.equal(h.context.activeDownloads[1].status,'paused');
+  const historic=harness({getClashStatus:async()=>assert.fail('direct retry connected')});
+  const oldSra={name:'renamed.sra',fileObj:{name:'renamed.sra',url:'https://sra-pub-run-odp.s3.amazonaws.com/sra/ERR12/ERR12',sourceName:'ERR12.sra',format:'sra',networkMode:'direct',downloadEngine:'aria2',targetDir:'original'}};
+  historic.context.failedDownloads.push(oldSra);await historic.context.retryFailedDownload(0);
+  const retry=historic.calls.find(c=>c[0]==='download');assert.equal(retry[1].length,1);
+  for (const key of ['url','sourceName','name','format','networkMode','downloadEngine','targetDir']) assert.equal(retry[1][0][key],oldSra.fileObj[key]);
+  const mismatch = harness();
+  Object.assign(mismatch.context, {manualMd5Run:null, syncTransfersToStorage(){}, ensureTransferConnection:async()=>{ throw Error('direct redownload contacted accelerator'); }});
+  vm.runInContext(source.slice(source.indexOf('let mismatchQueueBusy'),source.indexOf('// Manual MD5 checks')),mismatch.context);
+  const expectedMd5 = 'd'.repeat(32);
+  const item = {name:'local.fastq.gz',url:'https://example.invalid/official.fastq.gz',size:80,savePath:'/original/run/local.fastq.gz',engine:'native',
+    verification:{status:'mismatch',expectedMd5},fileObj:{sourceName:'official.fastq.gz',format:'fastq',transport:'https',sourceSelection:'manual',networkMode:'direct'}};
+  await mismatch.context.queueMismatches([item,item]);
+  const [redownload] = mismatch.calls.filter(call=>Array.isArray(call)&&call[0]==='download');
+  assert.equal(redownload[1].length,1);
+  const [job] = redownload[1];
+  for (const key of Object.keys(item.fileObj)) assert.equal(job[key],item.fileObj[key]);
+  assert.equal(job.targetDir,'/original/run/');assert.equal(job.downloadEngine,'native');assert.equal(job.md5,expectedMd5);
   const ex={id:'restored-ex',url:'https://example.invalid/c',name:'extract.fastq',paused:true,saveDir:'ex-dir',received:200,total:900};
   h.context.extractionJobs[ex.id]=ex;
   await Promise.all([h.context.resumeExtractionDownload(ex.id),h.context.resumeExtractionDownload(ex.id)]);
