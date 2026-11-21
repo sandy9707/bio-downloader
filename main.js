@@ -231,7 +231,9 @@ if (!isElectron) {
 }
 let extractionWindow = null; // 引导式提取独立弹出窗口
 let clashProcess = null;
-let currentRealNodeCount = 0;
+let currentRealNodeCount = 0; // retained account aliases, not independent IPs
+let currentPhysicalNodeCount = 0; // airport + route-name groups
+let currentNodeVerified = false;
 let clashLifecycleQueue = Promise.resolve();
 let currentNodeTier = null; // 1: 一级高速节点(>=6.0Mbps), 2: 二级标准节点(>=2.0Mbps), 3: 三级保底节点
 const CLASH_CONTROL_URL = 'http://127.0.0.1:43299';
@@ -241,7 +243,6 @@ const LOCAL_NODE_SPEED_SAMPLE_BYTES = 16 * 1024 * 1024;
 const LOCAL_NODE_TEST_TIMEOUT_MS = 20000;
 const LOCAL_NODE_TIER1_MBPS = 6.0;
 const LOCAL_NODE_TIER2_MBPS = 2.0;
-const LOCAL_NODE_MIN_POOL_SIZE = 6;
 const LOCAL_NODE_TEST_CONCURRENCY = 5;
 const LOCAL_NODE_BENCH_BASE_PORT = 43310;
 const ACCOUNT_AIRPORTS = { 1: '一分机场', 2: '一分机场', 3: '一元机场', 4: '一元机场', 5: '一元机场', 6: 'iKuuu' };
@@ -883,6 +884,7 @@ async function measureProxyThroughputMbps(proxyPort, testUrl, sampleBytes, timeo
 }
 
 async function validateLocalClashNodes(configPath, sender) {
+  const { selectLocalNodeGroups } = require('./src/main/local-node-policy');
   const originalYaml = fs.readFileSync(configPath, 'utf8');
   const config = yaml.load(originalYaml) || {};
   const groups = Array.isArray(config['proxy-groups']) ? config['proxy-groups'] : [];
@@ -890,8 +892,12 @@ async function validateLocalClashNodes(configPath, sender) {
   const candidateNames = [...new Set((downloadPool?.proxies || []).filter(Boolean))];
   if (!candidateNames.length) {
     writeClashLog('[local-validation] skip: download pool missing or empty');
-    emitClashValidationProgress(sender, { completed: 0, total: 0, passed: 0, done: true });
-    return currentRealNodeCount;
+    currentRealNodeCount = 0;
+    currentPhysicalNodeCount = 0;
+    currentNodeTier = null;
+    currentNodeVerified = false;
+    emitClashValidationProgress(sender, { completed: 0, total: 0, passed: 0, physicalNodeCount: 0, tier: null, verified: false, failed: true, done: true });
+    throw new Error('本地测速没有候选节点，无法验证网络通道');
   }
 
   const physicalGroups = new Map();
@@ -904,7 +910,6 @@ async function validateLocalClashNodes(configPath, sender) {
   const entries = [...physicalGroups.values()];
   const tier1Mbps = typeof LOCAL_NODE_TIER1_MBPS === 'number' ? LOCAL_NODE_TIER1_MBPS : 6.0;
   const tier2Mbps = typeof LOCAL_NODE_TIER2_MBPS === 'number' ? LOCAL_NODE_TIER2_MBPS : 2.0;
-  const minPoolSize = typeof LOCAL_NODE_MIN_POOL_SIZE === 'number' ? LOCAL_NODE_MIN_POOL_SIZE : 6;
   const testUrl = typeof LOCAL_NODE_SPEED_TEST_URL === 'string' ? LOCAL_NODE_SPEED_TEST_URL : 'https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR390728/SRR390728';
   const sampleBytes = typeof LOCAL_NODE_SPEED_SAMPLE_BYTES === 'number' ? LOCAL_NODE_SPEED_SAMPLE_BYTES : 1024 * 1024;
   const basePort = typeof LOCAL_NODE_BENCH_BASE_PORT === 'number' ? LOCAL_NODE_BENCH_BASE_PORT : 43310;
@@ -918,6 +923,7 @@ async function validateLocalClashNodes(configPath, sender) {
   const benchTargets = entries;
   completed = 0;
 
+  try {
   const workerCount = Math.min(typeof LOCAL_NODE_TEST_CONCURRENCY === 'number' ? LOCAL_NODE_TEST_CONCURRENCY : 4, benchTargets.length);
   const benchPorts = await findFreeLocalPorts(workerCount, basePort);
   const allRepNames = benchTargets.map(g => g[0]);
@@ -930,17 +936,7 @@ async function validateLocalClashNodes(configPath, sender) {
     benchConfig.listeners.push({ name: `__biodl_bench_${w}`, type: 'mixed', port: benchPorts[w], listen: '127.0.0.1', proxy: groupName });
   }
   fs.writeFileSync(configPath, yaml.dump(benchConfig, { lineWidth: -1, noRefs: true }), 'utf8');
-  try {
-    await reloadClashConfig(configPath);
-  } catch (benchReloadErr) {
-    writeClashLog('[local-validation] bench listener reload failed, restoring cloud config: ' + benchReloadErr.message);
-    fs.writeFileSync(configPath, originalYaml, 'utf8');
-    try { await reloadClashConfig(configPath); } catch (_) {}
-    currentNodeTier = 3;
-    currentRealNodeCount = candidateNames.length;
-    emitClashValidationProgress(sender, { completed: entries.length, total: entries.length, passed: candidateNames.length, tier: 3, done: true });
-    return currentRealNodeCount;
-  }
+  await reloadClashConfig(configPath);
 
   let cursor = 0;
   const workers = Array.from({ length: workerCount }, async (_, w) => {
@@ -959,10 +955,10 @@ async function validateLocalClashNodes(configPath, sender) {
       } catch (_) {}
       if (mbps > 0) {
         measuredGroups.push({ mbps, groupNames, representative });
-        if (mbps >= tier1Mbps) fastCountSoFar += groupNames.length;
+        if (mbps >= tier1Mbps) fastCountSoFar++;
       }
       completed++;
-      emitClashValidationProgress(sender, { completed, total: entries.length, passed: fastCountSoFar });
+      emitClashValidationProgress(sender, { completed, total: entries.length, passed: fastCountSoFar, physicalNodeCount: fastCountSoFar, phase: 'sampling', tier: 1, verified: false });
     }
   });
   await Promise.all(workers);
@@ -972,7 +968,7 @@ async function validateLocalClashNodes(configPath, sender) {
   measuredGroups.sort((a, b) => b.mbps - a.mbps);
   const finalists = measuredGroups.slice(0, 5);
   let finalCursor = 0;
-  await Promise.all(Array.from({ length: Math.min(2, workerCount, finalists.length) }, async (_, w) => {
+  const refinementResults = await Promise.allSettled(Array.from({ length: Math.min(2, workerCount, finalists.length) }, async (_, w) => {
     while (finalCursor < finalists.length) {
       const item = finalists[finalCursor++];
       await axios.put(`${CLASH_CONTROL_URL}/proxies/${encodeURIComponent(`__BIODL_BENCH_${w}`)}`, { name: item.representative }, { proxy: false, timeout: 3000 });
@@ -983,39 +979,18 @@ async function validateLocalClashNodes(configPath, sender) {
       if (!speed) item.mbps = 0;
     }
   }));
+  // Do not reload the rollback config while another refinement worker is active.
+  const refinementFailure = refinementResults.find(result => result.status === 'rejected');
+  if (refinementFailure) throw refinementFailure.reason;
   for (let i = measuredGroups.length - 1; i >= 0; i--) if (!measuredGroups[i].mbps) measuredGroups.splice(i, 1);
 
-  // 按真实 HTTPS 下载速度从高到低排序（EPROTO / 断流 / 死节点 mbps=0 已被天然淘汰）
-  measuredGroups.sort((a, b) => b.mbps - a.mbps);
-  const tier1Groups = measuredGroups.filter(item => item.mbps >= tier1Mbps);
-  const tier2Groups = measuredGroups.filter(item => item.mbps >= tier2Mbps);
-  const countAliases = list => list.reduce((sum, item) => sum + item.groupNames.length, 0);
-  const targetTier1Min = Math.min(candidateNames.length, minPoolSize);
-  const targetTier2Min = Math.min(candidateNames.length, 4);
-
-  let selectedGroups = [];
-  let selectedTier = 1;
-  const passedNames = new Set();
-
-  if (countAliases(tier1Groups) >= targetTier1Min || (tier1Groups.length > 0 && tier1Groups.length === measuredGroups.length && countAliases(tier1Groups) >= 2)) {
-    selectedGroups = tier1Groups;
-    selectedTier = 1;
-    selectedGroups.forEach(item => item.groupNames.forEach(name => passedNames.add(name)));
-  } else if (countAliases(tier2Groups) >= targetTier2Min || (tier2Groups.length > tier1Groups.length && countAliases(tier2Groups) >= 2)) {
-    selectedGroups = tier2Groups;
-    selectedTier = 2;
-    selectedGroups.forEach(item => item.groupNames.forEach(name => passedNames.add(name)));
-  } else if (measuredGroups.length > 0) {
-    // 三级节点：只要真实 HTTPS 生信下载测通(>0 Mbps)，哪怕速度较慢也全部保留使用，剔除 EPROTO 坏节点
-    selectedGroups = measuredGroups;
-    selectedTier = 3;
-    selectedGroups.forEach(item => item.groupNames.forEach(name => passedNames.add(name)));
-  } else {
-    fs.writeFileSync(configPath, originalYaml, 'utf8');
-    await reloadClashConfig(configPath);
-    currentNodeTier = null;
-    currentRealNodeCount = 0;
-    emitClashValidationProgress(sender, { completed, total: entries.length, passed: 0, done: true });
+  const selection = selectLocalNodeGroups(measuredGroups, { tier1Mbps, tier2Mbps, candidateAliasCount: candidateNames.length });
+  const { selectedGroups, selectedTier, tier1PhysicalCount, continuedToTier2 } = selection;
+  const passedNames = new Set(selection.passedNames);
+  emitClashValidationProgress(sender, { completed, total: entries.length, passed: selection.nodeCount,
+    physicalNodeCount: selection.physicalNodeCount, tier1PhysicalCount, continuedToTier2,
+    phase: 'selection', tier: selectedTier, verified: false });
+  if (!selectedGroups.length) {
     throw new Error('本地 HTTPS 下载测速未找到可用节点；请检查网络或 TUN 代理冲突后重试');
   }
 
@@ -1076,32 +1051,46 @@ async function validateLocalClashNodes(configPath, sender) {
     if (filtered.length > 0) group.proxies = filtered;
   });
   fs.writeFileSync(configPath, yaml.dump(config, { lineWidth: -1, noRefs: true }), 'utf8');
-  try {
-    await reloadClashConfig(configPath);
-  } catch (reloadErr) {
-    writeClashLog('[local-validation] reload failed, restoring original config: ' + reloadErr.message);
-    fs.writeFileSync(configPath, originalYaml, 'utf8');
-    try { await reloadClashConfig(configPath); } catch (_) {}
-    currentNodeTier = 3;
-    currentRealNodeCount = candidateNames.length;
-    emitClashValidationProgress(sender, { completed, total: entries.length, passed: candidateNames.length, tier: 3, done: true });
-    return currentRealNodeCount;
-  }
+  await reloadClashConfig(configPath);
   currentNodeTier = selectedTier;
   currentRealNodeCount = passedNames.size;
+  currentPhysicalNodeCount = selectedGroups.length;
+  currentNodeVerified = true;
   const speedSummary = selectedGroups.slice(0, 5).map(g => `${g.representative}:${g.mbps}Mbps`).join(', ');
-  writeClashLog(`[local-validation] tier=${selectedTier}, ${selectedGroups.length}/${entries.length} physical nodes selected, ${passedNames.size}/${candidateNames.length} account nodes retained (${speedSummary})`);
-  emitClashValidationProgress(sender, { completed, total: entries.length, passed: passedNames.size, tier: selectedTier, done: true });
+  writeClashLog(`[local-validation] tier=${selectedTier}, ${selectedGroups.length}/${entries.length} route-name groups selected (not verified egress IPs), ${passedNames.size}/${candidateNames.length} account aliases retained (${speedSummary})`);
+  emitClashValidationProgress(sender, { completed, total: entries.length, passed: passedNames.size,
+    physicalNodeCount: currentPhysicalNodeCount, tier1PhysicalCount, continuedToTier2,
+    phase: 'done', tier: selectedTier, verified: true, done: true });
   return currentRealNodeCount;
+  } catch (error) {
+    // Never promote cloud candidates to a locally verified tier after a failure.
+    // Restore the exact entry config, including removal of all temporary listeners.
+    currentNodeTier = null;
+    currentRealNodeCount = 0;
+    currentPhysicalNodeCount = 0;
+    currentNodeVerified = false;
+    let rollbackError;
+    try {
+      fs.writeFileSync(configPath, originalYaml, 'utf8');
+      await reloadClashConfig(configPath);
+    } catch (err) { rollbackError = err; }
+    writeClashLog('[local-validation] failed: ' + error.message + (rollbackError ? '; rollback failed: ' + rollbackError.message : '; original config restored'));
+    emitClashValidationProgress(sender, { completed, total: entries.length, passed: 0,
+      physicalNodeCount: 0, phase: 'failed', tier: null, verified: false, failed: true, done: true });
+    if (rollbackError) throw new Error(`${error.message}；恢复原配置失败：${rollbackError.message}`);
+    throw error;
+  }
 }
 
 async function startClash(token, sender) {
-  writeClashLog(`[startClash] begin token=${token ? token.slice(0, 8) + '…' : '(空)'}`);
-  if (clashProcess) {
-    writeClashLog('[startClash] already running, return true');
+  writeClashLog('[startClash] begin');
+  if (clashProcess && currentNodeVerified) {
+    writeClashLog('[startClash] already running and verified, return true');
     return true;
   }
 
+  stopClash(); // clear stale verification before any startup/preflight failure
+  try {
   // 1. 强制清理残留后台 Clash 进程，释放加速端口
   await killExistingClashProcesses();
   writeClashLog('[startClash] killed existing clash processes');
@@ -1115,7 +1104,6 @@ async function startClash(token, sender) {
     throw e;
   }
 
-  try {
     writeClashLog('[startClash] fetching /speedup subscription...');
     const subUrl = `${BACKEND_BASE_URL}/speedup?token=${token}`;
     let response;
@@ -1173,14 +1161,11 @@ async function startClash(token, sender) {
     // 配合已设置的 max-failed-times:1 / interval:15 / timeout:3000 快速剔除故障节点,保证下载始终走可用节点。
     yamlContent = yamlContent.replace(/^(\s*- name: 一分机场\n)(\s*type:)\s*select/gm, '$1$2 url-test');
 
-    // 统计订阅配置中真实的节点数量
-    const proxyMatches = yamlContent.match(/^\s*-\s*(?:\{\s*)?name\s*:/gm);
-    if (proxyMatches && proxyMatches.length > 0) {
-      currentRealNodeCount = proxyMatches.length;
-    } else {
-      currentRealNodeCount = 80;
-    }
-    console.log(`[Clash] 成功解析云端真实节点数量: ${currentRealNodeCount}`);
+    // Subscription configuration is not evidence of locally usable nodes.
+    currentRealNodeCount = 0;
+    currentPhysicalNodeCount = 0;
+    currentNodeTier = null;
+    currentNodeVerified = false;
 
     // 保存 config.yaml 到用户工作空间
     const configPath = path.join(CLASH_WORK_DIR, 'config.yaml');
@@ -1194,6 +1179,7 @@ async function startClash(token, sender) {
 
     let spawnError = null;
     clashProcess = spawn(binaryPath, ['-d', CLASH_WORK_DIR]);
+    const startedProcess = clashProcess;
 
     clashProcess.on('error', (err) => {
       console.error('Clash spawn error:', err);
@@ -1212,7 +1198,11 @@ async function startClash(token, sender) {
     clashProcess.on('close', (code) => {
       console.log(`Clash process exited with code ${code}`);
       writeClashLog(`[Clash] process exited code=${code}`);
-      clashProcess = null;
+      // A delayed close from an older process must not clear a newer instance.
+      if (clashProcess === startedProcess) {
+        clashProcess = null;
+        stopClash();
+      }
     });
 
     // 主动探测端口 43289 是否真正就绪，并严格监听进程退出事件
@@ -1259,6 +1249,10 @@ async function startClash(token, sender) {
 }
 
 function stopClash() {
+  currentRealNodeCount = 0;
+  currentPhysicalNodeCount = 0;
+  currentNodeTier = null;
+  currentNodeVerified = false;
   if (clashProcess) {
     console.log('Terminating Clash process...');
     writeClashLog('[stopClash] terminating mihomo');
@@ -1269,12 +1263,12 @@ function stopClash() {
 }
 
 async function optimizeClash(token, sender) {
+  try {
   if (!token) {
     throw new Error('未检测到有效账户 Token，请注册登录后再试。');
   }
 
-  try {
-    console.log('Optimizing Clash connections for token:', token);
+    console.log('Optimizing Clash connections');
     const subUrl = `${BACKEND_BASE_URL}/speedup?token=${token}`;
     const response = await backendGet(subUrl, { timeout: 8000, retryAttempts: 3, validateStatus: () => true });
     if (response.status >= 400) {
@@ -1336,8 +1330,13 @@ async function optimizeClash(token, sender) {
 
     return { success: true, message: '网络通道优化成功，已重新拉取配置并刷新网络通道！' };
   } catch (err) {
-    console.error('Failed to optimize Clash connection:', err);
-    throw new Error(err.message || '优化连接失败');
+    // The restored validation-entry config may be a new, unverified cloud
+    // subscription, not the previous validated pool. Never leave it running.
+    stopClash();
+    emitClashValidationProgress(sender, { completed: 0, total: 0, passed: 0,
+      physicalNodeCount: 0, tier: null, verified: false, failed: true, done: true });
+    console.error('Failed to optimize Clash connection:', err.message);
+    throw new Error((err.message || '优化连接失败') + '；加速器已停止，请重新启动或优化网络通道。');
   }
 }
 
@@ -1748,7 +1747,7 @@ function runClashSerial(task) {
 ipcMain.handle('clash-start', async (event, { token }) => runClashSerial(async () => {
   await startClash(token, event.sender);
   setExtractionProxy();
-  return { success: true, nodeCount: currentRealNodeCount, nodeTier: currentNodeTier };
+  return { success: true, nodeCount: currentRealNodeCount, nodeTier: currentNodeTier, physicalNodeCount: currentPhysicalNodeCount, verified: currentNodeVerified };
 }));
 
 ipcMain.handle('clash-stop', () => runClashSerial(async () => {
@@ -1759,11 +1758,11 @@ ipcMain.handle('clash-stop', () => runClashSerial(async () => {
 
 ipcMain.handle('clash-optimize', async (event, { token }) => runClashSerial(async () => {
   const res = await optimizeClash(token, event.sender);
-  return { ...res, nodeCount: currentRealNodeCount, nodeTier: currentNodeTier };
+  return { ...res, nodeCount: currentRealNodeCount, nodeTier: currentNodeTier, physicalNodeCount: currentPhysicalNodeCount, verified: currentNodeVerified };
 }));
 
 ipcMain.handle('clash-get-node-count', () => {
-  return { count: currentRealNodeCount || 38, tier: currentNodeTier };
+  return { count: currentRealNodeCount, tier: currentNodeTier, physicalNodeCount: currentPhysicalNodeCount, verified: currentNodeVerified };
 });
 
 // 过滤上游订阅混入的「流量信息假节点」: 部分机场(如一分机场)会在 proxies 里插入

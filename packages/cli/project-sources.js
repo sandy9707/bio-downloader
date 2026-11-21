@@ -7,6 +7,8 @@ const { gunzipSync, constants } = require('node:zlib');
 const axios = require('axios');
 const { load } = require('cheerio');
 const { isDomestic, projectParentChoices } = require('../../shared/project-source-policy');
+const { columnFor } = require('../../shared/project-view-model');
+const { sraContainers } = require('../../src/main/project-lookup-sra');
 
 const PAGE_SIZE = 10;
 const SAMPLE_BYTES = 65536;
@@ -129,9 +131,12 @@ function cncbDiscovery(get) {
   };
 }
 
-async function inspectFile(file, get, ftp, discovery) {
+async function inspectFile(file, get, ftp, discovery, serial = false) {
   const urls = [...new Set([file.url, ...(file.alternatives || [])].filter(Boolean))];
-  const [original, record] = await Promise.all([Promise.all(urls.map(url => measure(file, url, get, ftp))), discovery]);
+  const original = [];
+  if (serial) { for (const url of urls) original.push(await measure(file, url, get, ftp)); }
+  else original.push(...await Promise.all(urls.map(url => measure(file, url, get, ftp))));
+  const record = await discovery;
   const sources = original.map(result => result.source);
   const reference = original.find(result => result.source.available);
   if (reference && original.some(result => result.source.available &&
@@ -168,32 +173,90 @@ async function inspectFile(file, get, ftp, discovery) {
 }
 
 function createProjectService(lookup, { get = (url, options) => axios.get(url, options), ftp = ftpSample } = {}) {
-  const projects = new Map(), discover = cncbDiscovery(get);
+  const projects = new Map();
   async function query(project) {
     const result = await lookup(project);
-    const files = result.access === 'public' ? result.files || [] : [];
+    const files = result.access === 'public' ? [...(result.files || [])] : [];
+    // A container is a distinct format, never an alternative URL for a FASTQ.
+    // Defer SDL discovery until after the UI has displayed the Run manifest.
+    if (result.access === 'public' && !projectParentChoices(result).length) {
+      for (const run of result.runs.filter(id => /^[SED]RR\d+$/.test(id))) {
+        if (!files.some(f => f.run === run && f.format === 'sra')) files.push({ run, name: `${run}.sra`, format: 'sra', size: 0, url: '', pendingMetadata: true });
+      }
+    }
     const queryId = randomUUID();
     if (files.length && !projectParentChoices(result).length) {
-      projects.set(queryId, files);
-      if (projects.size > 16) projects.delete(projects.keys().next().value);
+      projects.set(queryId, { files: result.files || [], matrixFiles: files, human: /^HRA|^HRR/.test(result.accession || '') || files.some(file => /^HRR/.test(file.run || '')), terminal: null, controller: new AbortController() });
+      if (projects.size > 16) {
+        const oldest = projects.keys().next().value;
+        projects.get(oldest).controller.abort();
+        projects.delete(oldest);
+      }
     }
-    return { ...result, files, count: result.runs.length, project: result.accession, queryId, pageSize: PAGE_SIZE };
+    return { ...result, files: result.access === 'public' ? result.files || [] : [], matrixFiles: files, count: result.runs.length, project: result.accession, queryId, pageSize: PAGE_SIZE };
   }
   async function probe({ queryId, page = 0 }) {
-    const files = projects.get(queryId);
-    if (!files) throw Error('请先选择明确的查询范围或重新查询项目');
-    if (!Number.isSafeInteger(page) || page < 0 || page * PAGE_SIZE >= files.length) throw Error('无效页码');
-    const first = page * PAGE_SIZE, pageFiles = files.slice(first, first + PAGE_SIZE);
-    const rows = new Array(pageFiles.length), discoveries = new Map();
-    let next = 0;
-    await Promise.all(Array.from({ length: Math.min(3, rows.length) }, async () => {
-      while (next < rows.length) {
-        const i = next++, file = pageFiles[i];
-        if (/^[SED]RR\d+$/.test(file.run) && !isDomestic(file.url) && !discoveries.has(file.run)) discoveries.set(file.run, discover(file.run));
-        rows[i] = { index: first + i, ...await inspectFile(file, get, ftp, discoveries.get(file.run)) };
+    const entry = projects.get(queryId);
+    if (!entry) throw Error('请先选择明确的查询范围或重新查询项目');
+    const options = typeof page === 'object' && page ? page : null;
+    if (options?.cancel) { entry.controller.abort(); return []; }
+    if (!entry.terminal && entry.controller.signal.aborted) entry.controller = new AbortController();
+    const signal = entry.controller.signal;
+    const stop = reason => {
+      if (!entry.terminal) entry.terminal = { code: 'HRA_SOURCE_DENIED', reason };
+      entry.controller.abort();
+      throw Error(entry.terminal.reason);
+    };
+    const inspectResponse = response => {
+      if (!entry.human || !response) return;
+      if ([401, 403, 429].includes(Number(response.status))) stop(`来源返回 HTTP ${response.status}`);
+      const body = Buffer.isBuffer(response.data) ? response.data.subarray(0, 65536).toString('utf8') : typeof response.data === 'string' ? response.data.slice(0, 65536) : '';
+      if (response.headers?.['cf-mitigated'] === 'challenge' || /SecurityCheck|Verifying your browser|<title>[^<]*(?:captcha|安全验证)/i.test(body)) stop('来源要求验证码或浏览器验证');
+    };
+    const scopedGet = async (url, config) => {
+      signal.throwIfAborted();
+      try { const response = await get(url, { ...config, signal }); inspectResponse(response); return response; }
+      catch (error) { inspectResponse(error.response); throw error; }
+    };
+    const scopedFtp = async url => {
+      signal.throwIfAborted();
+      try { return await ftp(url); }
+      catch (error) {
+        if (entry.human && (Number(error.ftpCode) === 530 || Number(error.code) === 67 || /(?:FTP[^\n]*|response[^\n]*|reply[^\n]*)\b530\b|\b530\s+(?:Login|Not logged)/i.test(error.message + ' ' + (error.stderr || '')))) stop('FTP 来源拒绝登录（530）');
+        throw error;
       }
-    }));
-    return rows;
+    };
+    const scopedDiscover = cncbDiscovery(scopedGet);
+    const files = options ? entry.matrixFiles : entry.files;
+    if (!options && (!Number.isSafeInteger(page) || page < 0 || page * PAGE_SIZE >= files.length)) throw Error('无效页码');
+    const indices = options ? options.indices : files.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((_, i) => page * PAGE_SIZE + i);
+    if (!Array.isArray(indices) || !indices.length || indices.length > 100 || new Set(indices).size !== indices.length || indices.some(i => !Number.isSafeInteger(i) || !files[i])) throw Error('无效文件范围');
+    const column = options?.column || '';
+    if (!['', 'cncb', 'aws', 'ena', 'https', 'ftp'].includes(column)) throw Error('无效来源列');
+    const terminalRows = () => indices.map(index => ({ index, file: files[index], sources: [], note: entry.terminal.reason, terminal: entry.terminal, column }));
+    if (entry.terminal) return terminalRows();
+    const rows = new Array(indices.length), discoveries = new Map();
+    let next = 0;
+    try { await Promise.all(Array.from({ length: entry.human ? 1 : Math.min(3, rows.length) }, async () => {
+      while (next < rows.length) {
+        signal.throwIfAborted();
+        const i = next++, index = indices[i]; let file = files[index];
+        let metadataNote = '';
+        if (file.pendingMetadata && ['', 'aws', 'cncb'].includes(column)) {
+          const found = await sraContainers([file.run], async url => (await scopedGet(url, { timeout: 6000, proxy: false, maxContentLength: 2 * 1024 * 1024 })).data, signal);
+          if (found.files.length === 1) files[index] = file = found.files[0];
+          else metadataNote = found.unavailable ? 'SRA 官方元数据查询失败，可重试' : '官方记录未列出公开 SRA 容器';
+        }
+        if ((!column || column === 'cncb') && /^[SED]RR\d+$/.test(file.run) && !isDomestic(file.url) && !discoveries.has(file.run)) discoveries.set(file.run, scopedDiscover(file.run));
+        const belongs = url => !column || (['https','ftp'].includes(column) ? url.startsWith(column + ':') : columnFor(url) === column);
+        // CNCB mirrors still need their official original as an identity witness.
+        const target = column && column !== 'cncb' ? { ...file, url: belongs(file.url || '') ? file.url : '', alternatives: (file.alternatives || []).filter(belongs) } : file;
+        const inspected = await inspectFile(target, scopedGet, scopedFtp, discoveries.get(file.run), entry.human);
+        signal.throwIfAborted();
+        rows[i] = { index, file, sources: inspected.sources.filter(s => belongs(s.url)), note: metadataNote || inspected.note, column };
+      }
+    })); } catch (error) { if (!entry.terminal) throw error; }
+    return entry.terminal ? terminalRows() : rows;
   }
   return { query, probe };
 }

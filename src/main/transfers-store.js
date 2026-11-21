@@ -1,5 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
+const lockfile = require('proper-lockfile');
 
 const fields = ['completed', 'failed', 'active', 'extraction'];
 function parseHistory(text) {
@@ -9,7 +11,8 @@ function parseHistory(text) {
 }
 function normalize(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid transfer history');
-  const result = { version: 2 };
+  if (data.revision != null && (typeof data.revision !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(data.revision))) throw new Error('Invalid transfer history revision');
+  const result = { version: 2, revision: data.revision || null };
   for (const field of fields) {
     if (data[field] !== undefined && !Array.isArray(data[field])) throw new Error('Invalid transfer history: ' + field);
     result[field] = (data[field] || []).filter(item => item && typeof item === 'object');
@@ -30,14 +33,30 @@ function createTransfersStore(filename) {
     return { ...normalize({}), exists: false };
   }
 
-  function save(data) {
+  // Optional CAS only: legacy unconditional callers can still submit stale snapshots.
+  function save(data, { expectedRevision } = {}) {
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    let release;
+    try {
+      release = lockfile.lockSync(filename, { realpath: false, retries: 0, stale: 30000 });
+    } catch (error) {
+      if (error.code === 'ELOCKED') throw Object.assign(new Error('传输记录正在由另一进程保存，请重新读取后重试'), { code: 'TRANSFER_HISTORY_CONFLICT' });
+      throw error;
+    }
+    try { return saveLocked(data, expectedRevision); } finally { release(); }
+  }
+
+  function saveLocked(data, expectedRevision) {
+    // Fresh read, compare and merge all belong inside the same disk transaction.
     const current = read();
+    if (expectedRevision !== undefined && expectedRevision !== current.revision) {
+      throw Object.assign(new Error('传输记录已更新，请重新读取后再保存'), { code: 'TRANSFER_HISTORY_CONFLICT' });
+    }
     const next = { ...current };
     for (const field of fields) {
       if (Object.prototype.hasOwnProperty.call(data, field)) next[field] = data[field];
     }
-    const updated = normalize(next);
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    const updated = { ...normalize(next), revision: randomUUID() };
     const tmp = filename + '.tmp';
     const fd = fs.openSync(tmp, 'w', 0o600);
     try {

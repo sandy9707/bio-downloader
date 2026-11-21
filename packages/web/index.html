@@ -1333,6 +1333,47 @@
       box-shadow: 0 20px 60px rgba(0,0,0,0.5);
       cursor: default;
     }
+    #bioProjectPanel { margin-bottom:20px; }
+    #bioProjectPanel [hidden] { display:none !important; }
+    #bioProjectResult, #bioProjectProgress { color:var(--text-muted); font-size:.81rem; margin:.5rem 0; }
+    #bioProjectFiles { overflow-x:auto; }
+    .project-table { width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; border:1px solid var(--border-color); font-size:.8rem; text-align:left; font-variant-numeric:tabular-nums; color:var(--text-main); }
+    .project-table th, .project-table td { padding:6px 8px; border-bottom:1px solid var(--border-color); vertical-align:top; }
+    .project-table :is(th,td)+:is(th,td) { border-left:1px solid var(--border-color); }
+    .project-table th { background:var(--bg-secondary); font-weight:600; }
+    .project-table th:first-child { width:23%; }
+    .project-table.hra-files th:first-child { width:42%; }
+    .project-table label { display:flex; align-items:center; gap:.4rem; margin:0; min-width:0; cursor:pointer; }
+    .project-table input[type=checkbox] { width:1rem; height:1rem; flex-shrink:0; accent-color:#177144; }
+    .project-filename { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; user-select:text; font-family:ui-monospace,monospace; }
+    .project-table small { font-size:.72rem; color:var(--text-muted); }
+    .project-table .btn { min-width:0; padding:.2rem .35rem; font-size:.75rem; line-height:1.4; white-space:normal; border-radius:4px; margin:1px 2px 1px 0; }
+    .project-table .project-adopt { display:block; text-align:left; border:0; background:transparent; color:var(--text-main); }
+    .project-table .project-reset { padding:0; margin-left:.4rem; border:0; background:transparent; color:var(--text-muted); text-decoration:underline; font-size:.72rem; }
+    .project-timing { display:block; margin-bottom:.25rem; }
+    .project-column-actions .project-adopt { display:inline-block; border:1px solid var(--border-color); }
+    .project-stats { color:var(--text-muted); font-size:.72rem; font-weight:400; margin-bottom:.2rem; }
+    .project-table button:disabled { color:var(--text-muted); cursor:default; opacity:.65; }
+    .project-table button:focus-visible { outline:2px solid var(--text-main); outline-offset:2px; }
+    .project-table tbody tr:last-child td { border-bottom:0; }
+    #bioProjectPanel .project-query-form { display:flex; flex-wrap:nowrap; gap:.5rem; margin-bottom:.25rem; }
+    #bioProjectPanel #bioProjectInput { flex:1; min-width:0; width:auto; padding:.5rem .65rem; }
+    #bioProjectQueryBtn { flex-shrink:0; padding:.45rem .65rem; font-size:.82rem; }
+    #bioProjectPanel > label { margin-bottom:.35rem; }
+    #bioProjectPanel .dir-select-group { gap:.4rem; }
+    #bioProjectPanel .dir-select-group label { margin-bottom:0; }
+    #bioProjectPanel details { display:inline-block; margin-right:.8rem; }
+    #bioProjectPanel details[open] { display:block; }
+    #bioProjectResult, #bioProjectProgress { margin:.25rem 0; }
+    #bioProjectAdoptActions { margin:.35rem 0; gap:.3rem !important; }
+    #bioProjectAdoptActions .btn { padding:.2rem .4rem; font-size:.76rem; line-height:1.4; }
+    #bioSelectedCount, #bioPage { font-size:.78rem; }
+    #bioProjectPanel .project-table .btn.project-check:enabled { background:var(--bg-card); color:var(--text-main); border:1px solid var(--border-color); }
+    #bioProjectPanel .project-table .btn.project-check:enabled:hover { background:var(--bg-secondary); border-color:var(--text-muted); }
+    .project-table th, .project-table td { padding:4px 7px; }
+    .project-column-actions .project-check { display:inline-block; }
+
+    @media(max-width:700px) { .project-table { min-width:460px; } }
   </style>
   <link rel="stylesheet" href="shared/campus-notice.css">
 </head>
@@ -1433,7 +1474,7 @@
       <div class="card">
         <div class="form-group" id="bioProjectPanel" style="padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-secondary);">
           <label for="bioProjectInput">项目、Study、样本、实验或 Run 编号</label>
-          <form class="dir-select-group" style="flex-wrap:wrap" onsubmit="event.preventDefault();queryBioProject()">
+          <form class="dir-select-group project-query-form" onsubmit="event.preventDefault();queryBioProject()">
             <input type="text" id="bioProjectInput" placeholder="例如 PRJNA727404、SRP318499、HRA006275 或 CRR077958" value="PRJNA727404" oninput="resetProjectView()">
             <button class="btn btn-secondary" id="bioProjectQueryBtn" type="submit">查询项目</button>
           </form>
@@ -1446,16 +1487,24 @@
             <small>按同一文件的直连响应时间选择，可逐文件手选。</small>
           </div>
           <div id="bioProjectResult" role="status" style="margin-top:0.6rem"></div>
-          <div id="bioProjectFiles" style="display:grid;gap:.5rem"></div>
           <div id="bioProjectAdoptActions" style="display:none;gap:.5rem;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-secondary btn-sm" onclick="selectProjectRows('all')">全选</button>
+            <button class="btn btn-secondary btn-sm" onclick="selectProjectRows('page')">本页</button>
+            <button class="btn btn-secondary btn-sm" onclick="selectProjectRows('invert')">本页反选</button>
+            <button class="btn btn-secondary btn-sm" onclick="selectProjectRows('none')">清空</button>
+            <button class="btn btn-secondary btn-sm" id="bioProjectCancel" hidden onclick="cancelProjectCheck()">取消核验</button>
             <button class="btn btn-secondary btn-sm" id="bioPrev" onclick="showProjectPage(projectView.page-1)">上一页</button>
             <span id="bioPage"></span>
             <button class="btn btn-secondary btn-sm" id="bioNext" onclick="showProjectPage(projectView.page+1)">下一页</button>
             <button class="btn btn-secondary btn-sm" onclick="showProjectPage(projectView.page,true)">重测本页</button>
             <span id="bioSelectedCount" role="status"></span>
-            <button class="btn btn-primary btn-sm" id="bioAdopt" onclick="adoptBioProjectRuns()">将跨页所选文件加入队列</button>
+            <button class="btn btn-primary btn-sm" id="bioAdopt" onclick="adoptBioProjectRuns()">自动加入队列</button>
           </div>
+          <div id="bioProjectProgress" role="status" aria-live="polite"></div>
+          <div id="bioProjectFiles"></div>
           <script src="shared/project-source-policy.js"></script>
+          <script src="shared/project-view-model.js"></script>
+          <script src="shared/project-view-table.js"></script>
         </div>
         <div class="form-group" id="group-sra_raw">
           <label>请输入 SRA 原始数据编号 (多项使用换行或空格分隔)

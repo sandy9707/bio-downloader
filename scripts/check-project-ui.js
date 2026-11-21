@@ -25,12 +25,14 @@ function fixture() {
     files, runs: files.map(f => f.run), access: accession === 'HRA9' ? 'controlled' : 'public',
     partial: accession === 'SAMN2', message: '官方消息', applicationUrl: accession === 'HRA9' ? 'https://example.test/application' : '' });
   const service = createProjectService(lookup);
-  const probe = ({ page }) => files.slice(10 * page, 10 * (page + 1)).map((f, i) => ({ index: 10 * page + i,
-    sources: [[cn(f), 25], [ftp(f), 10], [f.url, 5]].map(([url, latencyMs]) => ({ ...f, url, latencyMs, available: !unavailable.has(url), reason: unavailable.has(url) ? '源暂不可用' : '' })) }));
+  const probe = ({ page }) => (typeof page === 'object' ? page.indices : files.slice(10 * page, 10 * (page + 1)).map((_,i)=>10*page+i)).map(index => {
+    const f = files[index];
+    return { index, sources: f ? [[cn(f),25],[ftp(f),10],[f.url,5]].map(([url,latencyMs])=>({...f,url,latencyMs,available:!unavailable.has(url),reason:unavailable.has(url)?'源暂不可用':''})).filter(source => !page.column || require('../shared/project-view-model').columnFor(source.url) === page.column) : [] };
+  });
   async function ipc(channel, args) {
     calls.push({ channel, args });
     if (channel === 'query-bioproject') return service.query(args.project);
-    if (channel === 'probe-project-page') return probe(args);
+    if (channel === 'probe-project-page') return args.page?.cancel ? [] : probe(args);
     throw Error('unexpected channel: ' + channel);
   }
   return { calls, unavailable, service, ipc };
@@ -61,6 +63,8 @@ function panel() {
     window: { api: { queryBioProject: project => f.ipc('query-bioproject', { project }), probeProjectPage: (queryId, page) => f.ipc('probe-project-page', { queryId, page }), openExternalUrl() {} } },
     BioDownloadSources: require('../shared/download-sources'), BioProjectSources: policy,
     currentDownloadType: 'bioproject', currentQueue: [initial], isDownloading: false, renderQueue() {}, formatBytes: String, showToast() {} });
+  vm.runInContext(read('shared/project-view-model.js'), context);
+  vm.runInContext(read('shared/project-view-table.js'), context);
   const renderer = read('renderer.js');
   vm.runInContext(renderer.slice(renderer.indexOf('let projectView ='), renderer.indexOf('// BioSample 查询:')), context);
   const evaluate = code => vm.runInContext(code, context);
@@ -71,11 +75,13 @@ function panel() {
   };
   const query = async value => { el('bioProjectInput').value = value; return context.queryBioProject(); };
   const controls = index => {
-    const [label, select, note] = el('bioProjectFiles').children[index].children;
-    return { check: label.children[0], select, note };
+    const row = el('bioProjectFiles').children[0].children[1].children[index];
+    const item = evaluate(`projectView.files.get(BioProjectView.visible(projectView)[${index}].indices[0])`);
+    const check = row.children[0].children[0].children[0];
+    return { check, item, row };
   };
-  const setManual = (index, url) => { const { select } = controls(index); select.value = url; select.onchange(); };
-  const setChecked = (index, checked) => { const { check } = controls(index); check.checked = checked; check.onchange(); };
+  const setManual = (index, url) => { controls(index).item.manual=url;context.renderProjectPage(evaluate('projectView')); };
+  const setChecked = (index, checked) => { const {check}=controls(index);check.checked=checked;check.onchange(); };
   const setStrategy = strategy => { el('bioSourceStrategy').value = strategy; action('#bioSourceStrategy', 'onchange'); };
   return { ...f, $, el, context, evaluate, action, query, controls, setManual, setChecked, setStrategy, queue: context.currentQueue, initial };
 }
@@ -88,14 +94,15 @@ test('desktop and Linux panel share wired controls, per-file strategy, cross-pag
   for (const bridge of ['preload.js', 'packages/web/web-bridge.js']) assert.match(read(bridge), /probeProjectPage:.*probe-project-page/);
   assert.equal(h.el('bioSourceStrategy').value, 'fastest');
   await h.query('erp77');
-  assert.equal(h.el('bioProjectFiles').children.length, 10);
-  assert.match(h.controls(0).select.children[0].textContent, /ftp\.sra\.ebi\.ac\.uk.*5 ms/);
+  assert.equal(h.el('bioProjectFiles').children[0].children[1].children.length, 8);
+  assert.equal(h.context.projectChoice(h.controls(0).item).source.url,files[0].url);
   h.setManual(0, ftp(files[0]));
   h.setChecked(1, false);
   await h.action('#bioNext');
+  await h.context.checkProjectColumn('cncb',false);
   h.setStrategy('domestic-first');
-  assert.match(h.controls(0).select.children[0].textContent, /download2\.cncb.*25 ms/);
-  assert.match(h.el('bioSelectedCount').textContent, /11 个/);
+  assert.equal(h.context.projectChoice(h.controls(0).item).source.url,cn(files[8]));
+  assert.match(h.el('bioSelectedCount').textContent, /11 \/ 12 个/);
   h.action('#bioAdopt');
   assert.equal(h.queue.length, 12);
   assert.equal(h.queue[0], h.initial);
@@ -107,9 +114,10 @@ test('desktop and Linux panel share wired controls, per-file strategy, cross-pag
   assert.equal(h.queue[2].url, cn(files[2]));
   assert.ok(!h.queue.some(task => task.run === files[1].run));
   const renamed = h.queue[1]; renamed.name = 'local-name.fq.gz';
+  const probeCount=h.calls.filter(x=>x.channel==='probe-project-page').length;
   await h.action('#bioPrev');
-  assert.equal(h.calls.filter(x => x.channel === 'probe-project-page').length, 2, 'returning to a measured page uses stored results');
-  assert.equal(h.controls(0).select.value, ftp(files[0]));
+  assert.equal(h.calls.filter(x => x.channel === 'probe-project-page').length, probeCount, 'returning to a measured page uses stored results');
+  assert.equal(h.controls(0).item.manual, ftp(files[0]));
   assert.equal(h.controls(1).check.checked, false);
   h.setStrategy('fastest');
   h.setManual(0, '');
@@ -128,10 +136,10 @@ test('manual choices survive re-querying the same Run file via a related project
   const h = panel(); await h.query('ERP77');
   h.setManual(0, ftp(files[0])); h.setChecked(1, false);
   await h.query('ERP77');
-  assert.equal(h.controls(0).select.value, ftp(files[0]));
+  assert.equal(h.controls(0).item.manual, ftp(files[0]));
   assert.equal(h.controls(1).check.checked, false);
-  h.action('#bioAdopt'); await h.query('PRJEB1');
-  assert.equal(h.controls(0).select.value, ftp(files[0]));
+  await h.context.showProjectPage(1); h.action('#bioAdopt'); await h.query('PRJEB1');
+  assert.equal(h.controls(0).item.manual, ftp(files[0]));
   h.action('#bioAdopt'); assert.equal(h.queue[1].url, ftp(files[0]));
 });
 
@@ -140,11 +148,11 @@ test('remeasure retains a failed manual choice until the user actively changes i
   h.setManual(0, ftp(files[0]));
   h.unavailable.add(ftp(files[0]));
   await h.action('#bioProjectAdoptActions button:contains("重测")');
-  assert.equal(h.controls(0).select.value, ftp(files[0]));
-  assert.match(h.controls(0).note.textContent, /手选来源/);
-  assert.equal(h.el('bioAdopt').disabled, true);
+  assert.equal(h.controls(0).item.manual, ftp(files[0]));
+  assert.match(h.context.projectChoice(h.controls(0).item).reason, /手选来源/);
+  assert.equal(h.context.projectChoice(h.controls(0).item).source, null);
   h.context.adoptBioProjectRuns(); assert.equal(h.queue.length, 1);
-  h.setManual(0, ''); h.action('#bioAdopt');
+  h.setManual(0, ''); await h.context.showProjectPage(1); h.action('#bioAdopt');
   assert.equal(h.queue[1].url, files[0].url);
 });
 
@@ -176,11 +184,124 @@ test('late query and probe replies cannot replace the current scope or revive ol
   assert.equal(h.evaluate('projectView'), null);
   api.queryBioProject = query;
   await h.query('ERP77');
-  api.probeProjectPage = () => new Promise(resolve => { resolvePage = resolve; });
-  const page = h.action('#bioNext');
+  api.probeProjectPage = (_id, page) => page?.cancel ? Promise.resolve([]) : new Promise(resolve => { resolvePage = resolve; });
+  const page = h.context.showProjectPage(1, true);
   await h.query('HRA9'); resolvePage([]); await page;
   assert.equal(h.evaluate('projectView'), null);
   assert.equal(h.queue.length, 1);
+});
+
+test('clear/page/invert are independent of probes and cancellation discards late results', async () => {
+  const h = panel(); await h.query('ERP77');
+  h.context.selectProjectRows('none');
+  assert.equal(h.el('bioAdopt').disabled, true);
+  await h.context.showProjectPage(1);
+  assert.equal(h.evaluate('BioProjectView.selected(projectView).length'), 0);
+  h.context.selectProjectRows('page');
+  assert.equal(h.evaluate('BioProjectView.selected(projectView).length'), 4);
+  h.context.selectProjectRows('invert');
+  assert.equal(h.evaluate('BioProjectView.selected(projectView).length'), 0);
+  let resolve;
+  const original = h.context.window.api.probeProjectPage;
+  h.context.window.api.probeProjectPage = (id, page) => page.cancel ? original(id,page) : new Promise(done => { resolve=done; });
+  const pending = h.context.checkProjectColumn('ena', false);
+  h.context.cancelProjectCheck(); resolve([]); await pending;
+  assert.equal(h.evaluate('projectView.loading'), false);
+  assert.equal(h.evaluate('BioProjectView.selected(projectView).length'), 0);
+  assert.ok(h.calls.some(call => call.args.page?.cancel));
+});
+
+test('HRA 44-file table adopts only the selected HTTPS or FTP identity including R2', async () => {
+  const h = panel();
+  const hra = Array.from({length:44},(_,i)=>{
+    const run=`HRR${100+Math.floor(i/2)}`,name=`${run}_${i%2+1}.fastq.gz`;
+    return {run,name,format:'fastq',size:100+i,md5:'b'.repeat(32),url:`https://download.cncb.ac.cn/${run}/${name}`};
+  });
+  h.context.window.api.queryBioProject=async()=>({accession:'HRA1',access:'public',runs:[...new Set(hra.map(f=>f.run))],files:hra,pageSize:10,queryId:'hra'});
+  h.context.window.api.probeProjectPage=async(_id,page)=>page.cancel?[]:page.indices.map(index=>({index,sources:['https','ftp'].filter(p=>!page.column||p===page.column).map(protocol=>({...hra[index],url:hra[index].url.replace('https:',protocol+':'),latencyMs:protocol==='https'?5:10,available:true}))}));
+  await h.query('HRA1');
+  assert.equal(h.evaluate('projectView.rows.length'),44);
+  const captions=node=>[node.textContent,...(node.children||[]).flatMap(captions)];
+  const labels=captions(h.el('bioProjectFiles'));
+  assert.ok(labels.some(text=>text?.includes('FASTQ · R1')));
+  assert.ok(labels.some(text=>text?.includes('FASTQ · R2')));
+  assert.equal(h.evaluate('BioProjectView.selected(projectView).length'),44);
+  h.context.adoptBioProjectRuns();
+  assert.equal(h.queue.length,45,'default HTTPS verifies all 44 files without browsing');
+  h.queue.splice(1);
+  await h.context.checkProjectColumn('ftp',false);
+  h.setChecked(1,false);await h.context.showProjectPage(4);
+  h.context.adoptBioProjectRuns('ftp');
+  assert.equal(h.queue.length,44);
+  assert.ok(h.queue.slice(1).every(task=>task.transport==='ftp'&&task.md5==='b'.repeat(32)));
+  assert.ok(!h.queue.some(task=>task.sourceName===hra[1].name));
+  assert.equal(h.queue.find(task=>task.sourceName===hra[3].name).url,hra[3].url.replace('https:','ftp:'));
+  await h.context.showProjectPage(0);assert.equal(h.controls(1).check.checked,false);
+});
+
+test('default query verifies the recommended column across the project; browsing sends no probes', async () => {
+  const h = panel(); await h.query('ERP77');
+  assert.equal(h.evaluate('projectView.pageSize'),8);
+  h.context.adoptBioProjectRuns();assert.equal(h.queue.length,13);
+  const before=h.calls.length;
+  await h.context.showProjectPage(1);await h.context.showProjectPage(0);
+  assert.equal(h.calls.length,before);
+  const summary=h.el('bioProjectResult').textContent;
+  h.context.cancelProjectCheck();
+  assert.equal(h.el('bioProjectResult').textContent,summary);
+  await h.context.checkProjectColumn('ena',false);
+  assert.doesNotMatch(h.el('bioProjectProgress').textContent,/已取消/);
+});
+
+test('53 Runs complete recommended ENA without browsing; failed first Run does not expand scan', async () => {
+  const h=panel();const runs=Array.from({length:53},(_,i)=>'ERR'+(500+i));
+  const manifest=runs.map(run=>({run,name:run+'.fastq.gz',format:'fastq',url:`https://ftp.sra.ebi.ac.uk/${run}.fastq.gz`,size:100}));
+  h.context.window.api.queryBioProject=async()=>({accession:'ERP53',access:'public',runs,files:manifest,queryId:'53'});
+  const probes=[];
+  const reply=page=>page.indices.map(index=>({index,sources:[{...manifest[index],latencyMs:5,available:true}]}));
+  h.context.window.api.probeProjectPage=async(_id,page)=>{probes.push(page);return page.cancel?[]:reply(page);};
+  await h.query('ERP53');h.context.adoptBioProjectRuns();assert.equal(h.queue.length,54);
+  assert.equal(probes.length,7);assert.ok(probes.slice(1).every(page=>page.column==='ena'));
+  assert.match(h.el('bioProjectProgress').textContent,/可用 53，未通过 0，未核 0 Run/);
+  const texts=node=>[node.textContent,...(node.children||[]).flatMap(texts)];
+  h.evaluate("for (const [index,item] of projectView.files) if(index>0){item.checkedColumns.delete('ena');item.sources=[];} renderProjectPage(projectView)");
+  const enaActions=h.el('bioProjectFiles').children[0].children[0].children[1].children[3];
+  assert.ok(!texts(enaActions).includes('重试'),'successful first Run plus unverified rows must not offer failure retry');
+  const before=probes.length;await h.context.showProjectPage(6);assert.equal(probes.length,before);
+  probes.length=0;
+  h.context.window.api.probeProjectPage=async(_id,page)=>{probes.push(page);return page.indices.map(index=>({index,sources:[]}));};
+  await h.query('ERP53');assert.equal(probes.length,1);assert.match(h.el('bioProjectProgress').textContent,/未确认推荐/);
+});
+
+test('cancel during first Run never starts recommended project scan',async()=>{
+ const h=panel();let resolve;const calls=[];
+ h.context.window.api.probeProjectPage=async(_id,page)=>{calls.push(page);if(page.cancel)return [];return new Promise(done=>{resolve=done;});};
+ const pending=h.query('ERP77');
+ while(!resolve) await Promise.resolve();
+ h.context.cancelProjectCheck();resolve([]);await pending;
+ assert.equal(calls.length,2);assert.ok(calls[1].cancel);assert.match(h.el('bioProjectProgress').textContent,/已取消/);
+});
+
+test('real HTTP refusal on second batch clears prior renderer sources and retains scope/selection',async t=>{
+ const http=require('node:http'),bytes=require('node:zlib').gzipSync('@r\nACGT\n+\nIIII\n');const calls=[];
+ const server=http.createServer((req,res)=>{calls.push(req.url);if(req.url.includes('/f11.')){res.writeHead(403);res.end('denied');return;}res.writeHead(206,{'content-range':`bytes 0-${bytes.length-1}/${bytes.length}`});res.end(bytes);});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
+ const manifest=Array.from({length:24},(_,i)=>({run:`HRR${100+i}`,name:`f${i}.fastq.gz`,format:'fastq',size:bytes.length,url:`https://download.cncb.ac.cn/f${i}.fastq.gz`}));
+ const service=require('../packages/cli/project-sources').createProjectService(async()=>({accession:'HRA1',access:'public',runs:manifest.map(f=>f.run),files:manifest}),{get:async(url,options)=>{const r=await fetch(`http://127.0.0.1:${server.address().port}${new URL(url).pathname}`,{signal:options.signal});return {status:r.status,headers:Object.fromEntries(r.headers),data:Buffer.from(await r.arrayBuffer())};}});
+ const h=panel();h.context.window.api.queryBioProject=service.query;h.context.window.api.probeProjectPage=(queryId,page)=>service.probe({queryId,page});
+ await h.query('HRA1');assert.equal(calls.length,12);assert.equal(h.evaluate('[...projectView.files.values()].reduce((n,i)=>n+i.sources.length,0)'),0);
+ assert.equal(h.evaluate('BioProjectView.selected(projectView).length'),24);assert.match(h.el('bioProjectResult').textContent,/24 个/);assert.match(h.el('bioProjectProgress').textContent,/来源拒绝/);
+ h.context.adoptBioProjectRuns();assert.equal(h.queue.length,1);await h.context.checkProjectColumn('ftp',false);assert.equal(calls.length,12);assert.equal(h.el('bioAdopt').disabled,true);
+});
+
+test('column adoption is exact, preserves existing tasks and never switches protocols', async () => {
+  const h = panel(); await h.query('ERP77');
+  await h.context.checkProjectColumn('cncb',false);
+  h.context.adoptBioProjectRuns('cncb');
+  assert.equal(h.queue.length, 13);
+  assert.equal(h.queue[0],h.initial);
+  for (const task of h.queue.slice(1)) assert.ok(task.url.startsWith('https://download2.cncb.ac.cn/'));
+  h.context.selectProjectRows('none');h.context.adoptBioProjectRuns('ena');assert.equal(h.queue.length,13);
 });
 
 async function cli(argv, { proxyReady = false } = {}) {

@@ -248,8 +248,8 @@ async function updateClashUIState() {
     try {
       const nodeInfo = await window.api.getNodeCount();
       if (nodeInfo && typeof nodeInfo === 'object') {
-        updateNodeCountUI(nodeInfo.count, nodeInfo.tier);
-      } else if (nodeInfo) {
+        updateNodeCountUI(nodeInfo.verified === false ? 0 : nodeInfo.count, nodeInfo.verified === false ? null : nodeInfo.tier, nodeInfo.physicalNodeCount);
+      } else if (typeof nodeInfo === 'number') {
         updateNodeCountUI(nodeInfo);
       }
     } catch(e) {}
@@ -281,7 +281,8 @@ async function toggleClash() {
       if (progressWrap) progressWrap.style.display = 'block';
       try {
         const startRes = await window.api.startClash(currentUser.token);
-        if (startRes && startRes.nodeCount) updateNodeCountUI(startRes.nodeCount, startRes.nodeTier);
+        if (startRes?.success === false || startRes?.verified === false) throw new Error(startRes.message || '加速器尚未取得已验证的节点');
+        if (startRes) updateNodeCountUI(startRes.nodeCount, startRes.nodeTier, startRes.physicalNodeCount);
         const tierMsg = startRes?.nodeTier === 2
           ? `加速器已开启（自动放宽启用 ${startRes.nodeCount} 个二级连接节点）`
           : startRes?.nodeTier === 3
@@ -1035,10 +1036,12 @@ let projectGeneration = 0;
 const projectEl = id => document.getElementById(id);
 
 function resetProjectView() {
+  if (projectView?.loading) cancelProjectCheck();
   ++projectGeneration;
   projectView = null;
   projectEl('bioProjectFiles').replaceChildren();
   projectEl('bioProjectResult').textContent = '';
+  projectEl('bioProjectProgress').textContent = '';
   projectEl('bioProjectAdoptActions').style.display = 'none';
   projectEl('bioProjectQueryBtn').disabled = false;
 }
@@ -1063,7 +1066,14 @@ async function queryBioProject() {
   try {
     const result = await window.api.queryBioProject(project);
     if (generation !== projectGeneration) return;
-    status.textContent = [`当前范围 ${result.accession}`, result.message, `${result.runs.length} 个 Run，${result.files.length} 个公开文件`, result.partial ? '部分结果，可重新查询补全' : ''].filter(Boolean).join(' · ');
+    status.textContent = [`当前范围 ${result.accession}`, `${result.runs.length} 个 Run，${result.files.length} 个公开文件`, result.access === 'controlled' ? '受控访问，请申请权限' : '', result.partial ? '部分结果，可重新查询补全' : ''].filter(Boolean).join(' · ');
+    if (result.message) {
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = '查询详情';
+      details.append(summary, result.message);
+      status.appendChild(details);
+    }
     if (result.runs.length) {
       const details = document.createElement('details');
       const summary = document.createElement('summary');
@@ -1095,8 +1105,10 @@ async function queryBioProject() {
       status.append(' ', button);
     }
     if (parents.length || result.access !== 'public' || !result.files.length) return;
-    projectView = { result, preferences, page: 0, files: new Map(), pages: new Set(), strategy: projectEl('bioSourceStrategy').value || 'fastest' };
-    await showProjectPage(0);
+    projectView = BioProjectView.create(result, preferences, projectQueueKey);
+    projectView.strategy = projectEl('bioSourceStrategy').value || 'fastest';
+    renderProjectPage(projectView);
+    await verifyDefaultProject(projectView);
   } catch (error) {
     if (generation === projectGeneration) status.textContent = `查询失败：${error.message}`;
   } finally {
@@ -1104,119 +1116,149 @@ async function queryBioProject() {
   }
 }
 
-function projectChoice(item, strategy) {
-  return BioProjectSources.chooseProjectSource(item.file, item.sources, { manual: item.manual, strategy });
+function projectChoice(item, column = '') {
+  const view = projectView;
+  const sources = item.sources.filter(s => BioProjectView.inColumn(view, s, column));
+  return BioProjectSources.chooseProjectSource(item.file, sources, { manual: column ? '' : item.manual, strategy: view.strategy });
 }
 
 function projectSelectionStatus(view) {
-  let count = 0, blocked = 0;
-  for (const item of view.files.values()) {
-    if (!item.checked) continue;
-    count++;
-    if (!projectChoice(item, view.strategy).source) blocked++;
-  }
-  projectEl('bioSelectedCount').textContent = `跨页已选 ${count} 个文件` + (blocked ? `，${blocked} 个需重测或取消勾选` : '');
-  projectEl('bioAdopt').disabled = view.loading || !count || Boolean(blocked);
+  const count = BioProjectView.selected(view).length;
+  projectEl('bioSelectedCount').textContent = `跨页已选 ${count} / ${view.rows.length} ${view.human ? '个文件' : '个 Run'}`;
+  projectEl('bioAdopt').disabled = !!view.terminal || view.loading || !count;
+  projectEl('bioProjectCancel').hidden = !view.loading;
 }
-
+function selectProjectRows(mode) {
+  if (!projectView) return;
+  BioProjectView.select(projectView, mode);
+  renderProjectPage(projectView);
+}
+function cancelProjectCheck() {
+  if (!projectView) return;
+  projectView.ticket = Symbol();
+  window.api.probeProjectPage(projectView.result.queryId, { cancel: true }).catch(() => {});
+  projectView.loading = false;
+  projectEl('bioProjectProgress').textContent = '已取消核验；未完成项可重试。';
+  renderProjectPage(projectView);
+}
 function changeProjectStrategy(strategy) {
   if (!projectView) return;
   projectView.strategy = BioProjectSources.checkStrategy(strategy);
-  if (projectView.pages.has(projectView.page)) renderProjectPage(projectView);
-  else projectSelectionStatus(projectView);
+  renderProjectPage(projectView);
 }
-
 function renderProjectPage(view) {
-  const list = projectEl('bioProjectFiles');
-  list.replaceChildren();
-  const first = view.page * view.result.pageSize;
-  const end = Math.min(first + view.result.pageSize, view.result.files.length);
-  for (let index = first; index < end; index++) {
-    const item = view.files.get(index);
-    const { file, sources } = item;
-    const row = document.createElement('div');
-    const label = document.createElement('label');
-    const include = document.createElement('input');
-    include.type = 'checkbox';
-    include.checked = item.checked;
-    include.onchange = () => { item.checked = include.checked; projectSelectionStatus(view); };
-    label.append(include, ` ${file.run} · ${file.name} `);
-    const select = document.createElement('select');
-    select.setAttribute('aria-label', `${file.name} 来源`);
-    select.style.maxWidth = '100%';
-    const addOption = (value, caption, disabled) => {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = caption;
-      option.disabled = Boolean(disabled);
-      if (value) option.title = value;
-      select.appendChild(option);
-    };
-    const automatic = BioProjectSources.chooseProjectSource(file, sources, { strategy: view.strategy }).source;
-    const caption = s => `${new URL(s.url).protocol.slice(0, -1).toUpperCase()} · ${new URL(s.url).host} · ${s.available ? s.latencyMs + ' ms' : s.reason}`;
-    addOption('', automatic ? `自动 · ${caption(automatic)}` : '自动 · 无可用来源');
-    for (const source of sources) addOption(source.url, caption(source), !source.available);
-    if (item.manual && !sources.some(s => s.url === item.manual)) addOption(item.manual, `手选来源待核实 · ${item.manual}`, true);
-    select.value = item.manual;
-    const detail = document.createElement('small');
-    detail.style.display = 'block';
-    const update = () => {
-      const { source, reason } = projectChoice(item, view.strategy);
-      include.disabled = !source && !item.checked;
-      const failures = automatic ? '' : sources.map(s => s.reason).filter(Boolean).join('、');
-      detail.textContent = [file.format.toUpperCase(), source && formatBytes(source.size), reason, item.note, failures].filter(Boolean).join(' · ');
-    };
-    select.onchange = () => { item.manual = select.value; update(); projectSelectionStatus(view); };
-    update();
-    row.append(label, select, detail);
-    list.appendChild(row);
-  }
+  if (projectView !== view) return;
+  BioProjectTable.render(view, projectEl('bioProjectFiles'), {
+    choice: projectChoice, adopt: adoptBioProjectRuns, check: checkProjectColumn,
+    changed: () => renderProjectPage(view), formatBytes
+  });
+  projectEl('bioProjectAdoptActions').style.display = 'flex';
+  projectEl('bioPrev').disabled = view.page === 0;
+  projectEl('bioNext').disabled = (view.page + 1) * view.pageSize >= view.rows.length;
+  projectEl('bioPage').textContent = `${view.page + 1} / ${Math.ceil(view.rows.length / view.pageSize)}`;
   projectSelectionStatus(view);
 }
-
 async function showProjectPage(page, refresh = false) {
   const view = projectView;
-  if (!view) return;
-  const { result } = view;
-  const pages = Math.ceil(result.files.length / result.pageSize);
-  if (!Number.isSafeInteger(page) || page < 0 || page >= pages) return;
-  const ticket = view.ticket = Symbol();
+  if (!view || !Number.isSafeInteger(page) || page < 0 || page * view.pageSize >= view.rows.length) return;
   view.page = page;
-  projectEl('bioProjectAdoptActions').style.display = 'flex';
-  projectEl('bioPrev').disabled = page === 0;
-  projectEl('bioNext').disabled = page + 1 >= pages;
-  projectEl('bioPage').textContent = `${page + 1} / ${pages}`;
-  view.loading = false;
-  if (view.pages.has(page) && !refresh) return renderProjectPage(view);
-  view.pages.delete(page);
-  const first = page * result.pageSize, end = Math.min(first + result.pageSize, result.files.length);
-  for (let i = first; i < end; i++) {
-    const item = view.files.get(i);
-    if (item) item.sources = []; // A failed recheck must not reuse stale availability.
+  renderProjectPage(view); // Complete manifest and independent checkboxes before any probe.
+  if (!refresh || view.loading) return;
+  const indices = BioProjectView.visible(view).flatMap(row => row.indices);
+  if (indices.length) await probeProjectIndices(view, indices, '');
+}
+async function verifyDefaultProject(view) {
+  const ticket = view.ticket = Symbol();
+  const current = () => projectView === view && view.ticket === ticket && !view.terminal;
+  if (view.human) {
+    await probeProjectIndices(view, [...view.files.keys()], 'https', ticket);
+  } else {
+    const first = view.rows.find(row => row.indices.length);
+    if (!first) return;
+    await probeProjectIndices(view, first.indices, '', ticket);
+    if (!current()) return;
+    const ranked = view.columns.map(column => {
+      const items = BioProjectView.columnItems(view, first, column.id, projectChoice);
+      return { column, latency: items.length ? Math.max(...items.map(item => projectChoice(item, column.id).source.latencyMs)) : Infinity };
+    }).filter(candidate => Number.isFinite(candidate.latency)).sort((a, b) => a.latency - b.latency);
+    const winner = (view.strategy === 'domestic-first' && ranked.find(candidate => candidate.column.id === 'cncb')) || ranked[0];
+    if (winner) {
+      view.recommended = winner.column.id;
+      const remaining = [...view.files.keys()].filter(index => !view.files.get(index).checkedColumns.has(winner.column.id));
+      if (remaining.length) await probeProjectIndices(view, remaining, winner.column.id, ticket);
+    } else {
+      projectEl('bioProjectProgress').textContent = '首 Run 未确认推荐来源，可分别核验各列。';
+    }
   }
-  const list = projectEl('bioProjectFiles');
-  list.textContent = '正在逐文件核对本页来源的响应、格式和长度…';
+  if (!current()) return;
+  // Re-querying preserves explicit sources even when they are off the recommended column.
+  const manual = [...view.files.keys()].filter(index => {
+    const item = view.files.get(index);
+    return item.manual && !item.sources.some(source => source.url === item.manual);
+  });
+  if (manual.length) await probeProjectIndices(view, manual, '', ticket);
+}
+async function checkProjectColumn(column, retry) {
+  const view = projectView;
+  if (!view || view.terminal || view.loading) return;
+  const indices = view.rows.flatMap(r => r.indices).filter(i => !retry || !projectChoice(view.files.get(i), column).source);
+  if (indices.length) await probeProjectIndices(view, indices, column);
+}
+async function probeProjectIndices(view, indices, column, inheritedTicket) {
+  if (view.terminal) return;
+  const ticket = inheritedTicket || (view.ticket = Symbol());
   view.loading = true;
-  projectSelectionStatus(view);
-  try {
-    const rows = await window.api.probeProjectPage(result.queryId, page);
+  const label = view.columns.find(item => item.id === column)?.label || '来源';
+  projectEl('bioProjectProgress').textContent = `${label} 核验中…`;
+  for (const i of indices) {
+    const item = view.files.get(i);
+    item.sources = column ? item.sources.filter(s => !BioProjectView.inColumn(view, s, column)) : [];
+    if (column) item.checkedColumns.delete(column); else item.checkedColumns.clear();
+  }
+  renderProjectPage(view);
+  for (let offset = 0; offset < indices.length; offset += 10) {
     if (projectView !== view || view.ticket !== ticket) return;
-    if (rows.length !== end - first || rows.some((row, i) => row.index !== first + i || !Array.isArray(row.sources))) throw Error('本页文件与探测结果不一致，请重测');
-    for (const { index, sources, note } of rows) {
-      const file = result.files[index];
-      const preference = view.preferences.get(projectQueueKey(file));
-      const item = view.files.get(index) || { file, manual: preference?.manual || '', checked: preference?.checked ?? Boolean(BioProjectSources.chooseProjectSource(file, sources).source) };
-      view.files.set(index, Object.assign(item, { sources, note }));
+    const batch = indices.slice(offset, offset + 10);
+    try {
+      const rows = await window.api.probeProjectPage(view.result.queryId, { indices: batch, column });
+      if (projectView !== view || view.ticket !== ticket) return;
+      const terminal = rows.find(row => row.terminal)?.terminal;
+      if (terminal) {
+        view.terminal = terminal;
+        view.loading = false;
+        for (const item of view.files.values()) { item.sources = []; item.checkedColumns.clear(); item.note = terminal.reason; }
+        projectEl('bioProjectProgress').textContent = `来源拒绝，已停止本次核验：${terminal.reason}。请重新查询确认权限。`;
+        renderProjectPage(view);
+        return;
+      }
+      if (rows.length !== batch.length || rows.some((row,i) => row.index !== batch[i] || !Array.isArray(row.sources))) throw Error('文件与核验结果不一致');
+      for (const row of rows) {
+        const item = view.files.get(row.index);
+        if (row.file) {
+          if (row.file.run !== item.file.run || row.file.name !== item.file.name || row.file.format !== item.file.format) throw Error('核验返回了不同文件');
+          item.file = row.file;
+        }
+        item.sources.push(...row.sources); item.note = row.note;
+        for (const id of column ? [column] : view.columns.map(c => c.id)) item.checkedColumns.add(id);
+      }
+    } catch (error) {
+      if (projectView !== view || view.ticket !== ticket) return;
+      for (const i of batch) view.files.get(i).note = error.message;
+      projectEl('bioProjectResult').title = error.message;
     }
-    view.pages.add(page);
-    view.loading = false;
+    projectEl('bioProjectProgress').textContent = `${label} 已核 ${Math.min(offset + batch.length, indices.length)} / ${indices.length} 文件`;
     renderProjectPage(view);
-  } catch (error) {
-    if (projectView === view && view.ticket === ticket) {
-      view.loading = false;
-      list.textContent = `来源核验失败：${error.message}`;
-      projectSelectionStatus(view);
-    }
+  }
+  if (projectView === view && view.ticket === ticket) {
+    view.loading = false;
+    const available = view.rows.filter(row => BioProjectView.columnItems(view, row, column, projectChoice).length).length;
+    const failed = view.rows.filter(row => row.indices.every(index => {
+      const checked = view.files.get(index).checkedColumns;
+      return column ? checked.has(column) : view.columns.every(candidate => checked.has(candidate.id));
+    }) && !BioProjectView.columnItems(view, row, column, projectChoice).length).length;
+    const unit = view.human ? '文件' : 'Run';
+    projectEl('bioProjectProgress').textContent = `${label} 核验完成：可用 ${available}，未通过 ${failed}，未核 ${view.rows.length - available - failed} ${unit}`;
+    renderProjectPage(view);
   }
 }
 
@@ -1234,15 +1276,29 @@ function projectQueueKey(task) {
   return format && name ? JSON.stringify([run, format, name]) : null;
 }
 
-function adoptBioProjectRuns() {
+function adoptBioProjectRuns(column = '') {
   const view = projectView;
-  if (!view || view.loading || currentDownloadType !== 'bioproject' || isDownloading) return;
+  if (!view || view.terminal || view.loading || currentDownloadType !== 'bioproject' || isDownloading) return;
   const selections = [];
-  for (const item of view.files.values()) {
-    if (!item.checked) continue;
-    const { source } = projectChoice(item, view.strategy);
-    if (!source) return showToast(`请重测 ${item.file.name}、更换手选来源或取消勾选`, 'warning');
-    selections.push(BioProjectSources.queueFile(item.file, source, view.result, { manual: item.manual, strategy: view.strategy }));
+  let skipped = 0;
+  for (const row of BioProjectView.selected(view)) {
+    let items = column ? BioProjectView.columnItems(view, row, column, projectChoice) : row.indices.map(i => view.files.get(i));
+    if (!items.length) { skipped++; continue; }
+    // SRA and FASTQ are alternatives in format, not interchangeable mirrors.
+    // Automatic mode keeps FASTQ when verified; an explicit SRA choice wins.
+    if (!view.human && !column) {
+      const manualFormat = items.find(i => i.manual)?.file.format;
+      const format = manualFormat || (items.some(i => i.file.format === 'fastq' && projectChoice(i).source) ? 'fastq' : 'sra');
+      items = items.filter(i => i.file.format === format);
+    }
+    for (const item of items) {
+      const { source } = projectChoice(item, column);
+      if (!source) {
+        if (!column) return showToast(`请核验 ${item.file.name}、更换手选来源或取消勾选`, 'warning');
+        continue;
+      }
+      selections.push(BioProjectSources.queueFile(item.file, source, view.result, { manual: column || item.manual, strategy: view.strategy }));
+    }
   }
   if (!selections.length) return showToast('请勾选至少一个有可用来源的文件', 'warning');
   const existing = new Map(currentQueue.map(task => [projectQueueKey(task), task]));
@@ -1259,7 +1315,7 @@ function adoptBioProjectRuns() {
   }
   renderQueue();
   projectEl('totalQueueSize').innerText = '预计共 ' + formatBytes(currentQueue.reduce((n, f) => n + Number(f.size || 0), 0));
-  showToast(`已追加 ${added} 个文件，${selections.length - added} 个已在队列中`, 'success');
+  showToast(`已追加 ${added} 个文件，${selections.length - added} 个已在队列中` + (skipped ? `；${skipped} ${view.human ? '个文件' : '个 Run'} 未通过完整核验，未加入` : ''), 'success');
 }
 
 // BioSample 查询: SAMN → SRA run 列表, 填入 SRA 输入框并核验大小
@@ -4731,14 +4787,17 @@ window.copyInviteUrl = copyInviteUrl;
 
 let currentRealNodeCount = 0;
 let currentNodeTier = null;
+let currentPhysicalNodeCount = null;
 
-function updateNodeCountUI(count, tier) {
-  if (typeof count === 'number' && count > 0) {
+function updateNodeCountUI(count, tier, physicalCount) {
+  if (Number.isSafeInteger(count) && count >= 0) {
     currentRealNodeCount = count;
+    if (!count) currentPhysicalNodeCount = 0;
   }
-  if (tier === 1 || tier === 2 || tier === 3) {
+  if (tier === null || tier === 1 || tier === 2 || tier === 3) {
     currentNodeTier = tier;
   }
+  if (Number.isSafeInteger(physicalCount) && physicalCount >= 0) currentPhysicalNodeCount = physicalCount;
   const textEl = document.getElementById('btnOptimizeConnText');
   if (textEl) {
     if (currentRealNodeCount > 0) {
@@ -4746,9 +4805,12 @@ function updateNodeCountUI(count, tier) {
         : currentNodeTier === 2 ? '二级节点'
         : currentNodeTier === 3 ? '三级节点'
         : '目前节点';
-      textEl.innerText = `⚡ 优化连接 (${tierLabel}${currentRealNodeCount})`;
+      const countLabel = currentPhysicalNodeCount > 0 ? `${currentPhysicalNodeCount} 条线路` : `${currentRealNodeCount} 个账号节点`;
+      textEl.innerText = `优化连接（${tierLabel} · ${countLabel}）`;
+      textEl.title = `${currentRealNodeCount} 个账号节点；线路按机场与节点名称归组，不代表已核验的独立出口 IP 数。`;
     } else {
-      textEl.innerText = `⚡ 优化连接`;
+      textEl.innerText = '优化连接';
+      textEl.title = '尚无本次已验证的节点结果';
     }
   }
 }
@@ -4762,7 +4824,14 @@ function setClashValidationProgress(data) {
   const pct = total > 0 ? Math.min(100, Math.round(completed * 100 / total)) : 0;
   wrap.style.display = 'block';
   fill.style.width = pct + '%';
-  if (typeof data?.passed === 'number' && data.passed > 0) updateNodeCountUI(data.passed, data.tier);
+  if (data?.failed || data?.verified === false) updateNodeCountUI(0, null, 0);
+  else if (data?.done && Number.isSafeInteger(data.passed)) updateNodeCountUI(data.passed, data.tier, data.physicalNodeCount);
+  if (data && !data.done) {
+    const text = document.getElementById('btnOptimizeConnText');
+    if (text) text.innerText = data.phase === 'selection'
+      ? (data.continuedToTier2 ? '一级不足 5 条，正在验证扩展线路组合…' : '正在验证优选线路组合…')
+      : `正在测速 ${completed} / ${total} 条候选线路…`;
+  }
   if (data && data.done) {
     setTimeout(() => {
       wrap.style.display = 'none';
@@ -4799,16 +4868,17 @@ async function optimizeConnections() {
 
   try {
     const res = await window.api.optimizeClash(currentUser.token);
-    if (res.success) {
-      if (res.nodeCount) updateNodeCountUI(res.nodeCount, res.nodeTier);
-      const tierNotice = res.nodeTier === 2
-        ? `优秀节点较少，已自动放宽启用 ${res.nodeCount} 个二级连接节点`
-        : res.nodeTier === 3
-          ? `当前网络受限，已放宽启用 ${res.nodeCount} 个三级保底节点`
-          : (res.message || `网络通道优化成功（已优选 ${res.nodeCount || currentRealNodeCount} 个一级节点）`);
-      showToast(tierNotice, 'success');
-    }
+    if (!res.success || res.verified === false) throw new Error(res.message || '未取得已验证的节点结果，请重试');
+    updateNodeCountUI(res.nodeCount, res.nodeTier, res.physicalNodeCount);
+    const countLabel = res.physicalNodeCount > 0 ? `${res.physicalNodeCount} 条线路` : `${res.nodeCount} 个账号节点`;
+    const tierNotice = res.nodeTier === 2
+      ? `一级线路不足 5 条，已采用二级范围：${countLabel}`
+      : res.nodeTier === 3
+        ? `较快线路不足，已保留测通的三级范围：${countLabel}`
+        : `优化完成：${countLabel}`;
+    showToast(tierNotice, 'success');
   } catch (err) {
+    updateNodeCountUI(0, null, 0);
     showToast('连接优化失败: ' + (err.message || '未知错误'), 'error');
     resetClashValidationProgress();
   } finally {
