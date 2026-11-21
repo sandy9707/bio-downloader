@@ -106,6 +106,7 @@ const context = vm.createContext({
   LOCAL_NODE_BENCH_BASE_PORT: 43310,
   ACCOUNT_AIRPORTS: { 1: '一分机场', 2: '一分机场', 3: '一元机场', 6: 'iKuuu' },
   checkPortBusy: async () => false,
+  waitForPortReady: async () => {},
   writeClashLog: () => {},
   axios: fakeaxios
 });

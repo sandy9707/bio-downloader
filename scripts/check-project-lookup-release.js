@@ -81,10 +81,51 @@ function offline() {
     assert.equal(result.files.every(f=>f.md5 && !f.alternatives.length && f.url.endsWith('/'+f.run+'/'+f.name)),true);
     assert.equal(result.partial,true); assert.match(result.message,/详情/); assert.equal(result.files.filter(f=>f.size===128).length,44); assert.equal(heads,0);
   });
+  test('44-file manifest returns before any object HEAD or source probe; candidates remain pending', async () => {
+    const {createProjectService} = require('../packages/cli/project-sources');
+    const list = Array.from({length:22},(_,i)=>`HRR${1476867+i}`);
+    const all = list.flatMap(run=>['f1','r2'].map(mate=>({run,name:`${run}_${mate}.fq.gz`})));
+    let heads = 0, probes = 0, releaseHead;
+    const blocker = new Promise(resolve => { releaseHead = resolve; });
+    const service = createProjectService(id => lookupProject(id,{get:async (raw,options)=>{
+      if (options.method === 'HEAD') { heads++; return blocker; }
+      const url = new URL(raw);
+      let data;
+      if (raw === project) data = landing('Open access');
+      else if (url.pathname.endsWith('/runinstudy')) data = rows(url,all);
+      else if (url.pathname.includes('/runDetail/')) throw Object.assign(Error('detail unavailable'),{response:{status:404}});
+      else if (raw === archive) data = index(prefix,[...list.map(id=>id+'/'),'md5sum.txt']);
+      else if (raw === archive+'md5sum.txt') data = all.map(f=>`${md5[0]}  /${hra}/${f.run}/${f.name}`).join('\n');
+      else {
+        const id = raw.slice(archive.length,-1);
+        assert.ok(list.includes(id));
+        data = index(prefix+id+'/',all.filter(f=>f.run===id).map(f=>f.name)).replaceAll(' 128\n',' -\n');
+      }
+      return {status:200,data};
+    }}), {get:async()=>{ probes++; throw Error('not queried'); },ftp:async()=>{ probes++; throw Error('not queried'); }});
+    const query = service.query(hra);
+    let timer;
+    try {
+      const result = await Promise.race([query,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('manifest blocked behind object HEAD')),100);})]);
+      assert.equal(result.access,'public'); assert.equal(result.runs.length,22); assert.equal(result.matrixFiles.length,44);
+      assert.equal(heads,0); assert.equal(probes,0);
+      for (const file of result.matrixFiles) {
+        assert.equal(file.size,0); assert.equal(file.md5,md5[0]);
+        assert.equal(file.candidateSources.length,1);
+        assert.equal(file.candidateSources[0].url,file.url);
+        assert.equal(file.candidateSources[0].pending,true);
+        assert.equal(file.candidateSources[0].available,false);
+      }
+    } finally {
+      clearTimeout(timer);
+      releaseHead({status:200,headers:{'content-length':'128'}});
+      await query;
+    }
+  });
   test('explicit challenge or denial is terminal at every GSA-Human endpoint and discards earlier files', async () => {
     const ids = [run,'HRR1476868'];
     const all = ids.flatMap(id=>['f1','r2'].map(m=>({run:id,name:`${id}_${m}.fq.gz`})));
-    const endpoints = ['landing','catalogue','table','detail-1','detail-2','archive','manifest','directory-1','directory-2','workbook','HEAD'];
+    const endpoints = ['landing','catalogue','table','detail-1','detail-2','archive','manifest','directory-1','directory-2','workbook'];
     const withWorkbook = landing('Open access').replace('</html>', `<a id="csvHumanFile_open" onclick="downHumanExcel('/public/human/${hra}/${hra}.xlsx')">${hra}.xlsx</a><script>var study_id='42'; var requestFlag='0'; var link='/gsa-human/file/exportExcelFile?fileName=';</script></html>`);
     for (const endpoint of endpoints) for (const failure of ['challenge',401,403,429]) {
       const calls = []; let stopIndex;
@@ -126,7 +167,7 @@ function offline() {
       assert.deepEqual(res.files,[],label); assert.deepEqual(res.runs,[],label); assert.equal(res.officialUrl,project,label); assert.match(res.message,/重试/);
     }
   });
-  test('a transient directory failure permits only HEAD on a published HTTPS object', async () => {
+  test('a transient directory failure retains published candidates with unknown size without object HEAD', async () => {
     const url = archive+run+'/'+names[0], heads = [];
     const result = await lookupProject(hra,{get:async (raw,options)=>{
       if (options.method === 'HEAD') {
@@ -139,7 +180,7 @@ function offline() {
       assert.equal(raw,site+'browse/runDetail/'+run);
       return {data:`<html><ol class="breadcrumb"><li><a href="${project}">${hra}</a></li><li class="active">${run}</li></ol><table><tr><th>Archived file name</th><th>Download</th></tr><tr><td>${names[0]}</td><td><a href="${url}">HTTPS</a></td></tr></table></html>`};
     }});
-    assert.deepEqual(heads,[url]); assert.equal(result.files[0].size,16276644395); assert.match(result.message,/MD5 0\/1/);
+    assert.deepEqual(heads,[]); assert.equal(result.files[0].size,0); assert.match(result.message,/MD5 0\/1/);
   });
   test('published workbook R2 digest stays with R2 while the mislabelled R1 FTP cannot be used for R2', async () => {
     const workbook = fixture('one-run-metadata.xlsx');

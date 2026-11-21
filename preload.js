@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld('api', {
   startClash: (token) => ipcRenderer.invoke('clash-start', { token }),
   stopClash: () => ipcRenderer.invoke('clash-stop'),
   getClashStatus: () => ipcRenderer.invoke('clash-status'),
+  getClashOutboundInterfaces: () => ipcRenderer.invoke('clash-get-outbound-interfaces'),
+  setClashOutboundInterface: (payload) => ipcRenderer.invoke('clash-set-outbound-interface', payload),
   optimizeClash: (token) => ipcRenderer.invoke('clash-optimize', { token }),
   getNodeCount: () => ipcRenderer.invoke('clash-get-node-count'),
   onClashValidationProgress: (callback) => {

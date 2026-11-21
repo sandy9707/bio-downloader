@@ -12,7 +12,16 @@ if (contract.sources.map(s => s.id).join(',') !== expected.join(',')) throw new 
 if (contract.byId.bioproject.example !== 'PRJNA727404') throw new Error('BioProject 示例回归');
 if (!desktop.includes('shared/download-sources.js') || (web && !web.includes('/shared/download-sources.js'))) throw new Error('网页或桌面未加载共享契约');
 if (!desktop.includes('id="localSourceGrid"') || (web && !web.includes('id="cdSourceGrid"'))) throw new Error('网页或桌面未使用动态数据源容器');
-if (!desktopLogic.includes('BioDownloadSources.applyRuns(runs, result.runs)')) throw new Error('桌面 Project 未使用共享 Run 写入逻辑');
+// Desktop Project renders the complete manifest, not a redundant Run textarea.
+if (!desktopLogic.includes('BioProjectView.create(result, preferences, projectQueueKey)') || !desktopLogic.includes('renderProjectPage(projectView)')) throw new Error('桌面 Project 未使用完整清单表格');
+const projectModel = require('../shared/project-view-model');
+const manifestRuns = Array.from({ length: 12 }, (_, i) => `SRR${i + 1}`);
+const manifestFiles = manifestRuns.map(run => ({ run, name: `${run}.sra`, format: 'sra' }));
+const manifest = { accession: 'PRJNA1', runs: manifestRuns, files: manifestFiles };
+const view = projectModel.create(manifest, new Map(), file => `${file.run}/${file.name}`);
+if (view.rows.map(row => row.key).join(',') !== manifestRuns.join(',') || view.files.size !== manifestFiles.length) throw new Error('桌面 Project 表格丢失完整 Run/文件清单');
+view.page = 1;
+if (projectModel.visible(view).length !== 4 || view.rows.length !== 12 || view.files.size !== 12) throw new Error('桌面 Project 分页截断完整清单');
 if (web && !web.includes("BioDownloadSources.applyRuns(document.getElementById('cdIds'), runs)")) throw new Error('网页 Project 未使用共享 Run 写入逻辑');
 if (contract.normalizeValue('geo_suppl', 'gse13575') !== 'GSE13575') throw new Error('编号大写转换失败');
 if (contract.canonicalType('ena_raw') !== 'ebi_raw') throw new Error('旧 ENA 类型未兼容到 EBI');

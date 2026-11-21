@@ -1384,7 +1384,7 @@
     <div class="brand" style="display: flex; flex-direction: column; align-items: flex-start; gap: 0.2rem; justify-content: center; margin-bottom: 1.5rem; padding: 0 0.25rem;">
       <div style="display: flex; align-items: center; gap: 0.55rem;">
         <img src="logo.png" alt="Logo" style="height: 26px; width: 26px; border-radius: 6px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);">
-        <span style="font-size: 1.15rem; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em;">BioDownloader</span>
+        <span style="font-size: 1.15rem; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em;">BioDownloader Pro</span>
       </div>
       <span id="sidebarVersion" style="font-size: 0.72rem; color: var(--text-muted); font-family: var(--font-mono); padding-left: 2.15rem;">v-.-.-</span>
     </div>
@@ -1478,15 +1478,6 @@
             <input type="text" id="bioProjectInput" placeholder="例如 PRJNA727404、SRP318499、HRA006275 或 CRR077958" value="PRJNA727404" oninput="resetProjectView()">
             <button class="btn btn-secondary" id="bioProjectQueryBtn" type="submit">查询项目</button>
           </form>
-          <div class="dir-select-group" style="align-items:center;flex-wrap:wrap;margin-top:.6rem">
-            <label for="bioSourceStrategy">自动选源</label>
-            <select id="bioSourceStrategy" onchange="changeProjectStrategy(this.value)">
-              <option value="fastest" selected>响应最快</option>
-              <option value="domestic-first">国内优先</option>
-            </select>
-            <small>按同一文件的直连响应时间选择，可逐文件手选。</small>
-          </div>
-          <div id="bioProjectResult" role="status" style="margin-top:0.6rem"></div>
           <div id="bioProjectAdoptActions" style="display:none;gap:.5rem;align-items:center;flex-wrap:wrap">
             <button class="btn btn-secondary btn-sm" onclick="selectProjectRows('all')">全选</button>
             <button class="btn btn-secondary btn-sm" onclick="selectProjectRows('page')">本页</button>
@@ -1498,10 +1489,18 @@
             <button class="btn btn-secondary btn-sm" id="bioNext" onclick="showProjectPage(projectView.page+1)">下一页</button>
             <button class="btn btn-secondary btn-sm" onclick="showProjectPage(projectView.page,true)">重测本页</button>
             <span id="bioSelectedCount" role="status"></span>
+          </div>
+          <div id="bioProjectFiles"></div>
+          <div class="project-options" style="display:flex;gap:.5rem;align-items:center;margin-top:.4rem">
+            <label for="bioSourceStrategy">自动选源</label>
+            <select id="bioSourceStrategy" onchange="changeProjectStrategy(this.value)">
+              <option value="fastest" selected>响应最快</option>
+              <option value="domestic-first">国内优先</option>
+            </select>
             <button class="btn btn-primary btn-sm" id="bioAdopt" onclick="adoptBioProjectRuns()">自动加入队列</button>
           </div>
+          <div id="bioProjectResult" role="status"></div>
           <div id="bioProjectProgress" role="status" aria-live="polite"></div>
-          <div id="bioProjectFiles"></div>
           <script src="shared/project-source-policy.js"></script>
           <script src="shared/project-view-model.js"></script>
           <script src="shared/project-view-table.js"></script>
@@ -2018,6 +2017,13 @@
         <div class="settings-row" style="margin-top:1.5rem;">
           <div><strong>下载器选择</strong><p>为普通链接、生信数据和 FTP 分别选择下载器。</p></div>
           <button class="btn btn-primary" id="configureDownloaders" onclick="switchTab('download-engines-tab')">配置下载器 →</button>
+        </div>
+        <div class="form-group" id="clashOutboundSettings" hidden style="margin-top:1.5rem;">
+          <label for="clashOutboundInterface">加速器出站网卡</label>
+          <select id="clashOutboundInterface" onchange="saveClashOutboundInterface()" aria-describedby="clashOutboundFeedback" style="max-width:100%;">
+            <option value="">自动</option>
+          </select>
+          <div id="clashOutboundFeedback" role="status" aria-live="polite" style="margin-top:.35rem;">默认自动；仅影响本应用加速器，不修改系统网关或关闭其他代理。</div>
         </div>
         <!-- 低功耗与稳定下载模式 -->
         <div class="form-group" style="margin-top:1.5rem;">

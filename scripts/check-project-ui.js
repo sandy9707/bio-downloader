@@ -86,6 +86,46 @@ function panel() {
   return { ...f, $, el, context, evaluate, action, query, controls, setManual, setChecked, setStrategy, queue: context.currentQueue, initial };
 }
 
+test('query immediately exposes manifest then updates one file at a time',async()=>{
+ const h=panel();const waiting=[];
+ h.context.window.api.probeProjectPage=(_id,page)=>page.cancel?Promise.resolve([]):new Promise(resolve=>waiting.push({page,resolve}));
+ const pending=h.query('ERP77');while(!waiting.length)await Promise.resolve();
+ assert.equal(h.evaluate('projectView.rows.length'),12);assert.equal(h.el('bioProjectFiles').children[0].children[1].children.length,8);
+ assert.equal(waiting[0].page.indices.length,1);
+ waiting[0].resolve([{index:0,sources:[{...files[0],available:true,latencyMs:5}]}]);
+ while(waiting.length<2)await Promise.resolve();
+ assert.equal(h.controls(0).item.sources.length,1);assert.ok(h.controls(1).item.sources.every(source=>source.pending&&!source.available));
+ assert.equal(waiting[1].page.indices.length,1);
+ h.context.cancelProjectCheck();waiting[1].resolve([]);await pending;assert.equal(waiting.length,2);
+});
+
+test('pending manifest candidates stay unverified and strategy selects actual first-Run winner',async()=>{
+ const M=require('../shared/project-view-model');
+ const view=M.create({accession:'ERP1',runs:[files[0].run],files:[{...files[0],candidateSources:[{...files[0],available:true}]}]},new Map(),()=>null);
+ assert.equal(view.files.get(0).sources[0].available,false);assert.equal(view.files.get(0).sources[0].pending,true);
+ for(const [strategy,winner] of [['fastest','ena'],['domestic-first','cncb']]){
+  const h=panel();h.el('bioSourceStrategy').value=strategy;await h.query('ERP77');
+  assert.equal(h.evaluate('projectView.recommended'),winner);
+  const calls=h.calls.filter(call=>call.channel==='probe-project-page');
+  assert.ok(calls.filter(call=>call.args.page.column).every(call=>call.args.page.column===winner));
+ }
+});
+
+test('query form directly precedes selection and table; column actions belong to footer',async()=>{
+ const h=panel();const form=h.$('#bioProjectPanel form');
+ assert.equal(form.next().attr('id'),'bioProjectAdoptActions');
+ assert.equal(h.$('#bioProjectAdoptActions').next().attr('id'),'bioProjectFiles');
+ assert.match(read('index.html'),/>BioDownloader Pro<\/span>/);
+ await h.query('ERP77');await h.context.showProjectPage(1);
+ const table=h.el('bioProjectFiles').children[0],foot=table.children.at(-1);
+ assert.equal(foot.tag,'tfoot');assert.equal(table.children[0].children.length,1);
+ for(const cell of foot.children[0].children.slice(1))assert.equal(cell.children.filter(n=>n.tag==='button').length,2);
+ const check=foot.children[0].children[1].children.find(n=>n.tag==='button'&&n.textContent==='校验全部');
+ const before=h.calls.length;await check.onclick();
+ const indices=h.calls.slice(before).flatMap(call=>call.args?.page?.indices||[]);
+ assert.equal(new Set(indices).size,h.evaluate('projectView.files.size'));
+});
+
 test('desktop and Linux panel share wired controls, per-file strategy, cross-page selection and rename-safe append', async () => {
   const h = panel();
   const panelHtml = page => load(page)('#bioProjectPanel').html();
@@ -158,7 +198,7 @@ test('remeasure retains a failed manual choice until the user actively changes i
 
 test('narrow scopes remain visible and multi-parent results wait for explicit parent navigation', async () => {
   const h = panel(); await h.query('SAMN2');
-  assert.match(h.el('bioProjectResult').textContent, /当前范围 SAMN2.*部分结果/);
+  assert.match(h.el('bioProjectResult').textContent, /SAMN2.*部分结果/);
   assert.equal(h.calls.filter(x => x.channel === 'probe-project-page').length, 0);
   assert.equal(h.evaluate('projectView'), null);
   const multi = await h.service.query('SAMN2');
@@ -166,7 +206,7 @@ test('narrow scopes remain visible and multi-parent results wait for explicit pa
   const buttons = h.el('bioProjectResult').children.filter(child => child.tag === 'button');
   assert.deepEqual(buttons.map(b => b.textContent), ['查询 PRJEB1', '查询 PRJEB2']);
   await buttons[0].onclick();
-  assert.match(h.el('bioProjectResult').textContent, /当前范围 PRJEB1/);
+  assert.match(h.el('bioProjectResult').title, /PRJEB1/);
   await h.query('HRA9');
   assert.equal(h.evaluate('projectView'), null);
   assert.equal(h.el('bioProjectAdoptActions').style.display, 'none');
@@ -261,11 +301,11 @@ test('53 Runs complete recommended ENA without browsing; failed first Run does n
   const reply=page=>page.indices.map(index=>({index,sources:[{...manifest[index],latencyMs:5,available:true}]}));
   h.context.window.api.probeProjectPage=async(_id,page)=>{probes.push(page);return page.cancel?[]:reply(page);};
   await h.query('ERP53');h.context.adoptBioProjectRuns();assert.equal(h.queue.length,54);
-  assert.equal(probes.length,7);assert.ok(probes.slice(1).every(page=>page.column==='ena'));
+  assert.equal(probes.length,53);assert.ok(probes.slice(1).every(page=>page.column==='ena'));
   assert.match(h.el('bioProjectProgress').textContent,/可用 53，未通过 0，未核 0 Run/);
   const texts=node=>[node.textContent,...(node.children||[]).flatMap(texts)];
   h.evaluate("for (const [index,item] of projectView.files) if(index>0){item.checkedColumns.delete('ena');item.sources=[];} renderProjectPage(projectView)");
-  const enaActions=h.el('bioProjectFiles').children[0].children[0].children[1].children[3];
+  const enaActions=h.el('bioProjectFiles').children[0].children[2].children[0].children[3];
   assert.ok(!texts(enaActions).includes('重试'),'successful first Run plus unverified rows must not offer failure retry');
   const before=probes.length;await h.context.showProjectPage(6);assert.equal(probes.length,before);
   probes.length=0;
@@ -290,7 +330,7 @@ test('real HTTP refusal on second batch clears prior renderer sources and retain
  const service=require('../packages/cli/project-sources').createProjectService(async()=>({accession:'HRA1',access:'public',runs:manifest.map(f=>f.run),files:manifest}),{get:async(url,options)=>{const r=await fetch(`http://127.0.0.1:${server.address().port}${new URL(url).pathname}`,{signal:options.signal});return {status:r.status,headers:Object.fromEntries(r.headers),data:Buffer.from(await r.arrayBuffer())};}});
  const h=panel();h.context.window.api.queryBioProject=service.query;h.context.window.api.probeProjectPage=(queryId,page)=>service.probe({queryId,page});
  await h.query('HRA1');assert.equal(calls.length,12);assert.equal(h.evaluate('[...projectView.files.values()].reduce((n,i)=>n+i.sources.length,0)'),0);
- assert.equal(h.evaluate('BioProjectView.selected(projectView).length'),24);assert.match(h.el('bioProjectResult').textContent,/24 个/);assert.match(h.el('bioProjectProgress').textContent,/来源拒绝/);
+ assert.equal(h.evaluate('BioProjectView.selected(projectView).length'),24);assert.match(h.el('bioProjectResult').title,/24 个/);assert.match(h.el('bioProjectProgress').textContent,/来源拒绝/);
  h.context.adoptBioProjectRuns();assert.equal(h.queue.length,1);await h.context.checkProjectColumn('ftp',false);assert.equal(calls.length,12);assert.equal(h.el('bioAdopt').disabled,true);
 });
 

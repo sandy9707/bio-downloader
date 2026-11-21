@@ -13,6 +13,8 @@ function fixture() {
   const c = vm.createContext({
     console: { log: (...a) => logs.push(a.join(' ')), error: (...a) => logs.push(a.join(' ')) },
     writeClashLog: s => logs.push(s),
+    configureClashOutboundInterface: async text => text, clashOutboundFailureHint: async () => '',
+    require: require('node:module').createRequire(path.join(__dirname, '../main.js')),
     clashProcess: child, currentRealNodeCount: 12, currentPhysicalNodeCount: 6,
     currentNodeTier: 1, currentNodeVerified: true,
     killProcess: p => killed.push(p), killExistingClashProcesses: async () => {},

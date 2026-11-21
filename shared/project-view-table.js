@@ -74,7 +74,7 @@
             const prefix = item.manual === source.url ? '已手选 · ' : recommended ? '推荐 · ' : '';
             const protocol = new URL(source.url).protocol.slice(0, -1).toUpperCase();
             const mate = /_([12])\.(?:fastq|fq)\.gz$/i.exec(item.file.name)?.[1];
-            const caption = (valid ? `${protocol} · ${item.file.format.toUpperCase()}` : `${protocol} · 未通过`) + (mate ? ` · R${mate}` : '');
+            const caption = (valid ? `${protocol} · ${item.file.format.toUpperCase()}` : `${protocol} · ${source.pending ? '待核验' : '未通过'}`) + (mate ? ` · R${mate}` : '');
             const pick = button(prefix + caption, () => {
               // A Run's manually selected format wins over earlier format choices.
               for (const other of row.indices) {
@@ -105,12 +105,12 @@
     }
     table.appendChild(body);
 
-    const foot = head;
+    const foot = node('tfoot');
     const actions = node('tr');
-    const automatic = node('th', view.human ? 'FASTQ 文件' : '按完整文件组采用');
+    const automatic = node('td');
     actions.appendChild(automatic);
     for (const column of view.columns) {
-      const cell = node('th');
+      const cell = node('td');
       cell.className = 'project-column-actions';
       const completed = view.rows.filter(row => row.indices.length && row.indices.every(index => view.files.get(index).checkedColumns.has(column.id))).length;
       const usable = view.rows.filter(row => row.checked && model.columnItems(view, row, column.id, choice).length).length;
@@ -118,13 +118,12 @@
       stats.className = 'project-stats';
       if (view.recommended === column.id) stats.title = '依据首 Run 完整文件组中最慢文件的响应时间推荐；响应时间不等于下载吞吐。';
       cell.appendChild(stats);
-      cell.appendChild(button('核验', () => check(column.id, false), !!view.terminal || view.loading));
-      const failed = view.rows.some(row => row.indices.length && row.indices.every(index => view.files.get(index).checkedColumns.has(column.id)) && !model.columnItems(view, row, column.id, choice).length);
-      if (failed) cell.appendChild(button('重试', () => check(column.id, true), !!view.terminal || view.loading));
+      cell.appendChild(button('校验全部', () => check(column.id, false), !!view.terminal || view.loading));
       cell.appendChild(button(`加入队列 (${usable} ${view.human ? '文件' : 'Run'})`, () => adopt(column.id), !!view.terminal || view.loading || !usable, 'project-adopt'));
       actions.appendChild(cell);
     }
     foot.appendChild(actions);
+    table.appendChild(foot);
     actions.className = 'project-actions-row';
     host.replaceChildren(table);
   }

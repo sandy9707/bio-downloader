@@ -32,4 +32,29 @@ function selectLocalNodeGroups(measuredGroups, { tier1Mbps = 6, tier2Mbps = 2, c
     nodeCount: passedNames.length };
 }
 
-module.exports = { selectLocalNodeGroups };
+// Expand strategy references, but never manufacture nodes from group labels or
+// DIRECT/REJECT. Unselected configured proxies remain a second-stage candidate set.
+function enumerateLocalNodeCandidates(config) {
+  const informational = /剩余流量|套餐到期|距离下次|官网地址|套餐订阅已过期|请去官网/;
+  const proxies = new Map((Array.isArray(config.proxies) ? config.proxies : [])
+    .filter(p => p && typeof p.name === 'string' && p.name && typeof p.type === 'string'
+      && !informational.test(p.name) && !/^(DIRECT|REJECT|REJECT-DROP|PASS)$/i.test(p.name)
+      && !/^(direct|reject)$/i.test(p.type)).map(p => [p.name, p]));
+  const groups = new Map((Array.isArray(config['proxy-groups']) ? config['proxy-groups'] : [])
+    .filter(g => g && typeof g.name === 'string').map(g => [g.name, g]));
+  const primary = new Set();
+  function expand(name, visited = new Set()) {
+    if (proxies.has(name)) { primary.add(name); return; }
+    if (visited.has(name)) return;
+    const group = groups.get(name);
+    if (!Array.isArray(group?.proxies)) return;
+    const next = new Set([...visited, name]);
+    group.proxies.forEach(child => expand(child, next));
+  }
+  expand('⚡ 多账号并发下载池');
+  const primaryNames = [...primary];
+  const secondaryNames = [...proxies.keys()].filter(name => !primary.has(name));
+  return { primaryNames, secondaryNames, candidateNames: [...primaryNames, ...secondaryNames] };
+}
+
+module.exports = { selectLocalNodeGroups, enumerateLocalNodeCandidates };

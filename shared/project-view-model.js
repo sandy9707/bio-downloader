@@ -20,7 +20,7 @@
     const files = new Map((result.matrixFiles || result.files).map((file, index) => {
       const preference = preferences.get(key(file));
       return [index, {
-        file, sources: [], manual: preference?.manual || '',
+        file, sources: (file.candidateSources || []).map(source => ({ ...source, available: false, pending: true })), manual: preference?.manual || '',
         checked: preference?.checked ?? true, checkedColumns: new Set()
       }];
     }));

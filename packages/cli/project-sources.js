@@ -176,13 +176,21 @@ function createProjectService(lookup, { get = (url, options) => axios.get(url, o
   const projects = new Map();
   async function query(project) {
     const result = await lookup(project);
-    const files = result.access === 'public' ? [...(result.files || [])] : [];
+    const files = result.access === 'public' ? (result.files || []).map(file => ({ ...file })) : [];
     // A container is a distinct format, never an alternative URL for a FASTQ.
     // Defer SDL discovery until after the UI has displayed the Run manifest.
     if (result.access === 'public' && !projectParentChoices(result).length) {
       for (const run of result.runs.filter(id => /^[SED]RR\d+$/.test(id))) {
         if (!files.some(f => f.run === run && f.format === 'sra')) files.push({ run, name: `${run}.sra`, format: 'sra', size: 0, url: '', pendingMetadata: true });
       }
+    }
+    // Published addresses are candidates, not verified download sources. Do not
+    // perform HEAD, Range or FTP here: render first, probe only selected indices.
+    for (const file of files) {
+      file.candidateSources = [...new Set([file.url, ...(file.alternatives || [])])].filter(url => {
+        try { return matchesFile(file, new URL(url)); } catch { return false; }
+      }).map(url => ({ url, name: file.name, run: file.run, format: file.format,
+        size: file.size || 0, md5: file.md5 || '', available: false, pending: true, latencyMs: null }));
     }
     const queryId = randomUUID();
     if (files.length && !projectParentChoices(result).length) {

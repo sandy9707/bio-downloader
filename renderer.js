@@ -1066,26 +1066,9 @@ async function queryBioProject() {
   try {
     const result = await window.api.queryBioProject(project);
     if (generation !== projectGeneration) return;
-    status.textContent = [`当前范围 ${result.accession}`, `${result.runs.length} 个 Run，${result.files.length} 个公开文件`, result.access === 'controlled' ? '受控访问，请申请权限' : '', result.partial ? '部分结果，可重新查询补全' : ''].filter(Boolean).join(' · ');
-    if (result.message) {
-      const details = document.createElement('details');
-      const summary = document.createElement('summary');
-      summary.textContent = '查询详情';
-      details.append(summary, result.message);
-      status.appendChild(details);
-    }
-    if (result.runs.length) {
-      const details = document.createElement('details');
-      const summary = document.createElement('summary');
-      summary.textContent = '查看 Run 编号';
-      const runs = document.createElement('textarea');
-      runs.readOnly = true;
-      runs.setAttribute('aria-label', '项目 Run 编号');
-      BioDownloadSources.applyRuns(runs, result.runs);
-      details.append(summary, runs);
-      status.appendChild(details);
-    }
-    for (const [caption, url] of [['官方记录', result.officialUrl], ['访问申请', result.applicationUrl]]) {
+    status.textContent = result.access === 'controlled' ? '受控访问，请申请权限' : result.partial ? `${result.accession} · 部分结果，可重新查询补全` : '';
+    status.title = [result.accession, `${result.runs.length} 个 Run，${result.files.length} 个公开文件`, result.message].filter(Boolean).join(' · ');
+    for (const [caption, url] of (result.access !== 'public' || result.partial ? [['官方记录', result.officialUrl], ['访问申请', result.applicationUrl]] : [])) {
       if (!url || !/^https:\/\//i.test(url)) continue;
       const link = document.createElement('button');
       link.className = 'btn btn-secondary btn-sm';
@@ -1194,7 +1177,7 @@ async function verifyDefaultProject(view) {
   // Re-querying preserves explicit sources even when they are off the recommended column.
   const manual = [...view.files.keys()].filter(index => {
     const item = view.files.get(index);
-    return item.manual && !item.sources.some(source => source.url === item.manual);
+    return item.manual && !item.sources.some(source => source.url === item.manual && !source.pending);
   });
   if (manual.length) await probeProjectIndices(view, manual, '', ticket);
 }
@@ -1212,13 +1195,13 @@ async function probeProjectIndices(view, indices, column, inheritedTicket) {
   projectEl('bioProjectProgress').textContent = `${label} 核验中…`;
   for (const i of indices) {
     const item = view.files.get(i);
-    item.sources = column ? item.sources.filter(s => !BioProjectView.inColumn(view, s, column)) : [];
+    item.sources = item.sources.map(source => !column || BioProjectView.inColumn(view, source, column) ? { ...source, available: false, pending: true } : source);
     if (column) item.checkedColumns.delete(column); else item.checkedColumns.clear();
   }
   renderProjectPage(view);
-  for (let offset = 0; offset < indices.length; offset += 10) {
+  for (let offset = 0; offset < indices.length; offset += 1) {
     if (projectView !== view || view.ticket !== ticket) return;
-    const batch = indices.slice(offset, offset + 10);
+    const batch = indices.slice(offset, offset + 1);
     try {
       const rows = await window.api.probeProjectPage(view.result.queryId, { indices: batch, column });
       if (projectView !== view || view.ticket !== ticket) return;
@@ -1238,6 +1221,7 @@ async function probeProjectIndices(view, indices, column, inheritedTicket) {
           if (row.file.run !== item.file.run || row.file.name !== item.file.name || row.file.format !== item.file.format) throw Error('核验返回了不同文件');
           item.file = row.file;
         }
+        item.sources = column ? item.sources.filter(source => !BioProjectView.inColumn(view, source, column)) : [];
         item.sources.push(...row.sources); item.note = row.note;
         for (const id of column ? [column] : view.columns.map(c => c.id)) item.checkedColumns.add(id);
       }
@@ -4216,7 +4200,62 @@ async function loadTransferHistory(settings = {}) {
 }
 
 // 载入历史与并发数
+async function loadClashOutboundInterface() {
+  const group = document.getElementById('clashOutboundSettings');
+  if (!group || !window.api.getClashOutboundInterfaces) return;
+  try {
+    const state = await window.api.getClashOutboundInterfaces();
+    group.hidden = !state.supported;
+    if (!state.supported) return;
+    renderClashOutboundInterface(state);
+  } catch (error) {
+    // Unsupported/older Web backends must not expose a nonfunctional selector.
+    group.hidden = true;
+  }
+}
+
+function renderClashOutboundInterface(state) {
+  const select = document.getElementById('clashOutboundInterface');
+  select.replaceChildren();
+  for (const item of [{ name: '', description: '自动' }, ...state.interfaces]) {
+    const option = document.createElement('option');
+    option.value = item.name;
+    option.textContent = item.name ? `${item.name}${item.description ? ' — ' + item.description : ''}` : '自动';
+    select.appendChild(option);
+  }
+  if (state.selectedInterface && !state.interfaces.some(item => item.name === state.selectedInterface)) {
+    const option = document.createElement('option');
+    option.value = state.selectedInterface;
+    option.textContent = `${state.selectedInterface}（当前不可用）`;
+    option.disabled = true;
+    select.appendChild(option);
+  }
+  select.value = state.selectedInterface || '';
+  select.savedValue = select.value;
+  document.getElementById('clashOutboundFeedback').textContent = state.tunDetected
+    ? '检测到虚拟网卡。若加速连接失败，可选择实际联网的物理网卡，避免外部 TUN 二次代理。'
+    : '默认自动。若加速连接失败且使用外部 TUN，可选择实际联网的物理网卡。';
+}
+
+async function saveClashOutboundInterface() {
+  const select = document.getElementById('clashOutboundInterface');
+  const feedback = document.getElementById('clashOutboundFeedback');
+  const previous = select.savedValue || '';
+  select.disabled = true;
+  try {
+    const state = await window.api.setClashOutboundInterface({ name: select.value });
+    renderClashOutboundInterface(state);
+    feedback.textContent = '已保存，下次启动或优化加速器时生效；不会中断当前任务或修改系统网关。';
+  } catch (error) {
+    select.value = previous;
+    feedback.textContent = `保存失败：${error.message}。请重新打开应用刷新网卡列表。`;
+  } finally {
+    select.disabled = false;
+  }
+}
+
 async function initTransfersAndSettings(settings) {
+  void loadClashOutboundInterface();
   await loadTransferHistory(settings || {});
 
   // 2. 载入并发数量设置
@@ -4879,7 +4918,9 @@ async function optimizeConnections() {
     showToast(tierNotice, 'success');
   } catch (err) {
     updateNodeCountUI(0, null, 0);
-    showToast('连接优化失败: ' + (err.message || '未知错误'), 'error');
+    const outbound = document.getElementById('clashOutboundSettings');
+    const hint = outbound && !outbound.hidden ? '；若使用外部 TUN，请在设置 → 加速器出站网卡选择实际联网的物理网卡，避免二次代理。' : '';
+    showToast('连接优化失败: ' + (err.message || '未知错误') + hint, 'error');
     resetClashValidationProgress();
   } finally {
     if (btn) {

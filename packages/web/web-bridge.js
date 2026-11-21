@@ -146,6 +146,8 @@
     startClash: (t) => ({ channel: 'clash-start', payload: { token: t } }),
     stopClash: 'clash-stop',
     getClashStatus: 'clash-status',
+    getClashOutboundInterfaces: 'clash-get-outbound-interfaces',
+    setClashOutboundInterface: (payload) => ({ channel: 'clash-set-outbound-interface', payload }),
     optimizeClash: (t) => ({ channel: 'clash-optimize', payload: { token: t } }),
     getNodeCount: 'clash-get-node-count',
 

@@ -76,33 +76,11 @@ async function accessRecord(hra, read, signal) {
   return {...(modern ? projectRecord(html,hra,url) : tableRecord($,hra,url)), accession:hra, modern, $};
 }
 
-// Directory sizes may be absent when the official index is temporarily down.
-// A normal HEAD on an already published object can confirm its full byte length.
-async function fillMissingSizes(files, read, signal) {
-  const deadline = Date.now() + 12000;
-  for (const file of files) {
-    if (file.size || !file.url.startsWith('https:')) continue;
-    const timeout = Math.min(2500, deadline - Date.now());
-    if (timeout <= 0) break;
-    try {
-      const h = await read(file.url, {method:'HEAD', timeout, decompress:false, headers:{'Accept-Encoding':'identity'}});
-      if (!h || typeof h !== 'object') continue;
-      const type = h['content-type'] || '';
-      if (/html|xml|json|^text\//i.test(type)) break;
-      if (h['content-range'] || (h['content-encoding'] && h['content-encoding'] !== 'identity')) continue;
-      const length = h['content-length'];
-      if (/^\d+$/.test(length) && Number.isSafeInteger(Number(length))) file.size = Number(length);
-    } catch (error) {
-      if (signal?.aborted || error.code === 'HRA_STOP') throw error;
-    }
-  }
-}
-
 async function openFiles(record, selected, runDoc, read, signal, workbook) {
   const hra = record.accession, page = HOME+'browse/'+hra, warnings = new Set();
   const warn = msg => warnings.add(msg);
   const runs = new Set(), objects = new Map(), publishedDetails = new Set(), excluded = new Set();
-  let table = null, archiveBlocked = false;
+  let table = null;
   const inScope = run => !selected || run === selected;
   const add = file => {
     if (!file || !inScope(file.run) || excluded.has(file.run)) return;
@@ -146,7 +124,6 @@ async function openFiles(record, selected, runDoc, read, signal, workbook) {
   if (detailUnavailable) warn('部分 Run 详情暂不可用，仅保留其他官方清单已确认的地址');
   if (record.modern || !objects.size || !publishedDetails.size) {
     const archive = await publicIndex(record, selected, read, warn, signal);
-    archiveBlocked = archive.archiveBlocked;
     for (const run of archive.runs) if (!table || table.runs.has(run)) runs.add(run);
     for (const file of archive.files) add(file);
   }
@@ -162,7 +139,8 @@ async function openFiles(record, selected, runDoc, read, signal, workbook) {
       if (enrichFiles(bytes,files)) warn('官方清单存在相互冲突的 MD5，已清除相关参考值');
     } catch (error) { if (signal?.aborted || error.code === 'HRA_STOP') throw error; warn('项目工作簿未能核实'); }
   }
-  if (!archiveBlocked && record.modern) await fillMissingSizes(files,read,signal);
+  // Return the official manifest before probing individual objects. Missing
+  // lengths stay unknown; selected-source probes resolve them after first render.
   const missingSizes = files.filter(f=>!f.size).length, missingHashes = files.filter(f=>!f.md5).length;
   if (missingSizes || missingHashes) warn(`已核实精确大小 ${files.length-missingSizes}/${files.length} 个，官方 MD5 ${files.length-missingHashes}/${files.length} 个`);
   const byRun = new Map();

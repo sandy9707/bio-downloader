@@ -62,6 +62,24 @@ async function inspect({ attrs = {}, links = [cn], bytes = data, reply = range(d
   return { row, requests };
 }
 
+test('unknown-size manifest candidates cannot be selected until an explicit source probe resolves length', async () => {
+  let requests = 0;
+  const input = { ...file, size: 0, alternatives: [file.url.replace('https:', 'ftp:'), file.url.replace('_1.', '_2.')] };
+  const service = createProjectService(async () => ({ ...await lookup(), files: [input] }), {
+    get: async url => { requests++; assert.equal(url,file.url); return range(data); },
+    ftp: async () => { throw Error('FTP must not be probed with ENA HTTPS-only fixture'); }
+  });
+  const result = await service.query(run);
+  const candidates = result.matrixFiles[0].candidateSources;
+  assert.equal(requests,0); assert.equal(candidates.length,2);
+  assert.equal(chooseProjectSource(input,candidates).source,null);
+  assert.equal(input.candidateSources,undefined,'query must not mutate lookup metadata');
+  const [row] = await service.probe({queryId:result.queryId,page:{indices:[0],column:'https'}});
+  assert.equal(requests,1); assert.equal(row.sources[0].available,true);
+  assert.equal(row.sources[0].size,data.length);
+  assert.equal(chooseProjectSource(input,row.sources).source.url,file.url);
+});
+
 test('only actual official links to the same Run, mate and format reach probes', async () => {
   const wrongType = cn.replace('/FASTQ/', '/SRA/').replace(name, `${run}.sra`);
   const wrongMate = cn.replace('_1.', '_2.');

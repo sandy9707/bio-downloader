@@ -830,6 +830,7 @@ async function measureProxyThroughputMbps(proxyPort, testUrl, sampleBytes, timeo
     const controller = new AbortController();
     let response;
     let shouldRetry = false;
+    let probeErrorCode = 'none';
     let firstByteAt = 0;
     let lastChunkAt = 0;
     let received = 0;
@@ -862,6 +863,7 @@ async function measureProxyThroughputMbps(proxyPort, testUrl, sampleBytes, timeo
     } catch (err) {
       // 若在采样时间窗口到点前已经收到了真实 HTTPS 生信数据(>=64 KiB)，按已收字节算真实吞吐，不因超时中断归零！
       const code = err?.code || '';
+      probeErrorCode = /^[A-Z0-9_]{1,40}$/.test(code) ? code : 'REQUEST_FAILED';
       if (received < 65536) {
         shouldRetry = code !== 'EPROTO' && code !== 'ERR_CANCELED';
       }
@@ -878,18 +880,20 @@ async function measureProxyThroughputMbps(proxyPort, testUrl, sampleBytes, timeo
       // and end-to-end denominators based on an arbitrary 80 ms boundary.
       return Number(((received * 8) / 1e6 / Math.max(totalElapsedSec, bodyElapsedSec)).toFixed(2));
     }
+    // Never log full URLs, proxy names/configuration, or error objects here.
+    writeClashLog(`[local-probe] port=${proxyPort} attempt=${attempt + 1} http=${Number(response?.status) || 0} error=${probeErrorCode} bytes=${received} timeoutMs=${timeoutMs}`);
     if (!shouldRetry) break;
   }
   return 0;
 }
 
 async function validateLocalClashNodes(configPath, sender) {
-  const { selectLocalNodeGroups } = require('./src/main/local-node-policy');
+  const { selectLocalNodeGroups, enumerateLocalNodeCandidates } = require('./src/main/local-node-policy');
   const originalYaml = fs.readFileSync(configPath, 'utf8');
   const config = yaml.load(originalYaml) || {};
   const groups = Array.isArray(config['proxy-groups']) ? config['proxy-groups'] : [];
-  const downloadPool = groups.find(group => group?.name === '⚡ 多账号并发下载池');
-  const candidateNames = [...new Set((downloadPool?.proxies || []).filter(Boolean))];
+  let downloadPool = groups.find(group => group?.name === '⚡ 多账号并发下载池');
+  const { primaryNames, candidateNames } = enumerateLocalNodeCandidates(config);
   if (!candidateNames.length) {
     writeClashLog('[local-validation] skip: download pool missing or empty');
     currentRealNodeCount = 0;
@@ -908,6 +912,10 @@ async function validateLocalClashNodes(configPath, sender) {
   });
 
   const entries = [...physicalGroups.values()];
+  const primaryKeys = new Set(primaryNames.map(getLocalNodePhysicalKey));
+  const primaryEntries = entries.filter(names => primaryKeys.has(getLocalNodePhysicalKey(names[0])));
+  const secondaryEntries = entries.filter(names => !primaryKeys.has(getLocalNodePhysicalKey(names[0])));
+  writeClashLog(`[local-validation] candidates=${candidateNames.length}, routeGroups=${entries.length}, primaryGroups=${primaryEntries.length}, secondaryGroups=${secondaryEntries.length}`);
   const tier1Mbps = typeof LOCAL_NODE_TIER1_MBPS === 'number' ? LOCAL_NODE_TIER1_MBPS : 6.0;
   const tier2Mbps = typeof LOCAL_NODE_TIER2_MBPS === 'number' ? LOCAL_NODE_TIER2_MBPS : 2.0;
   const testUrl = typeof LOCAL_NODE_SPEED_TEST_URL === 'string' ? LOCAL_NODE_SPEED_TEST_URL : 'https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR390728/SRR390728';
@@ -919,14 +927,15 @@ async function validateLocalClashNodes(configPath, sender) {
   const measuredGroups = [];
   emitClashValidationProgress(sender, { completed, total: entries.length, passed: 0 });
 
-  // Every physical candidate receives a real HTTPS sample; no HTTP-only gate.
-  const benchTargets = entries;
+  // Pool candidates first; configured backups are tested only if fewer than
+  // five primary route groups survive real throughput sampling and refinement.
+  let benchTargets = primaryEntries;
   completed = 0;
 
   try {
-  const workerCount = Math.min(typeof LOCAL_NODE_TEST_CONCURRENCY === 'number' ? LOCAL_NODE_TEST_CONCURRENCY : 4, benchTargets.length);
+  const workerCount = Math.min(typeof LOCAL_NODE_TEST_CONCURRENCY === 'number' ? LOCAL_NODE_TEST_CONCURRENCY : 4, entries.length);
   const benchPorts = await findFreeLocalPorts(workerCount, basePort);
-  const allRepNames = benchTargets.map(g => g[0]);
+  const allRepNames = entries.map(g => g[0]);
   const benchConfig = yaml.load(originalYaml) || {};
   benchConfig['proxy-groups'] = Array.isArray(benchConfig['proxy-groups']) ? benchConfig['proxy-groups'] : [];
   benchConfig.listeners = Array.isArray(benchConfig.listeners) ? benchConfig.listeners.filter(l => !String(l?.name || '').startsWith('__biodl_bench_')) : [];
@@ -937,7 +946,17 @@ async function validateLocalClashNodes(configPath, sender) {
   }
   fs.writeFileSync(configPath, yaml.dump(benchConfig, { lineWidth: -1, noRefs: true }), 'utf8');
   await reloadClashConfig(configPath);
+  // A successful controller reload is not proof that each newly-created mixed
+  // listener is accepting connections (especially during Windows startup).
+  const listenerResults = await Promise.allSettled(benchPorts.map(port => waitForPortReady(port, '127.0.0.1', 4000)));
+  const listenerFailure = listenerResults.find(result => result.status === 'rejected');
+  if (listenerFailure) {
+    writeClashLog('[local-validation] bench-listener-not-ready');
+    throw new Error('本地测速监听端口未就绪，请检查安全软件或端口冲突后重试');
+  }
 
+  async function sampleStage(targets, phase) {
+  benchTargets = targets;
   let cursor = 0;
   const workers = Array.from({ length: workerCount }, async (_, w) => {
     const groupName = `__BIODL_BENCH_${w}`;
@@ -952,13 +971,16 @@ async function validateLocalClashNodes(configPath, sender) {
           timeout: 3000
         });
         mbps = await measureProxyThroughputMbps(proxyPort, testUrl, Math.min(sampleBytes, 4 * 1024 * 1024), 6000);
-      } catch (_) {}
+      } catch (error) {
+        const code = /^[A-Z0-9_]{1,40}$/.test(error?.code || '') ? error.code : 'CONTROL_FAILED';
+        writeClashLog(`[local-probe] controller-switch error=${code} http=${Number(error?.response?.status) || 0}`);
+      }
       if (mbps > 0) {
         measuredGroups.push({ mbps, groupNames, representative });
         if (mbps >= tier1Mbps) fastCountSoFar++;
       }
       completed++;
-      emitClashValidationProgress(sender, { completed, total: entries.length, passed: fastCountSoFar, physicalNodeCount: fastCountSoFar, phase: 'sampling', tier: 1, verified: false });
+      emitClashValidationProgress(sender, { completed, total: entries.length, passed: fastCountSoFar, physicalNodeCount: fastCountSoFar, phase, tier: phase === 'sampling-secondary' ? 2 : 1, verified: false });
     }
   });
   await Promise.all(workers);
@@ -966,7 +988,7 @@ async function validateLocalClashNodes(configPath, sender) {
   // Refine up to five leaders/near-threshold routes without repeating every slow
   // candidate. Two lower-contention workers, conservative mean across both rounds.
   measuredGroups.sort((a, b) => b.mbps - a.mbps);
-  const finalists = measuredGroups.slice(0, 5);
+  const finalists = measuredGroups.filter(item => !item.refined).slice(0, 5);
   let finalCursor = 0;
   const refinementResults = await Promise.allSettled(Array.from({ length: Math.min(2, workerCount, finalists.length) }, async (_, w) => {
     while (finalCursor < finalists.length) {
@@ -983,6 +1005,12 @@ async function validateLocalClashNodes(configPath, sender) {
   const refinementFailure = refinementResults.find(result => result.status === 'rejected');
   if (refinementFailure) throw refinementFailure.reason;
   for (let i = measuredGroups.length - 1; i >= 0; i--) if (!measuredGroups[i].mbps) measuredGroups.splice(i, 1);
+  }
+  await sampleStage(primaryEntries, 'sampling');
+  if (measuredGroups.filter(item => item.mbps >= tier1Mbps).length < 5 && secondaryEntries.length) {
+    emitClashValidationProgress(sender, { completed, total: entries.length, passed: measuredGroups.length, phase: 'sampling-secondary', tier: 2, verified: false });
+    await sampleStage(secondaryEntries, 'sampling-secondary');
+  }
 
   const selection = selectLocalNodeGroups(measuredGroups, { tier1Mbps, tier2Mbps, candidateAliasCount: candidateNames.length });
   const { selectedGroups, selectedTier, tier1PhysicalCount, continuedToTier2 } = selection;
@@ -997,6 +1025,11 @@ async function validateLocalClashNodes(configPath, sender) {
   // 基于干净的原始配置回写筛选结果（自动清除所有临时 __BIODL_BENCH 监听端口与组）
   // Ordered, throughput-ranked failover: all connections prefer the fastest
   // physical route. Slower candidates remain backups, never equal round-robin peers.
+  if (!downloadPool) {
+    downloadPool = { name: '⚡ 多账号并发下载池' };
+    groups.push(downloadPool);
+    config['proxy-groups'] = groups;
+  }
   downloadPool.type = 'fallback';
   delete downloadPool.strategy;
   downloadPool.proxies = selectedGroups.flatMap(item => item.groupNames);
@@ -1018,6 +1051,7 @@ async function validateLocalClashNodes(configPath, sender) {
     fs.writeFileSync(configPath, yaml.dump(trial, { lineWidth: -1, noRefs: true }));
     try {
       await reloadClashConfig(configPath);
+      await waitForPortReady(benchPorts[0], '127.0.0.1', 4000);
       const aggregate = async name => {
         await axios.put(`${CLASH_CONTROL_URL}/proxies/__BIODL_COMPARE`, { name }, { proxy: false, timeout: 3000 });
         const started = Date.now();
@@ -1082,6 +1116,30 @@ async function validateLocalClashNodes(configPath, sender) {
   }
 }
 
+async function getClashOutboundInterfaces() {
+  const selectedInterface = String(getSettings().clashOutboundInterface || '');
+  if (process.platform !== 'win32') return { supported: false, selectedInterface: '', interfaces: [], tunDetected: false };
+  const { listWindowsAdapters } = require('./src/main/clash-outbound-interface');
+  const state = await listWindowsAdapters(require('child_process').execFile);
+  return { supported: true, selectedInterface, ...state };
+}
+
+async function configureClashOutboundInterface(yamlContent) {
+  const selected = String(getSettings().clashOutboundInterface || '');
+  if (process.platform !== 'win32' || !selected) return yamlContent;
+  const state = await getClashOutboundInterfaces();
+  return require('./src/main/clash-outbound-interface').applyOutboundInterface(yamlContent, selected, state, process.platform);
+}
+
+async function clashOutboundFailureHint() {
+  if (process.platform !== 'win32') return '';
+  try {
+    const state = await getClashOutboundInterfaces();
+    if (state.tunDetected && !state.selectedInterface) return ' 检测到TUN虚拟网卡；可在加速器出站接口中显式选择物理网卡后重试（不修改系统网络或其他代理）。';
+  } catch (_) { /* Diagnostic enumeration must not obscure the original failure. */ }
+  return '';
+}
+
 async function startClash(token, sender) {
   writeClashLog('[startClash] begin');
   if (clashProcess && currentNodeVerified) {
@@ -1126,7 +1184,7 @@ async function startClash(token, sender) {
     writeClashLog('[startClash] /speedup OK (' + String(response.data).length + ' bytes yaml)');
     
     // 动态修改 yaml 配置中的监听端口为 43289 (仅限根节点配置，避免破坏代理节点端口)
-    let yamlContent = response.data;
+    let yamlContent = await configureClashOutboundInterface(response.data);
     yamlContent = yamlContent.replace(/^mixed-port:\s*\d+/gm, 'mixed-port: 43289');
     yamlContent = yamlContent.replace(/^port:\s*\d+/gm, 'port: 43289');
     yamlContent = yamlContent.replace(/^socks-port:\s*\d+/gm, 'socks-port: 43290');
@@ -1150,7 +1208,7 @@ async function startClash(token, sender) {
     yamlContent = yamlContent.replace(/interval:\s*\d+/g, 'interval: 15');
     // 健康检查超时 10s→3s + 开启 lazy:死/卡节点秒级懒摘除,不再被轮询喂给 axel(提升多线程下载速度)
     yamlContent = yamlContent.replace(/timeout:\s*10000/g, 'timeout: 3000');
-    yamlContent = yamlContent.replace(/(type:\s*(?:load-balance|url-test|fallback))/g, '$1\n    lazy: true');
+    yamlContent = require('./src/main/clash-outbound-interface').setLazyProxyGroups(yamlContent);
 
     // 过滤上游订阅混入的「流量信息假节点」(如 剩余流量/套餐到期/距离下次/官网地址 等伪装成代理的文本节点)
     // 它们会排到 proxies 列表最前,主策略组默认选中它们导致所有下载走假节点 → 502 Bad Gateway
@@ -1244,7 +1302,7 @@ async function startClash(token, sender) {
     console.error('Failed to start Clash:', err.message);
     writeClashLog('[startClash] FAIL: ' + err.message);
     stopClash();
-    throw new Error('下载加速器启动失败: ' + err.message);
+    throw new Error('下载加速器启动失败: ' + err.message + await clashOutboundFailureHint());
   }
 }
 
@@ -1280,7 +1338,7 @@ async function optimizeClash(token, sender) {
       throw new Error(friendly);
     }
 
-    let yamlContent = response.data;
+    let yamlContent = await configureClashOutboundInterface(response.data);
     yamlContent = yamlContent.replace(/^mixed-port:\s*\d+/gm, 'mixed-port: 43289');
     yamlContent = yamlContent.replace(/^port:\s*\d+/gm, 'port: 43289');
     yamlContent = yamlContent.replace(/^socks-port:\s*\d+/gm, 'socks-port: 43290');
@@ -1300,7 +1358,7 @@ async function optimizeClash(token, sender) {
     yamlContent = yamlContent.replace(/max-failed-times:\s*\d+/g, 'max-failed-times: 1');
     yamlContent = yamlContent.replace(/interval:\s*\d+/g, 'interval: 15');
     yamlContent = yamlContent.replace(/timeout:\s*10000/g, 'timeout: 3000');
-    yamlContent = yamlContent.replace(/(type:\s*(?:load-balance|url-test|fallback))/g, '$1\n    lazy: true');
+    yamlContent = require('./src/main/clash-outbound-interface').setLazyProxyGroups(yamlContent);
 
     // 过滤流量信息假节点(与 startClash 一致)
     yamlContent = stripFakeProxyNodes(yamlContent);
@@ -1336,7 +1394,7 @@ async function optimizeClash(token, sender) {
     emitClashValidationProgress(sender, { completed: 0, total: 0, passed: 0,
       physicalNodeCount: 0, tier: null, verified: false, failed: true, done: true });
     console.error('Failed to optimize Clash connection:', err.message);
-    throw new Error((err.message || '优化连接失败') + '；加速器已停止，请重新启动或优化网络通道。');
+    throw new Error((err.message || '优化连接失败') + '；加速器已停止，请重新启动或优化网络通道。' + await clashOutboundFailureHint());
   }
 }
 
@@ -1759,6 +1817,15 @@ ipcMain.handle('clash-stop', () => runClashSerial(async () => {
 ipcMain.handle('clash-optimize', async (event, { token }) => runClashSerial(async () => {
   const res = await optimizeClash(token, event.sender);
   return { ...res, nodeCount: currentRealNodeCount, nodeTier: currentNodeTier, physicalNodeCount: currentPhysicalNodeCount, verified: currentNodeVerified };
+}));
+
+ipcMain.handle('clash-get-outbound-interfaces', () => getClashOutboundInterfaces());
+ipcMain.handle('clash-set-outbound-interface', async (event, { name = '' } = {}) => runClashSerial(async () => {
+  if (typeof name !== 'string') throw new Error('请选择有效的出站接口');
+  const state = await getClashOutboundInterfaces();
+  if (name && (!state.supported || !state.interfaces.some(item => item.name === name))) throw new Error('所选加速器出站接口不存在或未连接，请重新选择。');
+  saveSettings({ clashOutboundInterface: name });
+  return { ...state, selectedInterface: name, restartRequired: !!clashProcess };
 }));
 
 ipcMain.handle('clash-get-node-count', () => {
