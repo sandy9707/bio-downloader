@@ -15,6 +15,30 @@ const allowed = {
   argparse: { version: /^2\./, dependencies: [] }
 };
 
+function includeDependencyPath(directory, file, paths = path) {
+  // Node 20 Windows cpSync may pass \\?\ paths to filter, while require.resolve
+  // returned a normal drive path. Normalize BOTH before relative(), otherwise
+  // it returns an absolute path whose ancestor node_modules excludes the package.
+  const relative = paths.relative(paths.toNamespacedPath(directory), paths.toNamespacedPath(file));
+  assert(!paths.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + paths.sep), 'Dependency path escaped package');
+  return !relative.split(paths.sep).some(part => part === 'node_modules' || part.startsWith('.'));
+}
+
+function checkDependencyPaths() {
+  const win = path.win32;
+  const directory = 'D:\\a\\repo\\node_modules\\proper-lockfile';
+  const namespaced = win.toNamespacedPath(directory);
+  for (const root of [directory, namespaced]) {
+    for (const file of [directory, namespaced, win.join(directory, 'index.js'), win.join(namespaced, 'index.js')]) {
+      assert(includeDependencyPath(root, file, win), `Windows dependency path incorrectly excluded: ${file}`);
+    }
+    assert(!includeDependencyPath(root, win.join(namespaced, 'node_modules/signal-exit/index.js'), win));
+    assert(!includeDependencyPath(root, win.join(namespaced, '.private/secret'), win));
+    assert.throws(() => includeDependencyPath(root, win.join(directory, '../other/index.js'), win), /escaped package/);
+  }
+  console.log('LINUX_VENDOR_PATHS_OK: Windows ordinary/namespaced paths');
+}
+
 function vendorDependencies(source, destination, roots) {
   const copied = new Map();
   function copy(name, from) {
@@ -40,12 +64,12 @@ function vendorDependencies(source, destination, roots) {
     fs.cpSync(directory, target, {
       recursive: true,
       filter(file) {
-        const relative = path.relative(directory, file);
-        if (relative.split(path.sep).some(part => part === 'node_modules' || part.startsWith('.'))) return false;
+        if (!includeDependencyPath(directory, file)) return false;
         assert(!fs.lstatSync(file).isSymbolicLink(), `Refusing dependency symlink: ${file}`);
         return true;
       }
     });
+    assert(fs.existsSync(path.join(target, 'package.json')), `Vendored package was not copied: ${name}`);
     for (const dependency of rule.dependencies) copy(dependency, directory);
   }
   for (const name of roots) copy(name, source);
@@ -199,6 +223,7 @@ function checkProjectServiceOffline({ withoutRewrite = false } = {}) {
 
 module.exports = { vendorDependencies, storeProbeCode, checkOffline, rewriteProjectService, serviceProbeCode, checkProjectServiceOffline };
 if (require.main === module) {
+  checkDependencyPaths();
   if (process.argv.includes('--service-only')) checkProjectServiceOffline({ withoutRewrite: process.argv.includes('--without-service-rewrite') });
   else {
     checkOffline({ withoutVendor: process.argv.includes('--without-vendor') });
